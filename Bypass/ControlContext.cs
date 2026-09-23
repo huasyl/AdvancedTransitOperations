@@ -16,6 +16,6 @@ namespace RapidTransitMod.Bypass
         void RecordRelease(Entity vehicle, Entity blocker, string reason);
         void RecordBypassFact(BypassFact fact);
         void TriggerWaiting(Entity vehicle, Entity route, DynamicBuffer<RouteWaypoint> waypoints, int waypointIndex);
-        void RecordPublicTransportWrite(Entity vehicle, PublicTransport publicTransport);
+        void SetPublicTransport(Entity vehicle, PublicTransport publicTransport);
     }
 }

@@ -23,10 +23,8 @@ namespace RapidTransitMod.Dispatch.Commands
             Target target,
             EntityCommandBuffer ecb)
         {
-            m_Host.AppendTargetWrite(vehicle, target);
-            ecb.SetComponent(vehicle, target);
-            m_Host.AppendPublicTransportWrite(vehicle, publicTransport);
-            ecb.SetComponent(vehicle, publicTransport);
+            m_Host.SetTarget(vehicle, target);
+            m_Host.SetPublicTransport(vehicle, publicTransport);
             ecb.AddComponent<Updated>(vehicle);
         }
 
@@ -41,15 +39,12 @@ namespace RapidTransitMod.Dispatch.Commands
                 PathOwner pathOwner = m_Host.ReadPath(vehicle);
                 pathOwner.m_State = PathFlags.Obsolete;
                 pathOwner.m_ElementIndex = 0;
-                m_Host.AppendPathWrite(vehicle, pathOwner, true, 0);
-                ecb.SetComponent(vehicle, pathOwner);
+                m_Host.SetPath(vehicle, pathOwner);
             }
 
-            ecb.SetBuffer<PathElement>(vehicle).Clear();
-            m_Host.AppendTargetWrite(vehicle, target);
-            ecb.SetComponent(vehicle, target);
-            m_Host.AppendPublicTransportWrite(vehicle, publicTransport);
-            ecb.SetComponent(vehicle, publicTransport);
+            m_Host.EntityManager.GetBuffer<PathElement>(vehicle).Clear();
+            m_Host.SetTarget(vehicle, target);
+            m_Host.SetPublicTransport(vehicle, publicTransport);
             ecb.AddComponent<PathfindUpdated>(vehicle);
             ecb.AddComponent<Updated>(vehicle);
         }
@@ -93,17 +88,16 @@ namespace RapidTransitMod.Dispatch.Commands
             if (m_Host.EntityManager.HasComponent<PathOwner>(vehicle))
             {
                 PathOwner pathOwner = new PathOwner(PathFlags.Updated);
-                m_Host.AppendPathWrite(vehicle, pathOwner, true, segmentPath);
-                ecb.SetComponent(vehicle, pathOwner);
+                m_Host.SetPath(vehicle, pathOwner);
             }
 
-            DynamicBuffer<PathElement> targetPath = ecb.SetBuffer<PathElement>(vehicle);
+            DynamicBuffer<PathElement> targetPath = m_Host.EntityManager.GetBuffer<PathElement>(vehicle);
             targetPath.Clear();
             m_Host.CountPathDetailRead();
             for (int i = 0; i < segmentPath.Length; i++)
                 targetPath.Add(segmentPath[i]);
 
-            m_Host.ResetLaunchNavigation(vehicle, ecb);
+            m_Host.ResetLaunchNavigation(vehicle);
             ecb.AddComponent<Updated>(vehicle);
             return true;
         }

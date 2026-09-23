@@ -128,7 +128,7 @@ namespace RapidTransitMod.Dispatch.Commands
                 nowFrame);
             entry.Boarding = result.State;
             if (result.Changed)
-                m_CommandHost.CommitPublicTransport(vehicle, result.PublicTransport);
+                m_CommandHost.SetPublicTransport(vehicle, result.PublicTransport);
         }
 
         private bool IsAccepted(Entity vehicle, Entity owner, PublicTransport publicTransport)

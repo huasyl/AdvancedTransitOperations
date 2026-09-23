@@ -867,7 +867,6 @@ namespace RapidTransitMod
             m_CommandApplier.TickRetireHandoffStages(
                 simulationFrame,
                 retireEntries);
-            m_RailEventSource.BeginSliceBufferEpoch();
             m_RuntimeFramePlan.Freeze(RuntimeStageMask.Slice);
             IReadOnlyList<FramePlanEntry> sliceEntries = m_RuntimeFramePlan.ForStage(RuntimeStageMask.Slice);
             m_RuntimeHotPathProbe.CountStagePlan(RuntimeStageMask.Slice, sliceEntries.Count);
@@ -2855,9 +2854,7 @@ namespace RapidTransitMod
 
         private Game.Vehicles.PublicTransport ReadRailPublicTransport(Entity vehicle)
         {
-            return m_RailEventSource.TryGetWrittenPublicTransport(vehicle, out Game.Vehicles.PublicTransport value)
-                ? value
-                : EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle);
+            return EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle);
         }
 
         private void ApplyLineServiceChanges(ClockSnapshot clockSnapshot)

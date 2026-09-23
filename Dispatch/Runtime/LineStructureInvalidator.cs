@@ -763,7 +763,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             lineContextCleared += m_Runtime.m_LineView.InvalidateLine(plan.Line);
             if (m_Runtime.m_StationContextQuery.RemoveLine(plan.Line))
                 lineContextCleared++;
-            m_Runtime.m_RailEventSource.InvalidateLine(plan.Line);
             m_Runtime.m_LapCache.RemoveLine(plan.Line);
             m_Runtime.m_DispatchCache.RemoveLine(plan.Line);
             m_Runtime.m_TrackModel.InvalidateWaypointIndexLookup(plan.Line);
@@ -1139,7 +1138,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_LineTimes.InvalidateLine(line);
             if (RoadEntryChanged(pending.OldRoute, pending.NewRoute))
                 m_Runtime.m_Observation.InvalidateDispatchTiming(line);
-            m_Runtime.m_RoadEventSource.InvalidateLine(line);
             m_Runtime.m_LineProfile.RemoveStability(line);
             NativeArray<Entity> vehicles = m_Runtime.m_VehicleView.Keys(Allocator.Temp);
             try
@@ -1263,7 +1261,6 @@ namespace RapidTransitMod.Dispatch.Runtime
                 m_Runtime.m_Observation.InvalidateBusRoute(line, pending.OldRoute, pending.NewRoute);
             RapidTransitMod.PassengerFlow.Runtime.Current?.InvalidateAnchors(line);
             m_Runtime.m_LineTimes.InvalidateLine(line);
-            m_Runtime.m_RoadEventSource.InvalidateLine(line);
             m_Runtime.m_LineProfile.RemoveStability(line);
             NativeArray<Entity> vehicles = m_Runtime.m_VehicleView.Keys(Allocator.Temp);
             try

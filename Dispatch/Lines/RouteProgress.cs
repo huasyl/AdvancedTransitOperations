@@ -78,7 +78,9 @@ namespace RapidTransitMod.Dispatch.Lines
         {
             nextWaypointIndex = 0;
             segmentPosition = 0f;
-            if (!m_Runtime.EntityManager.HasComponent<PathInformation>(vehicle))
+            // 本帧换入的路径尚未更新原版路径信息，沿用目标位置回退。
+            if (m_Runtime.m_RailEventSource.HasProjectionPathWrite(vehicle)
+                || !m_Runtime.EntityManager.HasComponent<PathInformation>(vehicle))
                 return false;
 
             PathInformation pathInfo = m_Runtime.EntityManager.GetComponentData<PathInformation>(vehicle);
