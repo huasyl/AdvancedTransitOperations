@@ -738,6 +738,7 @@ namespace RapidTransitMod
                     continue;
 
                 StopInput input = default;
+                bool vehicleUnavailable;
                 bool built = lifecycle == LifecycleKind.Rail
                     ? m_RailEventSource.TryBuildStopInput(
                         m_RuntimeFramePlan,
@@ -747,7 +748,8 @@ namespace RapidTransitMod
                         m_HasInvalidatedRecovery,
                         m_IsDeparturePending,
                         m_IsForcedMidStopGraceActive,
-                        out input)
+                        out input,
+                        out vehicleUnavailable)
                     : m_RoadEventSource.TryBuildStopInput(
                         m_RuntimeFramePlan,
                         entry,
@@ -756,9 +758,12 @@ namespace RapidTransitMod
                         m_HasInvalidatedRecovery,
                         m_IsDeparturePending,
                         m_IsForcedMidStopGraceActive,
-                        out input);
+                        out input,
+                        out vehicleUnavailable);
                 if (built)
                     m_StopInputs.Add(input);
+                else if (vehicleUnavailable)
+                    CancelStopRelease(entry.Vehicle, simulationFrame);
             }
             if (RuntimeHotPathProbe.Enabled())
                 m_RuntimeHotPathProbe.CountStageExecuted(RuntimeStageMask.Stop, CountValidStopInputs());
@@ -1162,6 +1167,16 @@ namespace RapidTransitMod
                     timeout.Control);
                 if (timeout.Fact.Exists)
                     PublishStopFact(timeout.Fact);
+            }
+        }
+
+        private void CancelStopRelease(Entity vehicle, uint nowFrame)
+        {
+            StopCancelResult cancelled = m_StopRuntime.CancelUnavailableVehicle(vehicle, nowFrame);
+            if (cancelled.Exists)
+            {
+                PublishStopFact(cancelled.Fact);
+                ApplyStopControl(vehicle, cancelled.Control.WaypointIndex, cancelled.Control);
             }
         }
 
@@ -1692,8 +1707,11 @@ namespace RapidTransitMod
                         vehicle,
                         out Entity route,
                         out DynamicBuffer<RouteWaypoint> waypoints,
-                        out Game.Vehicles.PublicTransport publicTransport))
+                        out Game.Vehicles.PublicTransport publicTransport,
+                        out bool vehicleUnavailable))
                 {
+                    if (vehicleUnavailable)
+                        CancelStopRelease(vehicle, nowFrame);
                     continue;
                 }
 
