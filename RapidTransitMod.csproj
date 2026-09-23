@@ -188,6 +188,21 @@
 
   <Import Project="$(OfficialToolPath)\Mod.props" Condition="'$(EnableOfficialToolchain)'=='true' and Exists('$(OfficialToolPath)\Mod.props')" />
 
+  <PropertyGroup Condition="'$(EnableOfficialToolchain)'=='true'">
+    <AssemblySearchPaths>$(ManagedPath);$(AssemblySearchPaths)</AssemblySearchPaths>
+    <ImplicitlyExpandDesignTimeFacades>false</ImplicitlyExpandDesignTimeFacades>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup Condition="'$(EnableOfficialToolchain)'=='true'">
+    <Reference>
+      <Private>false</Private>
+    </Reference>
+  </ItemDefinitionGroup>
+
+  <ItemGroup Condition="'$(EnableOfficialToolchain)'=='true'">
+    <Reference Include="netstandard" />
+  </ItemGroup>
+
   <PropertyGroup>
     <LangVersion>10.0</LangVersion>
   </PropertyGroup>
