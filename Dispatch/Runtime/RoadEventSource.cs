@@ -375,10 +375,22 @@ namespace RapidTransitMod.Dispatch.Runtime
             Func<Entity, bool> hasInvalidatedRecovery,
             Func<Entity, bool> isDeparturePending,
             Func<Entity, uint, bool> forcedMidStopGraceActive,
-            out StopInput input)
+            out StopInput input,
+            out bool vehicleUnavailable)
         {
             input = default;
-            if (!TryGetPlanRow(entry.Vehicle, nowFrame, out RoadFrameRow row) || !row.IsCompilable)
+            vehicleUnavailable = false;
+            if (!TryGetPlanRow(entry.Vehicle, nowFrame, out RoadFrameRow row))
+            {
+                vehicleUnavailable = true;
+                return false;
+            }
+            if (!row.HasPublicTransport)
+            {
+                vehicleUnavailable = true;
+                return false;
+            }
+            if (!row.IsCompilable)
                 return false;
 
             bool hasWaypoints = TryGetWaypointsForRoute(
@@ -601,7 +613,7 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public void RecordPublicTransportWrite(Entity vehicle, PublicTransport value, uint frame)
         {
-            int rowIndex = EnsurePlanRow(vehicle, frame);
+            int rowIndex = EnsureWrittenPlanRow(vehicle, value, frame);
             if (rowIndex < 0)
                 return;
 
@@ -751,23 +763,28 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         private int EnsureSourceRow(Entity vehicle, uint frame)
         {
-            if (vehicle == Entity.Null || !m_Runtime.EntityManager.Exists(vehicle))
+            if (vehicle == Entity.Null)
                 return -1;
 
             if (m_FrameRowIndex.TryGetValue(vehicle, out int existing))
             {
                 RoadFrameRow existingRow = m_FrameRows[existing];
-                RefreshSourceHeader(ref existingRow, frame);
+                PublicTransport publicTransport = m_Runtime.EntityManager.GetComponentData<PublicTransport>(vehicle);
+                RefreshSourceHeader(ref existingRow, frame, publicTransport);
                 m_FrameRows[existing] = existingRow;
                 return existing;
             }
+
+            if (!m_Runtime.EntityManager.HasComponent<PublicTransport>(vehicle))
+                return -1;
+            PublicTransport current = m_Runtime.EntityManager.GetComponentData<PublicTransport>(vehicle);
 
             RoadFrameRow row = new RoadFrameRow
             {
                 Vehicle = vehicle,
                 CachedWaypoint = m_Runtime.m_CachedWpIdx.TryGetValue(vehicle, out int waypoint) ? waypoint : -1
             };
-            RefreshSourceHeader(ref row, frame);
+            RefreshSourceHeader(ref row, frame, current);
             m_FrameRowIndex.Add(vehicle, m_FrameRows.Count);
             m_FrameRows.Add(row);
             return m_FrameRows.Count - 1;
@@ -775,18 +792,32 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         private int EnsurePlanRow(Entity vehicle, uint frame)
         {
-            if (vehicle == Entity.Null || !m_Runtime.EntityManager.Exists(vehicle))
+            if (vehicle == Entity.Null)
                 return -1;
 
             if (m_FrameRowIndex.TryGetValue(vehicle, out int existing))
                 return existing;
+            if (!m_Runtime.EntityManager.HasComponent<PublicTransport>(vehicle))
+                return -1;
+            PublicTransport publicTransport = m_Runtime.EntityManager.GetComponentData<PublicTransport>(vehicle);
+            return AddPlanRow(vehicle, publicTransport, frame);
+        }
 
+        private int EnsureWrittenPlanRow(Entity vehicle, PublicTransport publicTransport, uint frame)
+        {
+            if (m_FrameRowIndex.TryGetValue(vehicle, out int existing))
+                return existing;
+            return AddPlanRow(vehicle, publicTransport, frame);
+        }
+
+        private int AddPlanRow(Entity vehicle, PublicTransport publicTransport, uint frame)
+        {
             RoadFrameRow row = new RoadFrameRow
             {
                 Vehicle = vehicle,
                 CachedWaypoint = m_Runtime.m_CachedWpIdx.TryGetValue(vehicle, out int waypoint) ? waypoint : -1
             };
-            ReadNarrow(ref row);
+            ReadNarrowKnown(ref row, publicTransport);
             row.RegisteredLine = m_Runtime.m_VehicleView.TryGetLine(vehicle, out Entity line)
                 ? line
                 : Entity.Null;
@@ -804,7 +835,10 @@ namespace RapidTransitMod.Dispatch.Runtime
             return m_FrameRows.Count - 1;
         }
 
-        private void RefreshSourceHeader(ref RoadFrameRow row, uint frame)
+        private void RefreshSourceHeader(
+            ref RoadFrameRow row,
+            uint frame,
+            PublicTransport publicTransport)
         {
             RoadBaseline previous = m_Baselines.TryGetValue(row.Vehicle, out RoadBaseline baseline)
                 ? baseline
@@ -814,7 +848,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 Vehicle = row.Vehicle,
                 CachedWaypoint = row.CachedWaypoint
             };
-            ReadNarrow(ref fresh);
+            ReadNarrowKnown(ref fresh, publicTransport);
             fresh.RegisteredLine = m_Runtime.m_VehicleView.TryGetLine(row.Vehicle, out Entity line)
                 ? line
                 : Entity.Null;
@@ -840,14 +874,12 @@ namespace RapidTransitMod.Dispatch.Runtime
             row = fresh;
         }
 
-        private void ReadNarrow(ref RoadFrameRow row)
+        private void ReadNarrowKnown(ref RoadFrameRow row, PublicTransport publicTransport)
         {
             Entity vehicle = row.Vehicle;
             row.InputValid = true;
-            row.HasPublicTransport = m_Runtime.EntityManager.HasComponent<PublicTransport>(vehicle);
-            row.Boarding = row.HasPublicTransport
-                && (m_Runtime.EntityManager.GetComponentData<PublicTransport>(vehicle).m_State
-                    & PublicTransportFlags.Boarding) != 0;
+            row.HasPublicTransport = true;
+            row.Boarding = (publicTransport.m_State & PublicTransportFlags.Boarding) != 0;
             row.CurrentRoute = m_Runtime.EntityManager.HasComponent<CurrentRoute>(vehicle)
                 ? m_Runtime.EntityManager.GetComponentData<CurrentRoute>(vehicle).m_Route
                 : Entity.Null;

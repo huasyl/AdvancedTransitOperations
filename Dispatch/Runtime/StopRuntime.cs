@@ -1407,6 +1407,11 @@ namespace RapidTransitMod.Dispatch.Runtime
             return result;
         }
 
+        internal StopCancelResult CancelUnavailableVehicle(Entity vehicle, uint nowFrame)
+        {
+            return CancelRebind(vehicle, nowFrame);
+        }
+
         internal void RemoveVehicle(Entity vehicle)
         {
             m_State.LastEffectiveBoarding.Remove(vehicle);
