@@ -379,6 +379,15 @@ namespace RapidTransitMod
 
                         if (currentHolder != Entity.Null
                             && currentHolderTier == 1
+                            && m_Runtime.m_VehicleView.TryGetState(currentHolder, out VehicleState preparingHolderState)
+                            && preparingHolderState == VehicleState.Preparing)
+                        {
+                            slotMinute = (slotMinute + ModRuntimeHostSystem.SLOT_INTERVAL_MINUTES) % 1440;
+                            continue;
+                        }
+
+                        if (currentHolder != Entity.Null
+                            && currentHolderTier == 1
                             && m_Runtime.m_VehicleView.TryGetState(currentHolder, out VehicleState currentHolderState)
                             && currentHolderState == VehicleState.Running)
                         {
