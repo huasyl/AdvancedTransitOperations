@@ -37,12 +37,17 @@ namespace RapidTransitMod
 
     internal sealed class LineServiceState
     {
+        private const int DayStartMinute = 360;
+        private const int NightStartMinute = 1320;
+
         private readonly EntityManager m_EntityManager;
         private readonly Dictionary<Entity, bool> m_ObservedOperational = new Dictionary<Entity, bool>();
         private readonly Dictionary<Entity, bool> m_AppliedOperational = new Dictionary<Entity, bool>();
         private readonly HashSet<Entity> m_DirtyLines = new HashSet<Entity>();
         private readonly HashSet<Entity> m_PendingRefresh = new HashSet<Entity>();
         private readonly List<Entity> m_DrainBuffer = new List<Entity>();
+        private bool m_PeriodInitialized;
+        private bool m_IsNight;
 
         internal LineServiceState(EntityManager entityManager)
         {
@@ -105,6 +110,31 @@ namespace RapidTransitMod
 
             if (operational != applied)
                 m_DirtyLines.Add(line);
+        }
+
+        internal void RefreshPeriod(int nowMinute)
+        {
+            bool isNight = nowMinute < DayStartMinute || nowMinute >= NightStartMinute;
+            if (m_PeriodInitialized && m_IsNight == isNight)
+                return;
+
+            m_PeriodInitialized = true;
+            m_IsNight = isNight;
+            m_DrainBuffer.Clear();
+            foreach (Entity line in m_ObservedOperational.Keys)
+                m_DrainBuffer.Add(line);
+            for (int i = 0; i < m_DrainBuffer.Count; i++)
+            {
+                Entity line = m_DrainBuffer[i];
+                bool operational = ComputeOperational(line);
+                m_ObservedOperational[line] = operational;
+                if (m_AppliedOperational.TryGetValue(line, out bool applied)
+                    && operational != applied)
+                {
+                    m_DirtyLines.Add(line);
+                }
+            }
+            m_DrainBuffer.Clear();
         }
 
         internal void BaselineStableLines(IReadOnlyList<Entity> lines)
@@ -183,6 +213,8 @@ namespace RapidTransitMod
             m_DirtyLines.Clear();
             m_PendingRefresh.Clear();
             m_DrainBuffer.Clear();
+            m_PeriodInitialized = false;
+            m_IsNight = false;
         }
 
         private bool ComputeOperational(Entity line)
@@ -198,7 +230,13 @@ namespace RapidTransitMod
             }
 
             Route route = m_EntityManager.GetComponentData<Route>(line);
-            return !RouteUtils.CheckOption(route, RouteOption.Inactive);
+            if (RouteUtils.CheckOption(route, RouteOption.Inactive))
+                return false;
+            if (RouteUtils.CheckOption(route, RouteOption.Day))
+                return !m_IsNight;
+            if (RouteUtils.CheckOption(route, RouteOption.Night))
+                return m_IsNight;
+            return true;
         }
     }
 }

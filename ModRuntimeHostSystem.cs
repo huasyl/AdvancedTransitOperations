@@ -625,6 +625,9 @@ namespace RapidTransitMod
             EntityCommandBuffer commandBuffer = m_EndFrameBarrier.CreateCommandBuffer();
             ClockSnapshot clockSnapshot = m_SimClock.Snapshot;
             int nowMinute = clockSnapshot.NowMinute;
+            bool fullMinuteSweep = nowMinute != m_LastSchedulerTickMinute;
+            if (fullMinuteSweep)
+                m_LineServiceState.RefreshPeriod(nowMinute);
 
             m_LapCache.Ensure();
             m_VehicleCache.Ensure();
@@ -714,7 +717,6 @@ namespace RapidTransitMod
 
             railSourceFrame = m_RailEventSource.CollectedThisFrame(simulationFrame);
             m_LineStructureInvalidator.Drain();
-            bool fullMinuteSweep = nowMinute != m_LastSchedulerTickMinute;
             if (fullMinuteSweep)
                 m_SchedulerApply.MarkAllDirty();
             m_RuntimeFramePlan.CollectDueDeadlines(simulationFrame);
