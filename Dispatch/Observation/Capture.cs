@@ -85,6 +85,7 @@ namespace RapidTransitMod.Dispatch.Observation
             Entity line = m_Port.LineOf(vehicle);
             if (!m_Port.HasOdo(vehicle))
             {
+                m_Laps.EndCurrent(vehicle);
                 if (RtLog.VerboseEnabled)
                 {
                     string lineTag = line != Entity.Null ? "line" + line.Index : "line?";
@@ -115,50 +116,47 @@ namespace RapidTransitMod.Dispatch.Observation
 
         internal void UpdateLapStats(Entity vehicle)
         {
-            if (!m_Port.HasOdo(vehicle))
-                return;
-            if (!m_Laps.TryStart(vehicle, out float startOdo))
-                return;
-
-            float current = m_Port.Odo(vehicle);
-            float lapDist = current - startOdo;
             Entity line = m_Port.LineOf(vehicle);
-
-            if (m_Laps.ConsumeRestored(vehicle))
+            bool hasStart = m_Laps.TryStart(vehicle, out float startOdo);
+            bool hasStartFrame = m_Laps.TryStartFrame(vehicle, out uint startFrame);
+            bool hasOdo = m_Port.HasOdo(vehicle);
+            float current = hasOdo ? m_Port.Odo(vehicle) : -1f;
+            uint nowFrame = m_Port.Frame();
+            bool restored = m_Laps.RestoredRunning.Contains(vehicle);
+            float lapDist = current - startOdo;
+            bool valid = !restored
+                && hasStart && hasStartFrame && hasOdo
+                && nowFrame > startFrame
+                && !float.IsNaN(startOdo) && !float.IsInfinity(startOdo) && startOdo >= 0f
+                && !float.IsNaN(current) && !float.IsInfinity(current) && current >= 0f
+                && lapDist > 0f;
+            m_Laps.EndCurrent(vehicle);
+            if (!valid)
             {
-                if (lapDist > 0f)
-                    m_Laps.SetDistance(vehicle, lapDist);
                 ClearVehicleTraversalSliceLapDebug(vehicle);
                 if (RtLog.VerboseEnabled)
                 {
                     string lineTag = line != Entity.Null ? "line" + line.Index : "line?";
-                    m_Port.Log("[LapStatsSkipRestored] " + lineTag + " vehicle" + vehicle.Index
-                        + " lapDist=" + (lapDist / 1000f).ToString("F2") + "km"
-                        + " restored-first-lap skip-lap-time-write");
+                    m_Port.Log("[LapStatsSkip] " + lineTag + " vehicle" + vehicle.Index
+                        + " reason=" + (restored ? "restored-first-lap" : !hasStart || !hasStartFrame ? "missing-start" : !hasOdo ? "no-odometer" : nowFrame <= startFrame ? "invalid-time" : "invalid-distance"));
                 }
                 return;
             }
 
-            if (lapDist > 0f)
+            m_Laps.SetDistance(vehicle, lapDist);
+            if (RtLog.VerboseEnabled)
             {
-                m_Laps.SetDistance(vehicle, lapDist);
-                if (RtLog.VerboseEnabled)
-                {
-                    string lineTag = line != Entity.Null ? "line" + line.Index : "line?";
-                    float maintenanceRange = m_Port.Range(vehicle);
-                    float remaining = maintenanceRange > 0f ? maintenanceRange - current : -1f;
-                    string maintStr = maintenanceRange > 0f
-                        ? " maintenance=" + (maintenanceRange / 1000f).ToString("F1") + "km remaining=" + (remaining / 1000f).ToString("F1") + "km"
-                        : " maintenance=none";
-                    m_Port.Log("[LapDistance] " + lineTag + " vehicle" + vehicle.Index
-                        + " lap=" + (lapDist / 1000f).ToString("F2") + "km" + maintStr);
-                }
+                string lineTag = line != Entity.Null ? "line" + line.Index : "line?";
+                float maintenanceRange = m_Port.Range(vehicle);
+                float remaining = maintenanceRange > 0f ? maintenanceRange - current : -1f;
+                string maintStr = maintenanceRange > 0f
+                    ? " maintenance=" + (maintenanceRange / 1000f).ToString("F1") + "km remaining=" + (remaining / 1000f).ToString("F1") + "km"
+                    : " maintenance=none";
+                m_Port.Log("[LapDistance] " + lineTag + " vehicle" + vehicle.Index
+                    + " lap=" + (lapDist / 1000f).ToString("F2") + "km" + maintStr);
             }
 
-            if (!m_Laps.TryStartFrame(vehicle, out uint startFrame))
-                return;
-
-            uint framesDelta = m_Port.Frame() - startFrame;
+            uint framesDelta = nowFrame - startFrame;
             m_Laps.SetFrames(vehicle, framesDelta);
             float realMinutes = (float)m_Port.ToMinutes(framesDelta);
             if (RtLog.VerboseEnabled)

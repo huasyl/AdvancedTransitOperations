@@ -445,7 +445,11 @@ namespace RapidTransitMod.Dispatch.Runtime
             boarding = false;
             waypoint = -1;
             waypointCount = 0;
-            if (!TryGetRow(vehicle, out RailFrameRow row) || row.RegisteredLine != line || row.SourceFrame != frame)
+            if (!TryGetRow(vehicle, out RailFrameRow row)
+                || !row.InputValid
+                || row.RegisteredLine != line
+                || row.CurrentRoute != line
+                || row.SourceFrame != frame)
                 return false;
 
             row.WaypointCount = TryGetWaypointCount(row.CurrentRoute, out int routeWaypointCount)
@@ -472,18 +476,18 @@ namespace RapidTransitMod.Dispatch.Runtime
             if (!m_FrameRowIndex.TryGetValue(vehicle, out int rowIndex))
                 return false;
 
-            RailFrameRow row = m_FrameRows[rowIndex];
-            if (row.RegistryState == VehicleState.Holding)
-            {
-                waypoint = 0;
-                CommitWaypoint(vehicle, waypoint);
-                return true;
-            }
-
             if (!boarding || !TryGetWaypointsForRoute(line, out _, out DynamicBuffer<RouteWaypoint> waypoints))
                 return true;
 
-            waypoint = m_Runtime.m_WaypointIndex.Compute(vehicle, waypoints);
+            RailFrameRow row = m_FrameRows[rowIndex];
+            m_Runtime.m_WaypointIndex.TryConfirmBoardingWaypoint(
+                vehicle,
+                line,
+                waypoints,
+                false,
+                default,
+                out _,
+                out waypoint);
             waypointCount = waypoints.Length;
             if (waypoint >= 0)
                 row.CachedWaypoint = waypoint;
@@ -873,11 +877,13 @@ namespace RapidTransitMod.Dispatch.Runtime
                 bool hasTargetComponent = TryReadTarget(row.Vehicle, out Target currentTarget);
                 int previousWaypoint = row.CachedWaypoint;
                 int currentWaypoint = row.CachedWaypoint;
-                bool runningWaypointComputed = false;
                 bool hasStopState = stopStates.TryGetValue(row.Vehicle, out StopFrameState stop);
                 bool boarding = row.RegistryState == VehicleState.Running && hasStopState
                     ? stop.Boarding
                     : OfficialBoarding(row);
+                bool holdingStopUnknown = row.RegistryState == VehicleState.Holding
+                    && boarding
+                    && currentWaypoint < 0;
                 int targetMinute = row.RegistryState == VehicleState.Running
                     && m_Runtime.m_VehicleView.TryGetTarget(row.Vehicle, out int target)
                         ? target
@@ -914,7 +920,6 @@ namespace RapidTransitMod.Dispatch.Runtime
                     m_PreparingWaypointLiveFrames.Remove(row.Vehicle);
                     if (runningOriginDetail && hasWaypoints && waypointCount >= 2)
                     {
-                        runningWaypointComputed = true;
                         currentWaypoint = m_Runtime.m_WaypointIndex.Compute(row.Vehicle, waypoints);
                         if (currentWaypoint >= 0 && currentWaypoint != previousWaypoint)
                         {
@@ -924,46 +929,22 @@ namespace RapidTransitMod.Dispatch.Runtime
                     }
                 }
 
-                bool strictOriginRejected = false;
-                if (row.RegistryState == VehicleState.Running
-                    && runningWaypointComputed
-                    && currentWaypoint == 0
-                    && !boarding
-                    && !stop.HadStopSession
+                bool confirmedOrigin = (row.RegistryState == VehicleState.Preparing
+                        || row.RegistryState == VehicleState.Running)
+                    && boarding
                     && hasWaypoints
-                    && waypointCount >= 2)
-                {
-                    Entity strictLine = m_Runtime.m_Resolve.Line(row.Vehicle);
-                    if (strictLine != Entity.Null
-                        && m_Runtime.m_TrackModel.TryGetChainForLine(strictLine, waypoints, out LineTrackChain strictChain)
-                        && m_Runtime.m_TrackProjection.TrySnapshot(
-                            row.Vehicle,
-                            strictLine,
-                            strictChain.Signature,
-                            nowFrame,
-                            out var strictCursor)
-                        && m_Runtime.m_WaypointIndex.TryRelation(
-                            strictChain,
-                            0,
-                            strictCursor.AtomCursorIndex,
-                            out CursorAtomWindowRelation strictRelation,
-                            out _,
-                            out _))
-                    {
-                        strictOriginRejected = strictRelation == CursorAtomWindowRelation.Before
-                            || strictRelation == CursorAtomWindowRelation.After;
-                    }
-                }
+                    && waypointCount >= 2
+                    && m_Runtime.m_WaypointIndex.TryConfirmCurrentBoardingWaypoint(
+                        row.Vehicle, row.RegisteredLine, waypoints, false, default, out int boardingWaypoint)
+                    && boardingWaypoint == 0;
 
                 bool targetPresent = hasTargetComponent && currentTarget.m_Target != Entity.Null;
                 bool preparingAtOrigin = row.RegistryState == VehicleState.Preparing
-                    && hasWaypoints
-                    && waypointCount >= 2
-                    && m_Runtime.m_LineProfile.HasPreparingReachedOrigin(row.Vehicle, waypoints, boarding, currentWaypoint);
+                    && confirmedOrigin;
                 bool atOrigin = row.RegistryState == VehicleState.Preparing
                     ? preparingAtOrigin
                     : row.RegistryState == VehicleState.Running
-                        ? currentWaypoint == 0 && !strictOriginRejected
+                        ? confirmedOrigin
                         : currentWaypoint == 0;
                 Entity originStation = hasWaypoints && waypointCount >= 2
                     ? waypoints[0].m_Waypoint
@@ -978,9 +959,6 @@ namespace RapidTransitMod.Dispatch.Runtime
                         row.Vehicle,
                         ModRuntimeHostSystem.ORIGIN_CONGESTION_RADIUS_METERS,
                         includePreparingVehicles: false);
-                bool cooldownActive = runningOriginDetail
-                    && m_Runtime.m_VehicleView.TryGetCooldown(row.Vehicle, out uint cooldownUntil)
-                    && nowFrame < cooldownUntil;
                 bool preparingCooldown = row.RegistryState == VehicleState.Preparing
                     && m_Runtime.m_PreparingFixCooldownUntil.TryGetValue(row.Vehicle, out uint repairCooldown)
                     && nowFrame < repairCooldown;
@@ -998,41 +976,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                     && !preparingAtOrigin
                     && !preparingCooldown
                     && (preparingDrifted || (preparingWrongTarget && !preparingFresh));
-                bool shouldEvaluateOriginSettle = runningOriginDetail
-                    && !cooldownActive
-                    && hasWaypoints
-                    && waypointCount >= 2
-                    && (strictOriginRejected || atOrigin || boarding || stop.HadStopSession || targetMinute >= 0
-                        || m_Runtime.m_VehicleView.IsInbound(row.Vehicle));
-                bool settledAtOrigin = shouldEvaluateOriginSettle
-                    && m_Runtime.m_LineProfile.ShouldSettleAtOrigin(
-                        row.Vehicle,
-                        waypoints,
-                        nowFrame,
-                        atOrigin,
-                        boarding,
-                        stop.HadStopSession,
-                        targetMinute,
-                        strictOriginRejected);
-                bool forcedAtOrigin = settledAtOrigin && !atOrigin;
-                bool brokenRecoveredRun = false;
-                bool runDistanceReady = false;
-                float travelledDistance = -1f;
-                float observedLapDistance = -1f;
-                if (runningOriginDetail && shouldEvaluateOriginSettle && (atOrigin || forcedAtOrigin))
-                {
-                    bool hasLapStart = m_Runtime.m_ObsQuery.TryLapStart(row.Vehicle, out float lapStart);
-                    bool hasLapStartFrame = m_Runtime.m_ObsQuery.TryLapStartFrame(row.Vehicle, out _);
-                    bool lapStartValid = hasLapStart && !float.IsNaN(lapStart) && !float.IsInfinity(lapStart) && lapStart >= 0f;
-                    if (lapStartValid && m_Runtime.EntityManager.HasComponent<Odometer>(row.Vehicle))
-                    {
-                        m_Runtime.m_RuntimeHotPathProbe.CountHeavyDetailRead();
-                        travelledDistance = m_Runtime.EntityManager.GetComponentData<Odometer>(row.Vehicle).m_Distance - lapStart;
-                    }
-                    m_Runtime.m_ObsQuery.TryLapDistance(row.Vehicle, out observedLapDistance);
-                    brokenRecoveredRun = hasLapStartFrame && !lapStartValid;
-                    runDistanceReady = travelledDistance > 500f;
-                }
+                if (runningOriginDetail && m_Runtime.m_VehicleView.TryGetOrigin(row.Vehicle, out _))
+                    m_Runtime.m_RuntimeEngine.ClearOriginCandidate(row.Vehicle);
 
                 if (row.RegistryState == VehicleState.Preparing && hasWaypoints && waypointCount >= 2)
                     m_Runtime.m_Observation.TryRequestDispatchEta(row.Vehicle, row.RegisteredLine, waypoints, nowFrame);
@@ -1041,12 +986,11 @@ namespace RapidTransitMod.Dispatch.Runtime
             input = new DispatchInput(row.Vehicle, row.RegisteredLine, route,
                 row.InputValid && row.HasPublicTransport && hasTargetComponent && route == row.RegisteredLine && waypointCount >= 2,
                 boarding, previousWaypoint, currentWaypoint, waypointCount,
-                atOrigin, targetAtOrigin, preparingAtOrigin, originBusy, preparingRouteNeedsRepair, shouldEvaluateOriginSettle,
-                false, false,
-                settledAtOrigin, forcedAtOrigin, brokenRecoveredRun, row.Moving,
-                runDistanceReady, travelledDistance, observedLapDistance, stop.HadStopSession, stop.BoardingChanged,
+                atOrigin, targetAtOrigin, preparingAtOrigin, originBusy, preparingRouteNeedsRepair, runningOriginDetail,
+                false, stop.HadStopSession, stop.BoardingChanged,
                 m_Runtime.m_StopRuntime.IsDeparturePending(row.Vehicle),
-                m_Runtime.m_StopRuntime.IsOriginDepartureConfirmed(row.Vehicle, row.RegisteredLine), bypass);
+                m_Runtime.m_StopRuntime.IsOriginDepartureConfirmed(row.Vehicle, row.RegisteredLine),
+                holdingStopUnknown, 2d, bypass);
             return true;
         }
 
