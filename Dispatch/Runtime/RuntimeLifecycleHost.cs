@@ -234,6 +234,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             entities.Dispose();
             m_Runtime.m_VehicleRegistry.Clear();
             m_Runtime.m_VehicleRegistrar.ClearPendingRebindCandidates();
+            m_Runtime.m_VehicleRegistrar.ClearRegistrationConfirmations();
             m_Runtime.m_VehicleRegistrar.ClearStartupGate();
             m_Runtime.m_LineServiceState.Reset();
             m_Runtime.m_DispatchScheduler.ClearServiceWindows();
@@ -303,6 +304,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_Announcements.Clear();
             m_Runtime.m_VehicleRegistry.Clear();
             m_Runtime.m_VehicleRegistrar.ClearPendingRebindCandidates();
+            m_Runtime.m_VehicleRegistrar.ClearRegistrationConfirmations();
             m_Runtime.m_VehicleRegistrar.ClearStartupGate();
             m_Runtime.m_LineServiceState.Reset();
             m_Runtime.m_DispatchScheduler.ClearServiceWindows();

@@ -20,18 +20,12 @@ namespace RapidTransitMod.Dispatch.Runtime
         public readonly bool PreparingRouteNeedsRepair;
         public readonly bool ShouldEvaluateOriginSettle;
         public readonly bool IgnoreOriginCooldown;
-        public readonly bool OriginSettleReady;
-        public readonly bool SettledAtOrigin;
-        public readonly bool ForcedAtOrigin;
-        public readonly bool BrokenRecoveredRun;
-        public readonly bool Moving;
-        public readonly bool RunDistanceReady;
-        public readonly float TravelledDistance;
-        public readonly float ObservedLapDistance;
         public readonly bool HadStopSession;
         public readonly bool BoardingChanged;
         public readonly bool OriginDeparturePending;
         public readonly bool OriginDepartureConfirmed;
+        public readonly bool HoldingStopUnknown;
+        public readonly double MinimumOriginDwellMinutes;
         public readonly BypassControlResult BypassControl;
 
         public DispatchInput(
@@ -50,18 +44,12 @@ namespace RapidTransitMod.Dispatch.Runtime
             bool preparingRouteNeedsRepair,
             bool shouldEvaluateOriginSettle,
             bool ignoreOriginCooldown,
-            bool originSettleReady,
-            bool settledAtOrigin,
-            bool forcedAtOrigin,
-            bool brokenRecoveredRun,
-            bool moving,
-            bool runDistanceReady,
-            float travelledDistance,
-            float observedLapDistance,
             bool hadStopSession,
             bool boardingChanged,
             bool originDeparturePending,
             bool originDepartureConfirmed,
+            bool holdingStopUnknown,
+            double minimumOriginDwellMinutes,
             BypassControlResult bypassControl)
         {
             Vehicle = vehicle;
@@ -79,18 +67,12 @@ namespace RapidTransitMod.Dispatch.Runtime
             PreparingRouteNeedsRepair = preparingRouteNeedsRepair;
             ShouldEvaluateOriginSettle = shouldEvaluateOriginSettle;
             IgnoreOriginCooldown = ignoreOriginCooldown;
-            OriginSettleReady = originSettleReady;
-            SettledAtOrigin = settledAtOrigin;
-            ForcedAtOrigin = forcedAtOrigin;
-            BrokenRecoveredRun = brokenRecoveredRun;
-            Moving = moving;
-            RunDistanceReady = runDistanceReady;
-            TravelledDistance = travelledDistance;
-            ObservedLapDistance = observedLapDistance;
             HadStopSession = hadStopSession;
             BoardingChanged = boardingChanged;
             OriginDeparturePending = originDeparturePending;
             OriginDepartureConfirmed = originDepartureConfirmed;
+            HoldingStopUnknown = holdingStopUnknown;
+            MinimumOriginDwellMinutes = minimumOriginDwellMinutes;
             BypassControl = bypassControl;
         }
     }

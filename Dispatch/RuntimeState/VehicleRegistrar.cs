@@ -102,6 +102,8 @@ namespace RapidTransitMod
         // 跨来源帧候选：第二步只保留完整 Entity，第三步才由 Register 唯一消费。
         private readonly HashSet<Entity> m_PendingRebindCandidates = new HashSet<Entity>();
         private readonly Dictionary<Entity, StopFact> m_DeferredRestoredStops = new Dictionary<Entity, StopFact>();
+        private readonly Dictionary<Entity, (Entity Line, byte RemainingAttempts)> m_PendingRegistrationConfirmations = new Dictionary<Entity, (Entity, byte)>();
+        private readonly List<Entity> m_RegistrationConfirmationVehicles = new List<Entity>();
         // 启动期索引只保存当前批次的实体、线路和稳定线路序号。
         private readonly List<StartupCandidate> m_StartupCandidates = new List<StartupCandidate>();
         private readonly List<StartupCandidate> m_OperationalStartupCandidates = new List<StartupCandidate>();
@@ -133,6 +135,7 @@ namespace RapidTransitMod
             && (frame & 15u) == 3u;
 
         internal void ClearPendingRebindCandidates() => m_PendingRebindCandidates.Clear();
+        internal void ClearRegistrationConfirmations() => m_PendingRegistrationConfirmations.Clear();
 
         internal void ClearStartupGate()
         {
@@ -307,7 +310,16 @@ namespace RapidTransitMod
                     waypoint,
                     frame);
                 if (restoredStop.Exists)
+                {
+                    if (lifecycle == LifecycleKind.Rail
+                        && m_Runtime.m_VehicleView.TryGetState(candidate.Vehicle, out VehicleState state))
+                        SetRegistrationReady(candidate.Vehicle, restoredStop.WaypointIndex, state, frame);
                     m_PublishStopFact(restoredStop);
+                }
+                else if (lifecycle == LifecycleKind.Rail && boarding && waypoint < 0)
+                {
+                    m_PendingRegistrationConfirmations[candidate.Vehicle] = (candidate.Line, 2);
+                }
 
             }
 
@@ -701,6 +713,8 @@ namespace RapidTransitMod
             BufferLookup<RouteWaypoint> wpBuffers = m_Runtime.GetBufferLookup<RouteWaypoint>(true);
             try
             {
+                if (m_Runtime.m_RailEventSource.CollectedThisFrame(m_Runtime.m_SimulationSystem.frameIndex))
+                    RetryRegistrationConfirmations();
                 if (fullSweep)
                 {
                     lines = m_Runtime.m_LineQuery.ToEntityArray(Allocator.TempJob);
@@ -737,6 +751,77 @@ namespace RapidTransitMod
 
             if (fullSweep || m_Runtime.m_RailEventSource.CollectedThisFrame(m_Runtime.m_SimulationSystem.frameIndex))
                 DrainRebindCandidates(rvBuffers, wpBuffers);
+        }
+
+        private void RetryRegistrationConfirmations()
+        {
+            if (m_PendingRegistrationConfirmations.Count == 0)
+                return;
+
+            m_RegistrationConfirmationVehicles.Clear();
+            foreach (Entity vehicle in m_PendingRegistrationConfirmations.Keys)
+                m_RegistrationConfirmationVehicles.Add(vehicle);
+
+            uint frame = m_Runtime.m_SimulationSystem.frameIndex;
+            for (int i = 0; i < m_RegistrationConfirmationVehicles.Count; i++)
+            {
+                Entity vehicle = m_RegistrationConfirmationVehicles[i];
+                (Entity Line, byte RemainingAttempts) pending = m_PendingRegistrationConfirmations[vehicle];
+                if (!m_Runtime.m_RailEventSource.TryGetStartupSource(
+                        vehicle,
+                        pending.Line,
+                        frame,
+                        out bool boarding,
+                        out _,
+                        out _)
+                    || !boarding
+                    || m_Runtime.m_StopRuntime.HasOpenStopSession(vehicle)
+                    || m_Runtime.m_StopRuntime.HasInvalidatedRecovery(vehicle)
+                    || !m_Runtime.m_RailEventSource.TryGetRouteWaypoints(vehicle, out _, out DynamicBuffer<RouteWaypoint> waypoints)
+                    || !m_Runtime.m_VehicleView.TryGetState(vehicle, out VehicleState state)
+                    || state == VehicleState.Retiring)
+                {
+                    m_PendingRegistrationConfirmations.Remove(vehicle);
+                    continue;
+                }
+
+                bool confirmed = m_Runtime.m_WaypointIndex.TryConfirmBoardingWaypoint(
+                    vehicle,
+                    pending.Line,
+                    waypoints,
+                    false,
+                    default,
+                    out _,
+                    out int waypoint);
+                if (confirmed)
+                {
+                    m_PendingRegistrationConfirmations.Remove(vehicle);
+                    StopFact restoredStop = m_Runtime.m_StopRuntime.RestoreRegistration(
+                        vehicle,
+                        pending.Line,
+                        boarding: true,
+                        waypoint,
+                        frame);
+                    m_Runtime.m_RailEventSource.CommitWaypoint(vehicle, waypoint);
+                    SetRegistrationReady(vehicle, waypoint, state, frame);
+                    m_PublishStopFact(restoredStop);
+                    m_Runtime.m_RuntimeFramePlan.AddStage(vehicle, RapidTransitMod.Runtime.RuntimeStageMask.Dispatch);
+                    continue;
+                }
+
+                byte remaining = (byte)(pending.RemainingAttempts - 1);
+                if (remaining == 0)
+                    m_PendingRegistrationConfirmations.Remove(vehicle);
+                else
+                    m_PendingRegistrationConfirmations[vehicle] = (pending.Line, remaining);
+            }
+            m_RegistrationConfirmationVehicles.Clear();
+        }
+
+        private void SetRegistrationReady(Entity vehicle, int waypoint, VehicleState state, uint frame)
+        {
+            if (waypoint == 0 && state == VehicleState.Holding)
+                m_Runtime.m_RuntimeEngine.SetReady(vehicle, frame, 2d, m_Runtime.m_SimClock.Snapshot);
         }
 
         private void RegisterFullSweep(
@@ -1328,7 +1413,9 @@ namespace RapidTransitMod
             bool boarding = (publicTransport.m_State & PublicTransportFlags.Boarding) != 0;
             if ((publicTransport.m_State & (PublicTransportFlags.Returning | PublicTransportFlags.AbandonRoute)) != 0) return;
 
+            uint nowFrame = m_Runtime.m_SimulationSystem.frameIndex;
             int waypointIndex = -1;
+            m_PendingRegistrationConfirmations.Remove(vehicle);
             if (!startupSilent && boarding)
             {
                 m_Runtime.m_WaypointIndex.TryConfirmBoardingWaypoint(
@@ -1349,13 +1436,6 @@ namespace RapidTransitMod
                 waypointIndex,
                 adoptExistingVehicles,
                 out string initialReason);
-            if (initialState == VehicleState.Holding
-                && (initialReason == "boarding-origin-fallback"
-                    || initialReason.StartsWith("route-progress-origin-fallback")))
-            {
-                waypointIndex = 0;
-                atOrigin = true;
-            }
             uint? dispatchFrame = null;
             if (!adoptExistingVehicles
                 && m_Runtime.m_LineSpawnRequestFrame.TryGetValue(line, out uint spawnRequestFrame))
@@ -1364,7 +1444,6 @@ namespace RapidTransitMod
                 m_Runtime.m_LineSpawnRequestFrame.Remove(line);
             }
 
-            uint nowFrame = m_Runtime.m_SimulationSystem.frameIndex;
             bool registerStopInput = !startupSilent && !completeRestore;
             if (startupSilent)
             {
@@ -1426,9 +1505,7 @@ namespace RapidTransitMod
             }
 
             bool preferOriginHolding = initialState == VehicleState.Holding
-                && (initialReason == "at-origin"
-                    || initialReason == "boarding-origin-fallback"
-                    || initialReason.StartsWith("route-progress-origin-fallback"));
+                && waypointIndex == 0;
             if (restoreVehicleCache)
             {
                 restored = m_Runtime.m_VehicleCache.Restore(
@@ -1459,6 +1536,10 @@ namespace RapidTransitMod
                     m_Runtime.m_VehicleRegistry.CancelRestore();
                 throw;
             }
+            if (!startupSilent)
+                SetRegistrationReady(vehicle, waypointIndex, finalState, nowFrame);
+            if (!startupSilent && boarding && waypointIndex < 0)
+                m_PendingRegistrationConfirmations[vehicle] = (line, 2);
             if (!startupSilent && finalState == VehicleState.Running)
                 m_Runtime.m_RuntimeEngine.CommitRunning(vehicle, line);
             if (!startupSilent && finalState == VehicleState.Holding)
@@ -1511,29 +1592,19 @@ namespace RapidTransitMod
             bool adoptExistingVehicles,
             out string reason)
         {
-            bool arriving = (publicTransport.m_State & PublicTransportFlags.Arriving) != 0;
-
             if (initialWaypointIndex == 0)
             {
                 reason = "at-origin";
                 return VehicleState.Holding;
             }
-            if (boarding)
-            {
-                if (m_Runtime.m_LineProfile.IsWithinOriginDistance(vehicle, waypoints, ModRuntimeHostSystem.ORIGIN_FORCE_IDLE_RADIUS_METERS))
-                {
-                    if (!m_Runtime.m_RouteProgress.Try(vehicle, out int nearOriginWaypointIndex, out float nearOriginSegmentPosition)
-                        || (nearOriginWaypointIndex == 1 && nearOriginSegmentPosition <= 0.10f)
-                        || nearOriginWaypointIndex == 0)
-                    {
-                        reason = "boarding-origin-fallback";
-                        return VehicleState.Holding;
-                    }
-                }
-            }
             if (boarding && initialWaypointIndex > 0)
             {
                 reason = "boarding-midway";
+                return VehicleState.Running;
+            }
+            if (boarding)
+            {
+                reason = "boarding-unconfirmed";
                 return VehicleState.Running;
             }
             if (!adoptExistingVehicles)
@@ -1549,18 +1620,6 @@ namespace RapidTransitMod
             }
 
             bool hasRouteProgress = m_Runtime.m_RouteProgress.Try(vehicle, out int nextWaypointIndex, out float segmentPosition);
-            if (hasRouteProgress)
-            {
-                bool nearOriginProgress = nextWaypointIndex == 0 || (nextWaypointIndex == 1 && segmentPosition <= 0.05f);
-                if (nearOriginProgress
-                    && m_Runtime.m_LineProfile.IsWithinOriginDistance(vehicle, waypoints, ModRuntimeHostSystem.ORIGIN_FORCE_IDLE_RADIUS_METERS)
-                    && (boarding || arriving))
-                {
-                    reason = "route-progress-origin-fallback wp=" + nextWaypointIndex + " seg=" + segmentPosition.ToString("F2");
-                    return VehicleState.Holding;
-                }
-            }
-
             // 原版出库即设置 EnRoute；首次停站或路点续接前，路径进度不能证明已经运营。
             if (!boarding
                 && (publicTransport.m_State & (PublicTransportFlags.EnRoute | PublicTransportFlags.RouteSource)) == PublicTransportFlags.EnRoute)
@@ -1572,7 +1631,7 @@ namespace RapidTransitMod
             if (hasRouteProgress)
             {
                 reason = "route-progress wp=" + nextWaypointIndex + " seg=" + segmentPosition.ToString("F2");
-                return (boarding && nextWaypointIndex == 0) ? VehicleState.Holding : VehicleState.Running;
+                return VehicleState.Running;
             }
 
             float originDistance = m_Runtime.m_LineProfile.DistanceToOrigin(vehicle, waypoints);

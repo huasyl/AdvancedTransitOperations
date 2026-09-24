@@ -294,6 +294,9 @@ namespace RapidTransitMod.Dispatch.Lines
                     targetWaypointIndex,
                     out int currentWaypointIndex))
             {
+                // 轨道后备仅用于中途站；始发必须由停靠归属确认。
+                if (currentWaypointIndex == 0)
+                    return -1;
                 if (captureStationOutcome)
                     m_Runtime.m_RuntimeHotPathProbe.RecordWaypointStationOutcome(true);
                 return currentWaypointIndex;
@@ -343,6 +346,13 @@ namespace RapidTransitMod.Dispatch.Lines
             {
                 StoreIndependentResult(vehicle, line, false, targetWaypointIndex, -1);
                 return false;
+            }
+
+            if (targetWaypointIndex == 0)
+            {
+                waypointIndex = 0;
+                StoreIndependentResult(vehicle, line, true, 0, 0);
+                return true;
             }
 
             if (outsideConfirmed)

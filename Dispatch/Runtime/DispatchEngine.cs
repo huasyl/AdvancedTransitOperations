@@ -277,7 +277,6 @@ namespace RapidTransitMod
             m_Vehicles.ClearCooldown(vehicle);
             m_Vehicles.ClearInbound(vehicle);
             m_Vehicles.ClearOriginCandidate(vehicle);
-            m_Vehicles.ClearReady(vehicle);
         }
 
         public void ArriveIdle(Entity vehicle)
@@ -333,13 +332,12 @@ namespace RapidTransitMod
             m_Vehicles.ClearDispatch(vehicle);
         }
 
-        public void SetReady(Entity vehicle, uint startFrame, ClockSnapshot clockSnapshot)
+        public void SetReady(Entity vehicle, uint startFrame, double waitMinutes, ClockSnapshot clockSnapshot)
         {
-            m_Vehicles.SetReady(
-                vehicle,
-                startFrame,
-                ModRuntimeHostSystem.FORCED_ORIGIN_MIN_DWELL_MINUTES,
-                clockSnapshot);
+            if (waitMinutes > 0d)
+                m_Vehicles.SetReady(vehicle, startFrame, waitMinutes, clockSnapshot);
+            else
+                m_Vehicles.ClearReady(vehicle);
         }
 
         public void ClearReady(Entity vehicle)
@@ -697,6 +695,8 @@ namespace RapidTransitMod
                                     }
                                     break;
                                 }
+                                if (input.HoldingStopUnknown)
+                                    break;
                                 if (m_Runtime.m_Observation.IsWaitingOriginDwell(v, nowFrame))
                                 {
                                     HoldAssignedDeparture(v, targetMinute, nowFrame, clockSnapshot, ecb);
@@ -907,103 +907,10 @@ namespace RapidTransitMod
                                 break;
                             }
 
-                            bool shouldEvaluateOriginSettle = input.ShouldEvaluateOriginSettle;
-                            bool settleAtOrigin = input.SettledAtOrigin;
-                            bool forcedAtOrigin = input.ForcedAtOrigin;
-                            if (shouldEvaluateOriginSettle
-                                && (atA || forcedAtOrigin)
+                            if (input.ShouldEvaluateOriginSettle
+                                && atA
                                 && (!inCooldown || input.IgnoreOriginCooldown))
                             {
-                                bool brokenRecoveredRunning = input.BrokenRecoveredRun;
-                                bool hasMoved = input.RunDistanceReady || input.OriginSettleReady;
-                                bool moving = input.Moving;
-                                float travelledDistance = input.TravelledDistance;
-                                float observedLapDistance = input.ObservedLapDistance;
-                                if (brokenRecoveredRunning)
-                                {
-                                    this.ArriveIdle(v);
-                                    this.SetReady(v, nowFrame, clockSnapshot);
-                                    events.AppendDispatch(
-                                        v,
-                                        nowFrame,
-                                        DispatchFactKind.RunningRecovery,
-                                        VehicleState.Running,
-                                        VehicleState.Idle,
-                                        lineEnt,
-                                        fact: new DispatchBusinessFact(targetMinute, -1, -1, false, "broken-lap-recovered"));
-                                    m_Runtime.m_ObsPersist.ClearLapRestore(v);
-                                    QueueWaypointCommit(v, 0);
-                                    m_Runtime.m_CommandApplier.KeepDepartureHeld(v, nowFrame, ecb);
-                                    log.Info("[恢复兜底] " + LineTag() + " 车辆" + v.Index
-                                        + " Running圈起点无效，回站后转Idle"
-                                        + " target=" + (targetMinute >= 0 ? ModRuntimeHostSystem.SlotStr(targetMinute) : "-")
-                                        + " travelled=" + travelledDistance.ToString("F1"));
-                                    break;
-                                }
-                                if (!hasMoved)
-                                {
-                                    if (settleAtOrigin)
-                                    {
-                                        uint originSinceFrame = m_Runtime.m_VehicleView.TryGetOrigin(v, out uint sinceFrame)
-                                            ? sinceFrame
-                                            : nowFrame;
-                                        bool keepAssignedTarget = targetMinute >= 0 && ScheduleClock.CurrentOrRecent(nowMinute, targetMinute);
-                                        bool recoverToHolding = keepAssignedTarget;
-
-                                        if (recoverToHolding)
-                                            this.RecoverToHolding(v);
-                                        else
-                                            this.RecoverToIdle(v, nowFrame);
-                                        QueueWaypointCommit(v, 0);
-                                        m_Runtime.m_CommandApplier.KeepDepartureHeld(v, nowFrame, ecb);
-
-                                        if (recoverToHolding)
-                                        {
-                                            bool isLateRecoveredTarget = ScheduleClock.CanLate(nowMinute, targetMinute);
-                                            log.Info("[Running->Holding兜底] " + LineTag() + " 车辆" + v.Index
-                                                + " 到达始发站后长时间静止，回收为候车"
-                                                + " target=" + ModRuntimeHostSystem.SlotStr(targetMinute)
-                                                + " waitedFrames=" + (nowFrame - originSinceFrame)
-                                                + " boarding=" + boarding
-                                                + " lastBoarding=" + lastBoarding
-                                                + " curWpIdx=" + curWpIdx
-                                                + (forcedAtOrigin ? " forcedAtOrigin=true" : ""));
-                                        }
-                                        else
-                                        {
-                                            log.Info("[Running->Idle兜底] " + LineTag() + " 车辆" + v.Index
-                                                + " 到达始发站后长时间静止，回收为Idle"
-                                                + " waitedFrames=" + (nowFrame - originSinceFrame)
-                                                + " boarding=" + boarding
-                                                + " lastBoarding=" + lastBoarding
-                                                + " curWpIdx=" + curWpIdx
-                                                + (forcedAtOrigin ? " forcedAtOrigin=true" : ""));
-                                        }
-                                        break;
-                                    }
-
-                                    m_Runtime.m_CommandApplier.KeepDepartureHeld(v, nowFrame, ecb);
-                                    int currentSlot1 = m_Runtime.m_VehicleView.TryGetSlot(v, out int cs1) ? cs1 : int.MinValue;
-                                    if (nowFrame % 1800 == 0)
-                                    {
-                                        uint lastLaunchFrame = m_Runtime.m_VehicleView.TryGetLaunch(v, out uint llf) ? llf : 0;
-                                        string curSlotDbg = m_Runtime.m_VehicleView.TryGetSlot(v, out int csDbg) ? ModRuntimeHostSystem.SlotStr(csDbg) : "?";
-                                        string targetSlotDbg = targetMinute >= 0 ? ModRuntimeHostSystem.SlotStr(targetMinute) : "-";
-                                        log.Info("[心跳-卡站] " + LineTag() + " 车辆" + v.Index
-                                            + " atA=true hasMoved=false"
-                                            + " travelled=" + (travelledDistance >= 0f ? (travelledDistance / 1000f).ToString("F2") + "km" : "?")
-                                            + " lapDist=" + (observedLapDistance > 0f ? (observedLapDistance / 1000f).ToString("F2") + "km" : "未知")
-                                            + " moving=" + (moving ? "1" : "0")
-                                            + " lastLaunchFrame=" + (lastLaunchFrame > 0 ? lastLaunchFrame.ToString() : "?")
-                                            + " sinceLaunch=" + (lastLaunchFrame > 0 ? (nowFrame - lastLaunchFrame).ToString() : "?")
-                                            + " curSlot=" + curSlotDbg
-                                            + " targetSlot=" + targetSlotDbg
-                                            + " curWpIdx=" + curWpIdx
-                                            + " boarding=" + boarding
-                                            + " lastBoarding=" + lastBoarding);
-                                    }
-                                    break;
-                                }
                                 this.ArriveIdle(v);
                                 if (targetMinute >= 0)
                                 {
@@ -1020,19 +927,14 @@ namespace RapidTransitMod
                                 QueueWaypointCommit(v, 0);
                                 this.ClearInbound(v);
                                 this.ClearOriginCandidate(v);
-                                if (forcedAtOrigin)
-                                    this.SetReady(v, nowFrame, clockSnapshot);
-                                else
-                                    this.ClearReady(v);
+                                this.SetReady(v, nowFrame, input.MinimumOriginDwellMinutes, clockSnapshot);
                                 if (RtLog.VerboseEnabled)
                                 {
                                     log.Info("[Running->Idle] " + LineTag() + " 车辆" + v.Index
-                                        + " travelled=" + travelledDistance.ToString("F1")
                                         + " curWpIdx=" + curWpIdx
                                         + (targetMinute >= 0 && ScheduleClock.CurrentOrRecent(nowMinute, targetMinute)
                                             ? " keptTarget=" + ModRuntimeHostSystem.SlotStr(targetMinute)
-                                            : "")
-                                        + (forcedAtOrigin ? " forcedAtOrigin=true" : ""));
+                                            : ""));
                                 }
                             }
                             else

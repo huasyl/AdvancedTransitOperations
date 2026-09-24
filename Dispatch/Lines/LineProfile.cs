@@ -164,6 +164,7 @@ namespace RapidTransitMod.Dispatch.Lines
             return inOriginWindow;
         }
 
+        // 原180帧判定暂时停用，保留算法供后续核对；调度来源不再调用。
         public bool ShouldSettleAtOrigin(
             Entity vehicle,
             DynamicBuffer<RouteWaypoint> waypoints,

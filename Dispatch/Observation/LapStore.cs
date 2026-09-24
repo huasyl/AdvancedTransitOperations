@@ -60,6 +60,13 @@ namespace RapidTransitMod.Dispatch.Observation
             m_StartFrame[vehicle] = frame;
         }
 
+        internal void EndCurrent(Entity vehicle)
+        {
+            m_StartOdo.Remove(vehicle);
+            m_StartFrame.Remove(vehicle);
+            m_Restored.Remove(vehicle);
+        }
+
         internal bool TryStart(Entity vehicle, out float odometer) =>
             m_StartOdo.TryGetValue(vehicle, out odometer);
 

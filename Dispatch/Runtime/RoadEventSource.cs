@@ -477,11 +477,6 @@ namespace RapidTransitMod.Dispatch.Runtime
                 && (nowFrame & 15u) == 1u
                 && !preparingAtOrigin;
             bool shouldEvaluateOriginSettle = runningOriginDetail;
-            bool originSettleReady = atOrigin;
-            bool settledAtOrigin = atOrigin;
-            bool forcedAtOrigin = false;
-            float travelledDistance = -1f;
-            float observedLapDistance = -1f;
             BypassControlResult bypass = new BypassControlResult(
                 false,
                 row.Vehicle,
@@ -514,18 +509,12 @@ namespace RapidTransitMod.Dispatch.Runtime
                 preparingRouteNeedsRepair,
                 shouldEvaluateOriginSettle,
                 runningOriginDetail,
-                originSettleReady,
-                settledAtOrigin,
-                forcedAtOrigin,
-                false,
-                row.MovingForDeparture,
-                false,
-                travelledDistance,
-                observedLapDistance,
                 stop.HadStopSession,
                 stop.BoardingChanged,
                 m_Runtime.m_StopRuntime.IsDeparturePending(row.Vehicle),
                 m_Runtime.m_StopRuntime.IsOriginDepartureConfirmed(row.Vehicle, row.RegisteredLine),
+                false,
+                0d,
                 bypass);
             return true;
         }
