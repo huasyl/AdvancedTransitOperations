@@ -414,8 +414,6 @@ namespace RapidTransitMod.RailEta.BuiltIn
                 {
                     Entity depot = values[i];
                     if (!DepotCompatibilityService.Match(m_Entities, m_Line, depot)) continue;
-                    Game.Buildings.TransportDepot state = m_Entities.GetComponentData<Game.Buildings.TransportDepot>(depot);
-                    if ((state.m_Flags & TransportDepotFlags.HasAvailableVehicles) == 0) continue;
                     if (!sources.Contains(depot)) sources.Add(depot);
                 }
             }
