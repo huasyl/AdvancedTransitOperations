@@ -68,8 +68,6 @@ namespace RapidTransitMod
             Options = new AtoGameOptions(this);
 #if RT_DEBUG_TOOLS
             updateSystem.UpdateAfter<Dispatch.Diagnostics.RuntimeProbeSystem>(SystemUpdatePhase.MainLoop);
-            updateSystem.UpdateBefore<TramTrain.AssetSystem, Game.Prefabs.PrefabInitializeSystem>(SystemUpdatePhase.PrefabUpdate);
-            updateSystem.UpdateAfter<TramTrain.ScopedPatchSystem, Game.Prefabs.NetInitializeSystem>(SystemUpdatePhase.PrefabUpdate);
 #endif
             updateSystem.UpdateAfter<Dispatch.Runtime.LineChangeSourceSystem, RoutePathReadySystem>(SystemUpdatePhase.Modification1);
             updateSystem.UpdateAfter<LineServiceChangeSourceSystem, ModificationBarrier4>(SystemUpdatePhase.Modification4);
@@ -88,7 +86,6 @@ namespace RapidTransitMod
             updateSystem.UpdateAfter<DepotSourceLockSystem, RtManagedVehicleRequestSystem>(SystemUpdatePhase.GameSimulation);
 #if RT_DEBUG_TOOLS
             updateSystem.UpdateAfter<DevSightRaycastCollectorSystem, ToolRaycastSystem>(SystemUpdatePhase.Raycast);
-            updateSystem.UpdateAfter<TramTrainSurfaceProbeSystem, ToolRaycastSystem>(SystemUpdatePhase.Raycast);
 #endif
             updateSystem.UpdateBefore<RapidTransitPanelUISystem>(SystemUpdatePhase.Rendering);
 #if RT_DEBUG_TOOLS
