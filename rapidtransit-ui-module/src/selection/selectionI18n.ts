@@ -2,6 +2,21 @@ import * as l10n from "cs2/l10n";
 import { useCallback } from "react";
 
 const KEYS = {
+  signalCooldown: "RapidTransit.SignalCooldown",
+  signalSubmitted: "RapidTransit.SignalSubmitted",
+  signalActive: "RapidTransit.SignalActive",
+  signalTramPriority: "RapidTransit.SignalTramPriority",
+  signalOtherPriority: "RapidTransit.SignalOtherPriority",
+  signalNoTarget: "RapidTransit.SignalNoTarget",
+  signalDetected: "RapidTransit.SignalDetected",
+  signalPaused: "RapidTransit.SignalPaused",
+  signalUnavailable: "RapidTransit.SignalUnavailable",
+  signalNext: "RapidTransit.SignalNext",
+  signalFuture: "RapidTransit.SignalFuture",
+  signalMeters: "RapidTransit.SignalMeters",
+  signalRed: "RapidTransit.SignalRed",
+  signalGreen: "RapidTransit.SignalGreen",
+  signalTransition: "RapidTransit.SignalTransition",
   panelTitle: "RapidTransit.PanelTitle",
   vehicleTitle: "RapidTransit.VehicleTitle",
   lineTitle: "RapidTransit.LineTitle",
@@ -85,6 +100,21 @@ const KEYS = {
 } as const;
 
 const PANEL_FALLBACKS: Record<string, string> = {
+  signalCooldown: "冷却中",
+  signalSubmitted: "已提交",
+  signalActive: "放行中",
+  signalTramPriority: "电车优先通过",
+  signalOtherPriority: "其他方向优先",
+  signalNoTarget: "范围内暂无下一红绿灯",
+  signalDetected: "等待申请",
+  signalPaused: "暂缓申请",
+  signalUnavailable: "暂不可用",
+  signalNext: "下一信号",
+  signalFuture: "后续",
+  signalMeters: "米",
+  signalRed: "红灯",
+  signalGreen: "绿灯",
+  signalTransition: "过渡灯态",
   vanillaControl: "原版系统控制",
   arrival: "到达",
   departure: "发出",

@@ -8,6 +8,7 @@ using Game.Vehicles;
 using RapidTransitMod.Core;
 using RapidTransitMod.Dispatch.Scheduling;
 using RapidTransitMod.Dispatch.Runtime;
+using RapidTransitMod.SignalPriority;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
@@ -167,6 +168,14 @@ namespace RapidTransitMod
             public bool ShowDumpStationAnchorObservationAction;
             public bool ShowBypassStationToggle;
             public bool BypassStationChecked;
+            public bool ShowSignalPriority;
+            public string SignalPriorityStatus;
+            public string NextSignalMovement;
+            public int NextSignalDistanceMeters;
+            public string NextSignalStreetName;
+            public string NextSignalLight;
+            public string SecondSignalLight;
+            public string ThirdSignalLight;
         }
 
         private ulong m_PanelDataVersion = 1;
@@ -514,6 +523,16 @@ namespace RapidTransitMod
             {
                 snapshot = default;
                 return false;
+            }
+
+            if (data.IsManagedVehicle
+                && m_Port.TrySignalDisplay != null
+                && m_Port.TrySignalDisplay(data.Vehicle, out SignalDisplay display))
+            {
+                data.SignalDisplay = display;
+                data.SignalStreetName = display.Street != Entity.Null
+                    ? m_Port.Names.GetRenderedLabelName(display.Street)
+                    : string.Empty;
             }
 
             snapshot = View().BuildVehiclePanelSnapshot(data);

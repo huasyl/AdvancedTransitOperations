@@ -3,6 +3,7 @@ using RapidTransitMod.Core;
 using RapidTransitMod.Dispatch.Lines;
 using RapidTransitMod.Dispatch.Runtime;
 using RapidTransitMod.Runtime;
+using RapidTransitMod.SignalPriority;
 using Game;
 using Game.Common;
 using Game.Routes;
@@ -19,6 +20,7 @@ namespace RapidTransitMod
         internal delegate bool Progress(Entity vehicle, out int nextWaypointIndex, out float segmentPosition);
         internal delegate bool Blocker(Entity vehicle, out Entity blockerVehicle);
         internal delegate bool SessionArrival(Entity vehicle, out uint arrivalFrame);
+        internal delegate bool SignalInfo(Entity vehicle, out SignalDisplay display);
         internal delegate bool StopSession(
             Entity vehicle,
             out Entity line,
@@ -90,5 +92,6 @@ namespace RapidTransitMod
         internal Action<Entity, string> ClearBypass;
         internal StationText Stations;
         internal PanelStations TryPanelStations;
+        internal SignalInfo TrySignalDisplay;
     }
 }
