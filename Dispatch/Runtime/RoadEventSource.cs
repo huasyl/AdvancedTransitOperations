@@ -74,11 +74,13 @@ namespace RapidTransitMod.Dispatch.Runtime
         {
             internal readonly Entity Lane;
             internal readonly float EntryDistanceMeters;
+            internal readonly float TraversalDelta;
 
-            internal RoadNavigationSlice(Entity lane, float entryDistanceMeters)
+            internal RoadNavigationSlice(Entity lane, float entryDistanceMeters, float traversalDelta)
             {
                 Lane = lane;
                 EntryDistanceMeters = entryDistanceMeters;
+                TraversalDelta = traversalDelta;
             }
         }
 
@@ -280,7 +282,10 @@ namespace RapidTransitMod.Dispatch.Runtime
                     return new RoadNavigationResult(RoadNavigationStatus.Invalid, default);
                 }
                 float exit = distance + length;
-                slices.Add(new RoadNavigationSlice(item.m_Lane, distance));
+                slices.Add(new RoadNavigationSlice(
+                    item.m_Lane,
+                    distance,
+                    item.m_CurvePosition.y - item.m_CurvePosition.x));
                 distance = exit;
             }
 

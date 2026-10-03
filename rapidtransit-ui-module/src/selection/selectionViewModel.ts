@@ -80,6 +80,14 @@ export interface PanelData {
   plannedDepartureMinute?: number;
   alertText?: string;
   isManagedVehicle?: boolean;
+  showSignalPriority?: boolean;
+  signalPriorityStatus?: string;
+  nextSignalMovement?: string;
+  nextSignalDistanceMeters?: number;
+  nextSignalStreetName?: string;
+  nextSignalLight?: string;
+  secondSignalLight?: string;
+  thirdSignalLight?: string;
   showCurrentStop?: boolean;
   currentStationName?: string;
   stopDwellValue?: string;

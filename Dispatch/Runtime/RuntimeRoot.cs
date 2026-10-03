@@ -446,10 +446,11 @@ namespace RapidTransitMod.Dispatch.Runtime
                 RoadSource = (index, frame) => runtime.m_RoadEventSource.TryGetCollectedVehicle(index, frame, out ManagedSourceVehicle source)
                     ? (true, source) : (false, default),
                 RoadNavigation = runtime.m_RoadEventSource.ReadSignalNavigation,
-                TryTramPosition = (Entity vehicle, Entity line, out SignalLineModel model, out TramSignalPosition position, out TramSignalPositionDiagnostic diagnostic) =>
+                TryTramPosition = (Entity vehicle, Entity line, out SignalLineModel model, out TramSignalPosition position, out int targetWaypointIndex, out TramSignalPositionDiagnostic diagnostic) =>
                 {
                     model = null;
                     position = default;
+                    targetWaypointIndex = -1;
                     diagnostic = default;
                     if (!runtime.EntityManager.HasBuffer<RouteWaypoint>(line))
                     {
@@ -514,6 +515,13 @@ namespace RapidTransitMod.Dispatch.Runtime
                         model,
                         trackPosition,
                         currentLane);
+                    if (!runtime.m_WaypointIndex.TryResolveProjectionTargetWaypoint(
+                        vehicle,
+                        waypoints,
+                        out targetWaypointIndex))
+                    {
+                        targetWaypointIndex = -1;
+                    }
                     return true;
                 },
                 TryTramNavigation = runtime.m_RailEventSource.ReadSignalNavigation,

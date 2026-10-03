@@ -198,6 +198,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 TrySessionArrival = runtime.m_StopRuntime.TryGetSessionArrivalFrame,
                 TryStopSession = runtime.m_StopRuntime.TryGetSession,
                 TryVehicleTimes = runtime.m_ObsRecorder.TryVehicleTimes,
+                TrySignalDisplay = runtime.m_TransitSignalRuntime.TryReadDisplay,
                 ClearBypass = (vehicle, reason) => runtime.m_Bypass.ClearVehicle(vehicle, reason),
                 Stations = (Entity vehicle, Entity line, out string current, out string nextPhysical, out string nextStop, out bool nextPhysicalIsPass) =>
                 {

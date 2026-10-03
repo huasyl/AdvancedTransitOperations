@@ -314,6 +314,15 @@ namespace RapidTransitMod
             AppendJsonBool(sb, "showActions", snapshot.ShowRetireAction || snapshot.ShowForceDepartAction || snapshot.ShowReevaluateAction || snapshot.ShowLineSpawnAction || snapshot.ShowDumpTrackModelAction || snapshot.ShowDumpPlannerInputAction || snapshot.ShowDumpObservationAction || snapshot.ShowDumpStationAnchorObservationAction);
             AppendJsonBool(sb, "showBypassStationToggle", snapshot.ShowBypassStationToggle);
             AppendJsonBool(sb, "bypassStationChecked", snapshot.BypassStationChecked);
+            bool showSignalPriority = snapshot.ShowSignalPriority;
+            AppendJsonBool(sb, "showSignalPriority", showSignalPriority);
+            AppendJsonString(sb, "signalPriorityStatus", showSignalPriority ? snapshot.SignalPriorityStatus : string.Empty);
+            AppendJsonString(sb, "nextSignalMovement", showSignalPriority ? snapshot.NextSignalMovement : string.Empty);
+            AppendJsonInt(sb, "nextSignalDistanceMeters", showSignalPriority ? snapshot.NextSignalDistanceMeters : -1);
+            AppendJsonString(sb, "nextSignalStreetName", showSignalPriority ? snapshot.NextSignalStreetName : string.Empty);
+            AppendJsonString(sb, "nextSignalLight", showSignalPriority ? snapshot.NextSignalLight : string.Empty);
+            AppendJsonString(sb, "secondSignalLight", showSignalPriority ? snapshot.SecondSignalLight : string.Empty);
+            AppendJsonString(sb, "thirdSignalLight", showSignalPriority ? snapshot.ThirdSignalLight : string.Empty);
             if (sb[sb.Length - 1] == ',')
                 sb.Length--;
             sb.Append('}');

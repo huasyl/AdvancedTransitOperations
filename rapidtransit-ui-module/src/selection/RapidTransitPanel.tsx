@@ -4,6 +4,7 @@ import React from "react";
 import { activeLocale$, useLocalPanelOpen, panelDataJson$, devSightJson$, devSightVisible$, etaHotAvailable$, etaHotStatusJson$, etaSnapshotStatusJson$, setLocalPanelOpen, visible$ } from "./selectionBindings";
 import { useT } from "./selectionI18n";
 import { COLORS } from "./selectionStyles";
+import { SignalPriority } from "./SignalPriority";
 import { buildDetailRows, DevSightData, EtaHotStatusData, EtaSnapshotStatusData, formatAlertText, PanelData } from "./selectionViewModel";
 import { ActionButton, ArrivalTimesRow, BypassToggleRow, DetailRow, DevSightBlock, LatinScheduleRows, PanelHeader, ScheduledTimeRow, SectionCard, VehicleInfoRow } from "./components";
 
@@ -300,6 +301,11 @@ export function RapidTransitPanel() {
                       label={t("bypassStation")}
                       checked={panelData.bypassStationChecked}
                     />
+                  </SectionCard>
+                ) : null}
+                {isVehicle && panelData.showSignalPriority ? (
+                  <SectionCard dense={true}>
+                    <SignalPriority data={panelData} t={t} />
                   </SectionCard>
                 ) : null}
                 {panelData.showActions ? (

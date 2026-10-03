@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using RapidTransitMod.Core;
 using RapidTransitMod.Dispatch.Lines;
+using RapidTransitMod.SignalPriority;
 using Unity.Entities;
 
 namespace RapidTransitMod
@@ -84,6 +85,8 @@ namespace RapidTransitMod
         public string NextPassStationName;
         public bool WaitingForFastTrain;
         public int WaitingForFastTrainVehicleId;
+        public SignalDisplay SignalDisplay;
+        public string SignalStreetName;
     }
 
     internal sealed class SelectQuery

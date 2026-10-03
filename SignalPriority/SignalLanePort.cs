@@ -3,6 +3,7 @@ using Game.Net;
 using Game.Simulation;
 using Game.Vehicles;
 using Unity.Entities;
+using Unity.Mathematics;
 
 namespace RapidTransitMod.SignalPriority
 {
@@ -97,6 +98,96 @@ namespace RapidTransitMod.SignalPriority
             return intersection != Entity.Null
                 && m_Entities.Exists(intersection)
                 && m_Entities.HasComponent<TrafficLights>(intersection);
+        }
+
+        internal void ReadDisplayMetadata(
+            Entity lane,
+            Entity intersection,
+            float traversalDelta,
+            out string movement,
+            out Entity street)
+        {
+            movement = "unknown";
+            street = Entity.Null;
+            if (!math.isfinite(traversalDelta)
+                || traversalDelta == 0f
+                || lane == Entity.Null
+                || !m_Entities.Exists(lane))
+            {
+                return;
+            }
+
+            // 原版转向标志按车道构建方向赋值，反向遍历不猜测其分类。
+            if (traversalDelta > 0f)
+            {
+                if (m_Entities.HasComponent<Game.Net.CarLane>(lane))
+                {
+                    Game.Net.CarLaneFlags flags = m_Entities.GetComponentData<
+                        Game.Net.CarLane>(lane).m_Flags;
+                    Game.Net.CarLaneFlags turn = flags & (
+                        Game.Net.CarLaneFlags.Forward
+                        | Game.Net.CarLaneFlags.GentleTurnLeft
+                        | Game.Net.CarLaneFlags.TurnLeft
+                        | Game.Net.CarLaneFlags.GentleTurnRight
+                        | Game.Net.CarLaneFlags.TurnRight
+                        | Game.Net.CarLaneFlags.UTurnLeft
+                        | Game.Net.CarLaneFlags.UTurnRight);
+                    switch (turn)
+                    {
+                        case Game.Net.CarLaneFlags.Forward: movement = "straight"; break;
+                        case Game.Net.CarLaneFlags.GentleTurnLeft: movement = "gentleLeft"; break;
+                        case Game.Net.CarLaneFlags.TurnLeft: movement = "left"; break;
+                        case Game.Net.CarLaneFlags.GentleTurnRight: movement = "gentleRight"; break;
+                        case Game.Net.CarLaneFlags.TurnRight: movement = "right"; break;
+                        case Game.Net.CarLaneFlags.UTurnLeft: movement = "uTurnLeft"; break;
+                        case Game.Net.CarLaneFlags.UTurnRight: movement = "uTurnRight"; break;
+                    }
+                }
+                else if (m_Entities.HasComponent<TrackLane>(lane))
+                {
+                    TrackLaneFlags turn = m_Entities.GetComponentData<TrackLane>(lane)
+                        .m_Flags & (TrackLaneFlags.TurnLeft | TrackLaneFlags.TurnRight);
+                    movement = turn == TrackLaneFlags.TurnLeft ? "left"
+                        : turn == TrackLaneFlags.TurnRight ? "right"
+                        : turn == 0 ? "straight" : "unknown";
+                }
+            }
+
+            if (!m_Entities.HasComponent<Lane>(lane)
+                || intersection == Entity.Null
+                || !m_Entities.Exists(intersection)
+                || !m_Entities.HasBuffer<ConnectedEdge>(intersection))
+            {
+                return;
+            }
+            Lane connection = m_Entities.GetComponentData<Lane>(lane);
+            int ownerIndex = traversalDelta > 0f
+                ? connection.m_EndNode.GetOwnerIndex()
+                : connection.m_StartNode.GetOwnerIndex();
+            DynamicBuffer<ConnectedEdge> edges = m_Entities.GetBuffer<ConnectedEdge>(intersection, true);
+            Entity road = Entity.Null;
+            for (int i = 0; i < edges.Length; i++)
+            {
+                Entity edge = edges[i].m_Edge;
+                if (edge.Index != ownerIndex)
+                    continue;
+                if (road != Entity.Null && road != edge)
+                    return;
+                road = edge;
+            }
+            if (road == Entity.Null
+                || !m_Entities.Exists(road)
+                || !m_Entities.HasComponent<Edge>(road)
+                || !m_Entities.HasComponent<Road>(road)
+                || !m_Entities.HasComponent<Aggregated>(road))
+            {
+                return;
+            }
+            Entity aggregate = m_Entities.GetComponentData<Aggregated>(road).m_Aggregate;
+            if (aggregate != Entity.Null
+                && m_Entities.Exists(aggregate)
+                && m_Entities.HasComponent<Aggregate>(aggregate))
+                street = aggregate;
         }
 
         internal bool TrySubmit(

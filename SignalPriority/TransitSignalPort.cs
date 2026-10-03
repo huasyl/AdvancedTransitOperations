@@ -6,6 +6,37 @@ using Unity.Entities;
 
 namespace RapidTransitMod.SignalPriority
 {
+    internal readonly struct SignalDisplay
+    {
+        internal readonly bool Show;
+        internal readonly string Status;
+        internal readonly string Movement;
+        internal readonly int DistanceMeters;
+        internal readonly Entity Street;
+        internal readonly string FirstLight;
+        internal readonly string SecondLight;
+        internal readonly string ThirdLight;
+
+        internal SignalDisplay(
+            string status,
+            string movement = "",
+            int distanceMeters = -1,
+            Entity street = default,
+            string firstLight = "",
+            string secondLight = "",
+            string thirdLight = "")
+        {
+            Show = true;
+            Status = status;
+            Movement = movement;
+            DistanceMeters = distanceMeters;
+            Street = street;
+            FirstLight = firstLight;
+            SecondLight = secondLight;
+            ThirdLight = thirdLight;
+        }
+    }
+
     internal delegate bool TrySignalVehicle(
         Entity vehicle,
         out Entity line,
@@ -23,6 +54,7 @@ namespace RapidTransitMod.SignalPriority
         Entity line,
         out SignalLineModel signalLine,
         out TramSignalPosition position,
+        out int targetWaypointIndex,
         out TramSignalPositionDiagnostic diagnostic);
 
     internal enum TramSignalPositionFailure : byte

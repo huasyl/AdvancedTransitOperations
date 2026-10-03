@@ -38,6 +38,8 @@ namespace RapidTransitMod.SignalPriority
             internal float DistanceMeters;
             internal uint UpdateFrame;
             internal uint PositionCurrentFrame;
+            internal LaneSignalType DisplaySignal;
+            internal float TraversalDelta;
             internal bool NavigationLatched;
             internal int MarkerAtomIndex;
             internal byte NavigationResult;
@@ -62,6 +64,8 @@ namespace RapidTransitMod.SignalPriority
                 DistanceMeters = float.NaN;
                 UpdateFrame = uint.MaxValue;
                 PositionCurrentFrame = uint.MaxValue;
+                DisplaySignal = LaneSignalType.None;
+                TraversalDelta = 0f;
                 NavigationLatched = false;
                 MarkerAtomIndex = -1;
                 NavigationResult = NavigationUnknown;
@@ -88,6 +92,8 @@ namespace RapidTransitMod.SignalPriority
             internal readonly float DistanceMeters;
             internal readonly uint UpdateFrame;
             internal readonly int MarkerAtomIndex;
+            internal readonly LaneSignalType DisplaySignal;
+            internal readonly float TraversalDelta;
 
             internal SignalCandidate(
                 Entity signalLane,
@@ -95,6 +101,8 @@ namespace RapidTransitMod.SignalPriority
                 ushort groupMask,
                 float distanceMeters,
                 uint updateFrame,
+                LaneSignalType displaySignal,
+                float traversalDelta,
                 int markerAtomIndex = -1)
             {
                 SignalLane = signalLane;
@@ -103,6 +111,8 @@ namespace RapidTransitMod.SignalPriority
                 DistanceMeters = distanceMeters;
                 UpdateFrame = updateFrame;
                 MarkerAtomIndex = markerAtomIndex;
+                DisplaySignal = displaySignal;
+                TraversalDelta = traversalDelta;
             }
         }
 
@@ -119,6 +129,7 @@ namespace RapidTransitMod.SignalPriority
             internal TransitMode Mode;
             internal int TargetCount;
             internal uint RefreshFrame = uint.MaxValue;
+            internal bool DisplaySourceComplete;
             internal ushort DueMask;
 
             internal VehicleSignalState(Entity vehicle, Entity line, TransitMode mode)
@@ -141,6 +152,7 @@ namespace RapidTransitMod.SignalPriority
             internal uint PriorityStartFrame;
             internal uint MaxPriorityFrames;
             internal ushort SelectedGroup;
+            internal TransitMode SelectedMode;
             internal uint SelectedMaxPriorityFrames;
             internal Entity SelectedLane;
             internal readonly List<GroupCooldown> Cooldowns = new List<GroupCooldown>(4);
@@ -259,6 +271,128 @@ namespace RapidTransitMod.SignalPriority
             }
         }
 
+        internal bool TryReadDisplay(Entity vehicle, out SignalDisplay display)
+        {
+            display = default;
+            if (!m_Port.TryVehicle(
+                    vehicle,
+                    out Entity line,
+                    out TransitMode mode,
+                    out VehicleState vehicleState)
+                || (mode != TransitMode.Bus && mode != TransitMode.Tram)
+                || !m_Port.LineEnabled(line))
+            {
+                return false;
+            }
+            if (vehicleState != VehicleState.Running
+                || !m_Port.TryStop(vehicle, out bool hasSession, out bool pending, out _)
+                || (hasSession && !pending))
+            {
+                display = new SignalDisplay("noTarget");
+                return true;
+            }
+            if (!m_States.TryGetValue(vehicle, out VehicleSignalState state)
+                || state.Line != line
+                || state.Mode != mode)
+            {
+                display = new SignalDisplay("unavailable");
+                return true;
+            }
+            if (state.TargetCount == 0)
+            {
+                display = new SignalDisplay(state.DisplaySourceComplete ? "noTarget" : "unavailable");
+                return true;
+            }
+
+            VehicleTarget first = state.Targets[0];
+            bool positionValid = HasDisplayPosition(state, first);
+            string movement = "unknown";
+            Entity street = Entity.Null;
+            if (positionValid)
+            {
+                m_Signals.ReadDisplayMetadata(
+                    first.SignalLane,
+                    first.Intersection,
+                    first.TraversalDelta,
+                    out movement,
+                    out street);
+            }
+            display = new SignalDisplay(
+                positionValid ? ReadDisplayStatus(first, mode) : "unavailable",
+                movement,
+                positionValid ? (int)math.round(first.DistanceMeters) : -1,
+                street,
+                ReadDisplayLight(state, 0),
+                ReadDisplayLight(state, 1),
+                ReadDisplayLight(state, 2));
+            return true;
+        }
+
+        private string ReadDisplayStatus(VehicleTarget target, TransitMode mode)
+        {
+            if (target.ProgressSuppressed)
+                return "progressPaused";
+            if (m_Intersections.TryGetValue(target.Intersection, out IntersectionState intersection)
+                && intersection.UpdateFrame == target.UpdateFrame)
+            {
+                for (int i = 0; i < intersection.Cooldowns.Count; i++)
+                {
+                    GroupCooldown cooldown = intersection.Cooldowns[i];
+                    if ((cooldown.GroupMask & target.GroupMask) != 0
+                        && FrameBefore(m_CurrentFrame, cooldown.UntilFrame))
+                    {
+                        return "cooldown";
+                    }
+                }
+                if (intersection.PriorityGroup != 0
+                    && intersection.MaxPriorityFrames > 0u
+                    && FrameBefore(
+                        m_CurrentFrame,
+                        intersection.PriorityStartFrame + intersection.MaxPriorityFrames))
+                {
+                    if ((intersection.PriorityGroup & target.GroupMask) != 0)
+                        return "active";
+                    return mode == TransitMode.Bus
+                        && intersection.SelectedMode == TransitMode.Tram
+                        && (intersection.SelectedGroup & intersection.PriorityGroup) != 0
+                        ? "tramPriority"
+                        : "otherPriority";
+                }
+                if (intersection.SelectedGroup != 0
+                    && (intersection.SelectedLane == target.SignalLane
+                        || intersection.SelectedGroup == target.GroupMask))
+                {
+                    return "submitted";
+                }
+            }
+            return "detected";
+        }
+
+        private static bool HasDisplayPosition(VehicleSignalState state, VehicleTarget target)
+        {
+            return state.RefreshFrame != uint.MaxValue
+                && target.PositionCurrentFrame == state.RefreshFrame
+                && math.isfinite(target.DistanceMeters)
+                && target.DistanceMeters >= 0f;
+        }
+
+        private static string ReadDisplayLight(VehicleSignalState state, int index)
+        {
+            if (index >= state.TargetCount)
+                return string.Empty;
+            VehicleTarget target = state.Targets[index];
+            if (!HasDisplayPosition(state, target))
+                return "unknown";
+            switch (target.DisplaySignal)
+            {
+                case LaneSignalType.Go: return "green";
+                case LaneSignalType.Stop: return "red";
+                case LaneSignalType.SafeStop:
+                case LaneSignalType.Yield: return "transition";
+                default: return "unknown";
+            }
+        }
+
         internal void ForgetVehicle(Entity vehicle, string reason)
         {
             if (vehicle == Entity.Null)
@@ -320,6 +454,7 @@ namespace RapidTransitMod.SignalPriority
                 {
                     EndPriorityWindow(observation.Intersection, state, frame);
                     state.SelectedGroup = 0;
+                    state.SelectedMode = TransitMode.Unknown;
                     state.SelectedMaxPriorityFrames = 0;
                     state.SelectedLane = Entity.Null;
                     SyncIntersectionBucket(observation.Intersection, state);
@@ -525,6 +660,7 @@ namespace RapidTransitMod.SignalPriority
                     && (state.CandidateGroups & state.SelectedGroup) == 0)
                 {
                     state.SelectedGroup = 0;
+                    state.SelectedMode = TransitMode.Unknown;
                     state.SelectedMaxPriorityFrames = 0;
                     state.SelectedLane = Entity.Null;
                 }
@@ -663,6 +799,7 @@ namespace RapidTransitMod.SignalPriority
             if ((state.SelectedGroup & endedGroup) != 0)
             {
                 state.SelectedGroup = 0;
+                state.SelectedMode = TransitMode.Unknown;
                 state.SelectedMaxPriorityFrames = 0;
                 state.SelectedLane = Entity.Null;
             }
@@ -997,12 +1134,15 @@ namespace RapidTransitMod.SignalPriority
             }
 
             state.RefreshFrame = frame;
+            state.DisplaySourceComplete = false;
             if (state.Mode != TransitMode.Bus)
                 CancelRoadRetry(state.Vehicle);
             for (int i = 0; i < state.TargetCount; i++)
             {
                 state.Targets[i].PositionCurrentFrame = uint.MaxValue;
                 state.Targets[i].SelectedCurrentFrame = false;
+                state.Targets[i].DisplaySignal = LaneSignalType.None;
+                state.Targets[i].TraversalDelta = 0f;
             }
 
             try
@@ -1134,7 +1274,8 @@ namespace RapidTransitMod.SignalPriority
                     target,
                     signal,
                     inspected.EntryDistanceMeters,
-                    frame);
+                    frame,
+                    inspected.TraversalDelta);
                 targetIndex++;
             }
 
@@ -1155,6 +1296,7 @@ namespace RapidTransitMod.SignalPriority
                 candidateTruncated,
                 "navigation-target-ended");
             ObserveRoadProgress(state, frame);
+            state.DisplaySourceComplete = result.Status == RoadEventSource.RoadNavigationStatus.Ready;
         }
 
         private void ObserveRoadProgress(
@@ -1239,7 +1381,9 @@ namespace RapidTransitMod.SignalPriority
                     signal.Intersection,
                     signal.GroupMask,
                     slice.EntryDistanceMeters,
-                    signal.UpdateFrame);
+                    signal.UpdateFrame,
+                    signal.Signal,
+                    slice.TraversalDelta);
             }
             return count;
         }
@@ -1253,6 +1397,7 @@ namespace RapidTransitMod.SignalPriority
                     state.Line,
                     out SignalLineModel model,
                     out TramSignalPosition position,
+                    out int targetWaypointIndex,
                     out _))
             {
                 return;
@@ -1267,12 +1412,39 @@ namespace RapidTransitMod.SignalPriority
 
             int sectionIndex = ResolveTramSection(
                 model,
-                position,
-                state.Vehicle);
+                targetWaypointIndex,
+                state.Vehicle,
+                out int departureWaypoint);
             if (sectionIndex < 0
                 || sectionIndex >= model.Sections.Length)
             {
                 return;
+            }
+
+            SignalTrackSection section = model.Sections[sectionIndex];
+            int atomCount = model.Atoms.Length;
+            int endAtomIndex = model.Sections[(sectionIndex + 1) % model.Sections.Length].StartAtomIndex;
+            int sectionLength = (endAtomIndex - section.StartAtomIndex + atomCount) % atomCount;
+            int positionOffset = (position.AtomIndex - section.StartAtomIndex + atomCount) % atomCount;
+            if (positionOffset >= sectionLength)
+            {
+                bool beforeDeparture = false;
+                if (departureWaypoint >= 0)
+                {
+                    int previous = (departureWaypoint - 1 + model.SectionBySegment.Length)
+                        % model.SectionBySegment.Length;
+                    var incoming = model.Chain.SegmentRanges[previous];
+                    beforeDeparture = position.AtomIndex >= incoming.StartAtomIndex
+                        && position.AtomIndex < incoming.EndAtomIndexExclusive;
+                }
+                if (!beforeDeparture)
+                {
+                    EndAllTargets(state, "track-section-ended", frame);
+                    state.DisplaySourceComplete = true;
+                    return;
+                }
+                // 已有离站许可且车头仍在本站前一分段时，从出站区段起点探测。
+                positionOffset = -1;
             }
 
             Entity lane0 = state.TargetCount > 0
@@ -1320,9 +1492,14 @@ namespace RapidTransitMod.SignalPriority
                         frame);
                     continue;
                 }
-                if (target.MarkerAtomIndex == position.AtomIndex)
+                if (!IsTramTargetAhead(
+                        target.MarkerAtomIndex,
+                        section.StartAtomIndex,
+                        atomCount,
+                        sectionLength,
+                        positionOffset))
                 {
-                    EndTarget(state, target, "target-atom-entered", frame);
+                    EndTarget(state, target, "track-target-outside-range", frame);
                     continue;
                 }
                 if (target.NavigationLatched
@@ -1386,7 +1563,12 @@ namespace RapidTransitMod.SignalPriority
                         frame);
                     continue;
                 }
-                MarkPosition(target, signal, distance, frame);
+                MarkPosition(
+                    target,
+                    signal,
+                    distance,
+                    frame,
+                    ReadTramTraversal(model, target.MarkerAtomIndex));
                 targetIndex++;
             }
 
@@ -1395,9 +1577,8 @@ namespace RapidTransitMod.SignalPriority
                     out Entity tramIntersection)
                 ? tramIntersection
                 : Entity.Null;
-            SignalTrackSection section = model.Sections[sectionIndex];
             int candidateCount = 0;
-            int firstMarker = FirstMarkerAfter(
+            int firstMarker = positionOffset < 0 ? 0 : FirstMarkerAfter(
                 model,
                 section,
                 position.AtomIndex);
@@ -1408,7 +1589,12 @@ namespace RapidTransitMod.SignalPriority
             {
                 SignalJunction marker =
                     model.Junctions[section.FirstJunctionIndex + i];
-                if (marker.AtomIndex == position.AtomIndex
+                if (!IsTramTargetAhead(
+                        marker.AtomIndex,
+                        section.StartAtomIndex,
+                        atomCount,
+                        sectionLength,
+                        positionOffset)
                     || marker.SignalLane == position.CurrentLane)
                 {
                     continue;
@@ -1440,6 +1626,8 @@ namespace RapidTransitMod.SignalPriority
                     signal.GroupMask,
                     distance,
                     signal.UpdateFrame,
+                    signal.Signal,
+                    ReadTramTraversal(model, marker.AtomIndex),
                     marker.AtomIndex);
             }
 
@@ -1449,6 +1637,24 @@ namespace RapidTransitMod.SignalPriority
                 frame,
                 false,
                 "track-candidate-missing");
+            state.DisplaySourceComplete = true;
+        }
+
+        private static float ReadTramTraversal(SignalLineModel model, int atomIndex)
+        {
+            float2 delta = model.Chain.TrackAtoms[atomIndex].TargetDelta;
+            return delta.y - delta.x;
+        }
+
+        private static bool IsTramTargetAhead(
+            int atomIndex,
+            int startAtomIndex,
+            int atomCount,
+            int sectionLength,
+            int positionOffset)
+        {
+            int offset = (atomIndex - startAtomIndex + atomCount) % atomCount;
+            return offset < sectionLength && offset > positionOffset;
         }
 
         private static void ApplyNavigation(
@@ -1502,30 +1708,35 @@ namespace RapidTransitMod.SignalPriority
 
         private int ResolveTramSection(
             SignalLineModel model,
-            TramSignalPosition position,
-            Entity vehicle)
+            int targetWaypointIndex,
+            Entity vehicle,
+            out int departureWaypoint)
         {
+            departureWaypoint = -1;
             if (m_Port.TryStop(
                     vehicle,
                     out _,
                     out bool pending,
                     out int waypoint)
-                && pending
-                && waypoint >= 0
-                && waypoint < model.DepartureSectionByWaypoint.Length)
+                && pending)
             {
+                if (waypoint < 0 || waypoint >= model.DepartureSectionByWaypoint.Length)
+                    return -1;
                 int departureSection =
                     model.DepartureSectionByWaypoint[waypoint];
                 if (departureSection >= 0
                     && departureSection < model.Sections.Length)
                 {
+                    departureWaypoint = waypoint;
                     return departureSection;
                 }
+                return -1;
             }
-            return position.SectionIndex >= 0
-                && position.SectionIndex < model.Sections.Length
-                ? position.SectionIndex
-                : -1;
+            int waypointCount = model.SectionBySegment.Length;
+            if (targetWaypointIndex < 0 || targetWaypointIndex >= waypointCount)
+                return -1;
+            int previous = (targetWaypointIndex - 1 + waypointCount) % waypointCount;
+            return model.SectionBySegment[previous];
         }
 
         private void ReconcileCandidates(
@@ -1598,6 +1809,8 @@ namespace RapidTransitMod.SignalPriority
                 target.GroupMask = candidate.GroupMask;
                 target.UpdateFrame = candidate.UpdateFrame;
                 target.DistanceMeters = candidate.DistanceMeters;
+                target.DisplaySignal = candidate.DisplaySignal;
+                target.TraversalDelta = candidate.TraversalDelta;
                 if (candidate.MarkerAtomIndex >= 0)
                     target.MarkerAtomIndex = candidate.MarkerAtomIndex;
                 target.PositionCurrentFrame = frame;
@@ -1780,12 +1993,15 @@ namespace RapidTransitMod.SignalPriority
             VehicleTarget target,
             SignalLaneFact signal,
             float distance,
-            uint frame)
+            uint frame,
+            float traversalDelta)
         {
             target.GroupMask = signal.GroupMask;
             target.UpdateFrame = signal.UpdateFrame;
             target.DistanceMeters = distance;
             target.PositionCurrentFrame = frame;
+            target.DisplaySignal = signal.Signal;
+            target.TraversalDelta = traversalDelta;
         }
 
         private bool CandidateAllowed(
@@ -1867,6 +2083,7 @@ namespace RapidTransitMod.SignalPriority
             if (state == null)
                 state = GetIntersection(before.Intersection, before.UpdateFrame);
             state.SelectedGroup = target.GroupMask;
+            state.SelectedMode = candidate.Mode;
             state.SelectedMaxPriorityFrames = tram
                 ? TramMaxPriorityFrames
                 : BusMaxPriorityFrames;
