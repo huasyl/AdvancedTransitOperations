@@ -1,6 +1,8 @@
 using Colossal.IO.AssetDatabase;
 using Game.Modding;
 using Game.Settings;
+using Game.UI.Localization;
+using RapidTransitMod.Broadcasting;
 
 namespace RapidTransitMod.Settings
 {
@@ -9,6 +11,8 @@ namespace RapidTransitMod.Settings
     /// 这不是工作台设置，不是调度功能配置，也不写入存档运行时缓存。
     /// </summary>
     [FileLocation("ModsSettings\\AdvancedTransitOperations\\AtoGameOptions")]
+    [SettingsUITabOrder("General", "BroadcastAudio")]
+    [SettingsUIGroupOrder("SelectionPanel", "BroadcastHint", "BroadcastAction", "BroadcastFiles")]
     public sealed class AtoGameOptions : ModSetting
     {
         public AtoGameOptions(IMod mod)
@@ -18,6 +22,42 @@ namespace RapidTransitMod.Settings
 
         [SettingsUISection("General", "SelectionPanel")]
         public bool AutoOpenSelectionPanel { get; set; } = true;
+
+        [SettingsUISection("BroadcastAudio", "BroadcastHint")]
+        [SettingsUIMultilineText]
+        public string BroadcastAudioHint => string.Empty;
+
+        [SettingsUISection("BroadcastAudio", "BroadcastAction")]
+        [SettingsUIButton]
+        [SettingsUIHideByCondition(typeof(AtoGameOptions), nameof(HideAudioDelete))]
+        [SettingsUIDisableByCondition(typeof(AtoGameOptions), nameof(DisableAudioDelete))]
+        public bool DeleteUnregisteredAudio
+        {
+            set
+            {
+                AssetLifecycle lifecycle = AssetLifecycle.Instance;
+                lifecycle?.Unregistered.Delete(lifecycle);
+            }
+        }
+
+        [SettingsUISection("BroadcastAudio", "BroadcastFiles")]
+        [SettingsUIMultilineText]
+        [SettingsUIDisplayName(typeof(AtoGameOptions), nameof(GetUnregisteredAudio))]
+        public string UnregisteredAudio => string.Empty;
+
+        public LocalizedString GetUnregisteredAudio()
+        {
+            AssetLifecycle lifecycle = AssetLifecycle.Instance;
+            return lifecycle == null ? LocalizedString.Id("RapidTransit.BroadcastAudio.Querying") : lifecycle.Unregistered.Text(lifecycle);
+        }
+
+        public bool DisableAudioDelete()
+        {
+            AssetLifecycle lifecycle = AssetLifecycle.Instance;
+            return lifecycle == null || lifecycle.Unregistered.Disabled(lifecycle);
+        }
+
+        public bool HideAudioDelete() => AssetLifecycle.Instance?.Unregistered.HideDelete ?? false;
 
         public override void SetDefaults()
         {

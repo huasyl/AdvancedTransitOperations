@@ -104,8 +104,8 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
             }
             catch (Exception ex)
             {
-                TryUpdateCurrent(operation, "failed", false, m_Access.Error(ex), null);
-                LogException("SaveOperations.Run", ex);
+                TryUpdateCurrent(operation, "failed", false, "broadcast-apply-failed", null);
+                log.Info("[BroadcastWorkbenchException] SaveOperations.Run -> " + ex.ToString());
             }
         }
 
@@ -124,12 +124,12 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                 }
 
                 ApplyResult result = m_Ctx.Apply.Commit(prepared);
-                TryUpdateCurrent(operation, "completed", result?.success == true, result?.error ?? string.Empty, result);
+                TryUpdateCurrent(operation, result?.success == true ? "completed" : "failed", result?.success == true, result?.error ?? string.Empty, result);
             }
             catch (Exception ex)
             {
-                TryUpdateCurrent(operation, "failed", false, m_Access.Error(ex), null);
-                LogException("SaveOperations.Commit", ex);
+                TryUpdateCurrent(operation, "failed", false, "broadcast-apply-failed", null);
+                log.Info("[BroadcastWorkbenchException] SaveOperations.Commit -> " + ex.ToString());
             }
         }
 

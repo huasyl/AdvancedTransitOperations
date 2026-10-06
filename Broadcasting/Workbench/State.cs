@@ -39,6 +39,24 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
         internal readonly Dictionary<string, int> AppliedVolumesByMode =
             new Dictionary<string, int>(StringComparer.Ordinal);
 
+        internal Dictionary<string, Dictionary<string, string>> CaptureAssets()
+        {
+            var modes = new Dictionary<string, Dictionary<string, string>>(StringComparer.Ordinal);
+            foreach (var mode in AssetsByMode)
+            {
+                var names = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                foreach (BroadcastWorkbenchAssetDto asset in mode.Value.Catalog)
+                {
+                    if (asset == null || string.IsNullOrEmpty(asset.name)) continue;
+                    names[asset.name] = !string.IsNullOrEmpty(asset.assetId) ? asset.assetId
+                        : AssetStore.LegacyPath(!string.IsNullOrEmpty(asset.path) ? asset.path
+                            : System.IO.Path.Combine(mode.Value.AssetDir, asset.name));
+                }
+                if (names.Count != 0) modes[mode.Key] = names;
+            }
+            return modes;
+        }
+
         internal BroadcastWorkbenchAssetState AssetState(ModeScope scope)
         {
             string token = scope.Token;

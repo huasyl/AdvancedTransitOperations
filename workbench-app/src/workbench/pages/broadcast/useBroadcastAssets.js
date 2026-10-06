@@ -90,12 +90,25 @@ export default function useBroadcastAssets(context) {
     setBindingLangDraftsByLine,
     setDisambiguationNamesByLine,
     setStations,
-    setRules,
-    setPlatformAnnouncements,
     closeInlineMenus,
+    getPendingAssetDeletionNames,
+    setAssetOperationFeedback,
   } = context;
   const [assetDeleteBlockedNames, setAssetDeleteBlockedNames] = useState({});
   const assetDeleteBlockedTimersRef = useRef({});
+  const [importConflicts, setImportConflicts] = useState([]);
+  const [isImportingAssets, setIsImportingAssets] = useState(false);
+  const importViewRef = useRef({ mode: activeTransportMode, sequence: 0 });
+  const importItemsRef = useRef([]);
+  const browserRequestRef = useRef(0);
+  importViewRef.current.mode = activeTransportMode;
+
+  useEffect(() => {
+    importViewRef.current.sequence += 1;
+    setImportConflicts([]);
+    setIsImportingAssets(false);
+    importItemsRef.current = [];
+  }, [activeTransportMode, isAssetExplorerOpen]);
 
   useEffect(() => {
     let timer = null;
@@ -219,12 +232,14 @@ export default function useBroadcastAssets(context) {
   }
 
   async function loadExternalAssetBrowser(path = "") {
+    const requestMode = activeTransportMode;
+    const sequence = ++browserRequestRef.current;
     try {
       const browserSnapshot = await workbenchApi.loadBroadcastAssetBrowser?.({
         path: path || currentExternalPath || "",
         mode: activeTransportMode,
       });
-      if (!browserSnapshot) {
+      if (!browserSnapshot || sequence !== browserRequestRef.current || requestMode !== importViewRef.current.mode) {
         return;
       }
 
@@ -260,13 +275,20 @@ export default function useBroadcastAssets(context) {
       return;
     }
 
-    try {
-      await workbenchApi.playBroadcastAssetPreview?.({ assetName, mode: activeTransportMode });
-    } catch (error) {
-      console.error("[RT Broadcast Workbench] play asset preview failed", error);
-    }
-
+    const requestMode = activeTransportMode;
     setPreviewingAssetName(assetName);
+    try {
+      const result = await workbenchApi.playBroadcastAssetPreview?.({ assetName, mode: requestMode });
+      if (requestMode !== importViewRef.current.mode) return;
+      if (!result?.success) {
+        resetAssetPreviewState(assetName);
+        setAssetOperationFeedback({ key: "broadcast.footer.previewFailed", tone: "error", error: result?.error || "" });
+      }
+    } catch (error) {
+      if (requestMode !== importViewRef.current.mode) return;
+      resetAssetPreviewState(assetName);
+      setAssetOperationFeedback({ key: "broadcast.footer.previewFailed", tone: "error", error: error instanceof Error ? error.message : "" });
+    }
   }
 
   async function handleRulePreviewToggle(ruleId) {
@@ -284,79 +306,60 @@ export default function useBroadcastAssets(context) {
       return;
     }
 
+    const requestMode = activeTransportMode;
+    setPreviewingRuleId(ruleId);
     try {
-      await workbenchApi.playBroadcastRulePreview?.({
+      const result = await workbenchApi.playBroadcastRulePreview?.({
         lineId: selectedLineIdRef.current || "",
         ruleId,
-        mode: activeTransportMode,
+        mode: requestMode,
         rule: (Array.isArray(rules) ? rules : []).find((rule) => rule?.id === ruleId) || null,
       });
+      if (requestMode !== importViewRef.current.mode) return;
+      if (!result?.success) {
+        setPreviewingRuleId("");
+        setAssetOperationFeedback({ key: "broadcast.footer.previewFailed", tone: "error", error: result?.error || "" });
+      }
     } catch (error) {
-      console.error("[RT Broadcast Workbench] play rule preview failed", error);
+      if (requestMode !== importViewRef.current.mode) return;
+      setPreviewingRuleId("");
+      setAssetOperationFeedback({ key: "broadcast.footer.previewFailed", tone: "error", error: error instanceof Error ? error.message : "" });
     }
-
-    setPreviewingRuleId(ruleId);
   }
 
-  function removeAssetFromUi(assetName) {
-    if (!assetName) {
-      return;
+  function removeAssetFromUi(assetNames) {
+    const assetNameSet = new Set(assetNames.map(normalizeAssetReferenceKey));
+    function clearStationConflicts(station) {
+      const current = Array.isArray(station?.conflictAssets) ? station.conflictAssets : [];
+      const conflictAssets = current.filter((entry) => !assetNameSet.has(normalizeAssetReferenceKey(entry.assetName)));
+      if (conflictAssets.length === current.length) {
+        return station;
+      }
+      return {
+        ...station,
+        conflictAssets,
+        status: deriveBroadcastStationStatus(station.audios, conflictAssets),
+      };
     }
 
-    const activeLineId = selectedLineIdRef.current || "";
-    const nextStations = (Array.isArray(stations) ? stations : []).map((station) => ({
-      ...station,
-      audios: station.audios.filter((entry) => entry.assetName !== assetName),
-      conflictAssets: station.conflictAssets.filter((entry) => entry.assetName !== assetName),
-      status: deriveBroadcastStationStatus(
-        station.audios.filter((entry) => entry.assetName !== assetName),
-        station.conflictAssets.filter((entry) => entry.assetName !== assetName),
-      ),
-    }));
-    const nextRules = (Array.isArray(rules) ? rules : []).map((rule) => ({
-      ...rule,
-      nodes: rule.nodes.filter((node) => !(node.type === "asset" && node.name === assetName)),
-    }));
-    const nextPlatformAnnouncements = (Array.isArray(platformAnnouncements) ? platformAnnouncements : []).map((announcement) => ({
-      ...announcement,
-      nodes: (Array.isArray(announcement.nodes) ? announcement.nodes : []).filter((node) => !(node.type === "asset" && node.name === assetName)),
-    }));
-    setStations(nextStations);
-    setRules(nextRules);
-    setPlatformAnnouncements(nextPlatformAnnouncements);
+    const nextStations = (Array.isArray(stations) ? stations : []).map(clearStationConflicts);
+    if (nextStations.some((station, index) => station !== stations[index])) {
+      setStations(nextStations);
+    }
     draftStore.getDirtyLineIds(activeTransportMode).forEach((lineId) => {
       const draft = draftStore.getLineDraft(lineId);
       if (!draft) {
         return;
       }
 
-      const { stationBindings: _ignoredStationBindings, ...draftWithoutBindings } = draft;
-
-      const nextDraftStations = (Array.isArray(draft.stationsForUi) ? draft.stationsForUi : []).map((station) => ({
-        ...station,
-        audios: (Array.isArray(station?.audios) ? station.audios : []).filter((entry) => entry.assetName !== assetName),
-        conflictAssets: (Array.isArray(station?.conflictAssets) ? station.conflictAssets : []).filter((entry) => entry.assetName !== assetName),
-      }));
-      draftStore.setLineDraft(lineId, {
-        ...draftWithoutBindings,
-        stationsForUi: nextDraftStations,
-        rules: (Array.isArray(draft.rules) ? draft.rules : []).map((rule) => ({
-          ...rule,
-          nodes: (Array.isArray(rule?.nodes) ? rule.nodes : []).filter((node) => !(node.type === "asset" && node.name === assetName)),
-        })),
-        platformAnnouncements: (Array.isArray(draft.platformAnnouncements) ? draft.platformAnnouncements : []).map((announcement) => ({
-          ...announcement,
-          nodes: (Array.isArray(announcement?.nodes) ? announcement.nodes : []).filter((node) => !(node.type === "asset" && node.name === assetName)),
-        })),
-      });
+      const draftStations = Array.isArray(draft.stationsForUi) ? draft.stationsForUi : [];
+      const nextDraftStations = draftStations.map(clearStationConflicts);
+      if (nextDraftStations.some((station, index) => station !== draftStations[index])) {
+        draftStore.setLineDraft(lineId, { ...draft, stationsForUi: nextDraftStations });
+      }
     });
-    resetAssetPreviewState(assetName);
-    if (activeLineId) {
-      markBroadcastDraftDirty(activeLineId, buildCurrentBroadcastLineDraft({
-        stationsForUi: nextStations,
-        rules: nextRules,
-        platformAnnouncements: nextPlatformAnnouncements,
-      }));
+    if (assetNames.includes(previewingAssetName)) {
+      resetAssetPreviewState(previewingAssetName);
     }
   }
 
@@ -379,7 +382,7 @@ export default function useBroadcastAssets(context) {
     }
 
     queuePendingAssetDeletions([assetName]);
-    removeAssetFromUi(assetName);
+    removeAssetFromUi([assetName]);
   }
 
   async function handleDeleteAllAssets() {
@@ -396,7 +399,7 @@ export default function useBroadcastAssets(context) {
     }
 
     try {
-      if (previewingAssetName) {
+      if (assetNames.includes(previewingAssetName)) {
         await workbenchApi.stopBroadcastAssetPreview?.({ assetName: previewingAssetName, mode: activeTransportMode });
       }
     } catch (error) {
@@ -404,58 +407,7 @@ export default function useBroadcastAssets(context) {
     }
 
     queuePendingAssetDeletions(assetNames, { deleteAll: true });
-    const activeLineId = selectedLineIdRef.current || "";
-    const nextStations = (Array.isArray(stations) ? stations : []).map((station) => ({
-      ...station,
-      audios: [],
-      conflictAssets: [],
-      status: "missing",
-    }));
-    const nextRules = (Array.isArray(rules) ? rules : []).map((rule) => ({
-      ...rule,
-      nodes: rule.nodes.filter((node) => node.type !== "asset"),
-    }));
-    const nextPlatformAnnouncements = (Array.isArray(platformAnnouncements) ? platformAnnouncements : []).map((announcement) => ({
-      ...announcement,
-      nodes: (Array.isArray(announcement.nodes) ? announcement.nodes : []).filter((node) => node.type !== "asset"),
-    }));
-    setStations(nextStations);
-    setRules(nextRules);
-    setPlatformAnnouncements(nextPlatformAnnouncements);
-    draftStore.getDirtyLineIds(activeTransportMode).forEach((lineId) => {
-      const draft = draftStore.getLineDraft(lineId);
-      if (!draft) {
-        return;
-      }
-
-      const { stationBindings: _ignoredStationBindings, ...draftWithoutBindings } = draft;
-
-      const nextDraftStations = (Array.isArray(draft.stationsForUi) ? draft.stationsForUi : []).map((station) => ({
-        ...station,
-        audios: [],
-        conflictAssets: [],
-      }));
-      draftStore.setLineDraft(lineId, {
-        ...draftWithoutBindings,
-        stationsForUi: nextDraftStations,
-        rules: (Array.isArray(draft.rules) ? draft.rules : []).map((rule) => ({
-          ...rule,
-          nodes: (Array.isArray(rule?.nodes) ? rule.nodes : []).filter((node) => node.type !== "asset"),
-        })),
-        platformAnnouncements: (Array.isArray(draft.platformAnnouncements) ? draft.platformAnnouncements : []).map((announcement) => ({
-          ...announcement,
-          nodes: (Array.isArray(announcement?.nodes) ? announcement.nodes : []).filter((node) => node.type !== "asset"),
-        })),
-      });
-    });
-    resetAssetPreviewState();
-    if (activeLineId) {
-      markBroadcastDraftDirty(activeLineId, buildCurrentBroadcastLineDraft({
-        stationsForUi: nextStations,
-        rules: nextRules,
-        platformAnnouncements: nextPlatformAnnouncements,
-      }));
-    }
+    removeAssetFromUi(assetNames);
   }
 
   async function handleAutoBindStations() {
@@ -531,6 +483,14 @@ export default function useBroadcastAssets(context) {
   }
 
   function handleCloseAssetExplorer() {
+    browserRequestRef.current += 1;
+    if (importConflicts.length > 0) {
+      importItemsRef.current = importItemsRef.current.map((item) => item.status === "conflict" ? { ...item, status: "canceled" } : item);
+      reportImportItems(importItemsRef.current);
+    }
+    importViewRef.current.sequence += 1;
+    setImportConflicts([]);
+    setIsImportingAssets(false);
     setIsAssetExplorerOpen(false);
   }
 
@@ -570,24 +530,68 @@ export default function useBroadcastAssets(context) {
     setSelectedExternalFiles((current) => Array.from(new Set([...current, ...currentViewIds])));
   }
 
-  async function handleImportSelectedExternalFiles() {
-    if (selectedExternalFiles.length === 0) {
-      return;
+  function reportImportItems(items, error = "") {
+    const counts = { added: 0, existing: 0, replaced: 0, canceled: 0, failed: 0 };
+    const failedNames = [];
+    let pending = false;
+    for (const item of items) {
+      const status = item.status === "reused" ? "added" : item.status;
+      if (status in counts) counts[status] += 1;
+      if (status === "failed") failedNames.push(item.name);
+      if (status === "pending-delete") pending = true;
+      error = error || item.error || "";
     }
+    setAssetOperationFeedback({
+      key: pending ? "broadcast.import.pendingDelete" : "broadcast.import.result",
+      tone: error || counts.failed ? "error" : pending ? "warning" : "applied",
+      params: {
+        ...counts,
+        names: failedNames.join(", "),
+      },
+      error,
+    });
+  }
 
+  async function importExternalAssets(selectedPaths, confirmations = []) {
+    const requestMode = activeTransportMode;
+    const sequence = ++importViewRef.current.sequence;
+    setIsImportingAssets(true);
     try {
       const result = await workbenchApi.importBroadcastExternalAssets?.({
         currentPath: currentExternalPath,
-        selectedPaths: selectedExternalFiles,
-        mode: activeTransportMode,
+        selectedPaths,
+        confirmations,
+        pendingDeleteNames: getPendingAssetDeletionNames(requestMode),
+        mode: requestMode,
       });
-
-      if (result?.success) {
+      if (sequence !== importViewRef.current.sequence || requestMode !== importViewRef.current.mode) return;
+      const items = Array.isArray(result?.items) ? result.items : [];
+      const paths = new Set(items.map((item) => item.path));
+      importItemsRef.current = [...importItemsRef.current.filter((item) => !paths.has(item.path)), ...items];
+      const conflicts = items.filter((item) => item.status === "conflict");
+      setImportConflicts(conflicts);
+      reportImportItems(importItemsRef.current, result?.error || "");
+      if (conflicts.length === 0 && result?.success) {
         handleCloseAssetExplorer();
       }
     } catch (error) {
-      console.error("[RT Broadcast Workbench] import external assets failed", error);
+      if (sequence === importViewRef.current.sequence && requestMode === importViewRef.current.mode) {
+        reportImportItems(importItemsRef.current, error instanceof Error ? error.message : "Import failed.");
+      }
+    } finally {
+      if (sequence === importViewRef.current.sequence) setIsImportingAssets(false);
     }
+  }
+
+  function handleImportSelectedExternalFiles() {
+    if (isImportingAssets || selectedExternalFiles.length === 0) return;
+    importItemsRef.current = [];
+    importExternalAssets(selectedExternalFiles);
+  }
+
+  function handleConfirmImportReplacements() {
+    if (isImportingAssets || importConflicts.length === 0) return;
+    importExternalAssets(importConflicts.map((item) => item.path), importConflicts);
   }
 
   return {
@@ -622,5 +626,8 @@ export default function useBroadcastAssets(context) {
     handleToggleExternalFile,
     handleToggleAllExternalFiles,
     handleImportSelectedExternalFiles,
+    handleConfirmImportReplacements,
+    importConflicts,
+    isImportingAssets,
   };
 }

@@ -128,6 +128,8 @@ export default function BroadcastAssetExplorer({
     currentExternalFolders,
     currentExternalFiles,
     currentExternalAllowedExtensions,
+    importConflicts,
+    isImportingAssets,
   } = assets;
   const { assetExplorerStage } = overlay;
 
@@ -137,6 +139,7 @@ export default function BroadcastAssetExplorer({
         <button
           type="button"
           className="dw-bc-import-back-button"
+          disabled={isImportingAssets}
           onClick={actions.handleCloseAssetExplorer}
         >
           <ArrowLeftIcon className="dw-bc-import-back-icon" />
@@ -146,6 +149,15 @@ export default function BroadcastAssetExplorer({
         </div>
       </div>
 
+      {importConflicts.length > 0 ? (
+        <div className="dw-bc-import-replace">
+          <div className="dw-bc-import-replace-title">{t("broadcast.import.replaceTitle", { mode: toolbar.modeLabel })}</div>
+          <div className="dw-bc-import-replace-copy">{t("broadcast.import.replaceWarning")}</div>
+          <WorkbenchScrollArea className="dw-bc-import-replace-list" metricsKey={importConflicts.length}>
+            {importConflicts.map((item) => <div key={item.path} className="dw-bc-import-replace-name">{item.name}</div>)}
+          </WorkbenchScrollArea>
+        </div>
+      ) : <>
       <div className="dw-bc-import-toolbar">
         <button
           type="button"
@@ -258,6 +270,7 @@ export default function BroadcastAssetExplorer({
           </div>
         </div>
       </WorkbenchScrollArea>
+      </>}
 
       <div className="dw-bc-import-foot">
         <span className="dw-bc-import-foot-note">
@@ -269,6 +282,7 @@ export default function BroadcastAssetExplorer({
           <button
             type="button"
             className="dw-bc-import-text-button"
+            disabled={isImportingAssets}
             onClick={actions.handleCloseAssetExplorer}
           >
             {t("broadcast.import.cancel")}
@@ -276,10 +290,11 @@ export default function BroadcastAssetExplorer({
           <button
             type="button"
             className="dw-bc-primary-button"
-            onClick={actions.handleImportSelectedExternalFiles}
+            disabled={isImportingAssets}
+            onClick={importConflicts.length > 0 ? actions.handleConfirmImportReplacements : actions.handleImportSelectedExternalFiles}
           >
-            {t("broadcast.import.confirm")}
-            {selectedExternalFiles.length > 0
+            {t(isImportingAssets ? "broadcast.import.working" : importConflicts.length > 0 ? "broadcast.import.replaceConfirm" : "broadcast.import.confirm")}
+            {importConflicts.length === 0 && selectedExternalFiles.length > 0
               ? ` (${selectedExternalFiles.length})`
               : ""}
           </button>

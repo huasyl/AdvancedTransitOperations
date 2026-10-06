@@ -84,6 +84,7 @@ namespace RapidTransitMod.Broadcasting
         public uint ResumeFrame;
         public float ResumeRealtime;
         public string PendingAssetName = string.Empty;
+        public string PendingCacheKey = string.Empty;
         public Task<AudioClip> PendingClipLoadTask;
         public AudioSource ActiveAudioSource;
         public string ActiveAudioAssetName = string.Empty;
@@ -329,7 +330,8 @@ namespace RapidTransitMod.Broadcasting
                 string pendingAssetName = state.PendingAssetName ?? string.Empty;
                 state.PendingClipLoadTask = null;
                 state.PendingAssetName = string.Empty;
-                string pendingCacheKey = m_Config.AssetCacheKey(state.LineId, pendingAssetName);
+                string pendingCacheKey = state.PendingCacheKey;
+                state.PendingCacheKey = string.Empty;
                 if (!string.IsNullOrWhiteSpace(pendingCacheKey)
                     && m_Clips.TryLiveTask(pendingCacheKey, out Task<AudioClip> liveTask)
                     && ReferenceEquals(liveTask, completedTask))
@@ -405,7 +407,13 @@ namespace RapidTransitMod.Broadcasting
                     continue;
                 }
 
-                string assetCacheKey = m_Config.AssetCacheKey(state.LineId, assetName);
+                BroadcastWorkbenchAssetDto asset = m_Config.AssetForLine(state.LineId, assetName);
+                if (asset == null)
+                {
+                    state.NodeIndex++;
+                    continue;
+                }
+                string assetCacheKey = m_Config.AssetCacheKey(state.LineId, assetName, asset.assetId);
                 if (m_Clips.Get(assetCacheKey, nowFrame, out AudioClip cachedClip))
                 {
                     if (m_Audio.Play(state, assetName, cachedClip))
@@ -418,7 +426,7 @@ namespace RapidTransitMod.Broadcasting
                     continue;
                 }
 
-                Task<AudioClip> loadTask = m_Clips.BeginLoad(state.LineId, assetName);
+                Task<AudioClip> loadTask = m_Clips.BeginLoad(assetName, asset, assetCacheKey);
                 if (loadTask == null)
                 {
                     state.NodeIndex++;
@@ -426,6 +434,7 @@ namespace RapidTransitMod.Broadcasting
                 }
 
                 state.PendingAssetName = assetName;
+                state.PendingCacheKey = assetCacheKey;
                 state.PendingClipLoadTask = loadTask;
                 return true;
             }
@@ -551,7 +560,7 @@ namespace RapidTransitMod.Broadcasting
                 }
             }
 
-            m_Clips.RemoveAsset(scope.Token + ":" + assetName);
+            m_Clips.RemoveAsset(scope.Token + ":" + assetName + ":");
         }
 
         internal void RemoveAllAssets()
@@ -886,21 +895,18 @@ namespace RapidTransitMod.Broadcasting
 
         internal void RequestPrune() => m_PrunePending = true;
 
-        internal Task<AudioClip> BeginLoad(string lineId, string assetName)
+        internal Task<AudioClip> BeginLoad(string assetName, BroadcastWorkbenchAssetDto asset, string cacheKey)
         {
             if (string.IsNullOrWhiteSpace(assetName))
             {
                 return null;
             }
 
-            string cacheKey = m_Config.AssetCacheKey(lineId, assetName);
             if (m_LoadTasks.TryGetValue(cacheKey, out Task<AudioClip> existingTask))
             {
                 return existingTask;
             }
 
-            BroadcastWorkbenchAssetDto asset = m_Config.AssetsForLine(lineId).FirstOrDefault(candidate =>
-                string.Equals(candidate?.name, assetName, StringComparison.OrdinalIgnoreCase));
             string assetPath = m_Config.AssetPath(asset?.path);
             if (string.IsNullOrEmpty(assetPath) || !File.Exists(assetPath))
             {
@@ -1146,18 +1152,16 @@ namespace RapidTransitMod.Broadcasting
 
         internal void RemoveAsset(string assetName)
         {
-            RemoveDetachedLoadTask(assetName);
-            if (!m_Cache.TryGetValue(assetName, out ClipEntry cacheEntry))
+            foreach (string key in m_LoadTasks.Keys.Where(key => key.StartsWith(assetName, StringComparison.OrdinalIgnoreCase)).ToArray())
             {
-                return;
+                RemoveDetachedLoadTask(key);
             }
-
-            if (!InUse(cacheEntry?.Clip))
+            foreach (string key in m_Cache.Keys.Where(key => key.StartsWith(assetName, StringComparison.OrdinalIgnoreCase)).ToArray())
             {
-                Destroy(cacheEntry?.Clip);
+                if (m_Cache.TryGetValue(key, out ClipEntry cacheEntry) && !InUse(cacheEntry?.Clip))
+                    Destroy(cacheEntry?.Clip);
+                m_Cache.Remove(key);
             }
-
-            m_Cache.Remove(assetName);
         }
 
         internal void RemoveMode(ModeScope scope)

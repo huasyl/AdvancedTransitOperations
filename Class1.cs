@@ -103,6 +103,7 @@ namespace RapidTransitMod
             }
 
             AssetDatabase.global.LoadSettings("AdvancedTransitOperations.AtoGameOptions", Options, userSetting: true);
+            Broadcasting.AssetLifecycle.Start();
             Options.RegisterInOptionsUI();
 
             World.DefaultGameObjectInjectionWorld
@@ -116,6 +117,7 @@ namespace RapidTransitMod
         public void OnDispose()
         {
             log.Info(nameof(OnDispose));
+            Broadcasting.AssetLifecycle.Stop();
             if (Options != null)
             {
                 Options.UnregisterInOptionsUI();

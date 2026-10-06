@@ -2904,10 +2904,13 @@ namespace RapidTransitMod
             m_RuntimeProbe.StopTrace("gameLoaded");
 #endif
             m_RuntimeLifecycleHost.Loaded(serializationContext);
+            Broadcasting.AssetLifecycle.Instance?.Loaded(serializationContext, m_AnnouncementWorkbench);
         }
 
         public void PreSerialize(Context context)
         {
+            if (context.purpose == Purpose.SaveGame)
+                Broadcasting.AssetLifecycle.Instance?.CaptureSave(m_AnnouncementWorkbench?.State);
             try
             {
                 m_VehicleCache?.Ensure();

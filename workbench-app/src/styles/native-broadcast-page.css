@@ -359,6 +359,38 @@
   background: rgba(0, 0, 0, 0.20);
 }
 
+.dw-bc-import-replace {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 24rem;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+
+.dw-bc-import-replace-title {
+  font-size: 24rem;
+  color: #f3f6fa;
+  margin-bottom: 16rem;
+}
+
+.dw-bc-import-replace-copy {
+  font-size: 14rem;
+  color: #bdc8d5;
+  margin-bottom: 16rem;
+}
+
+.dw-bc-import-replace-list {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.dw-bc-import-replace-name {
+  padding: 8rem 0;
+  font-size: 18rem;
+  color: #f3f6fa;
+}
+
 .dw-bc-import-foot-note {
   color: rgba(255, 255, 255, 0.40);
   font-size: 11rem;

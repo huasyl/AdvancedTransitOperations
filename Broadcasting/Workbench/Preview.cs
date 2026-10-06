@@ -27,10 +27,13 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
         private AudioSource m_Source;
         private AudioClip m_Clip;
         private string m_AssetName = string.Empty;
+        private string m_AssetMode = string.Empty;
         private int m_Token;
         private AudioSource m_RuleSource;
         private AudioClip m_RuleClip;
         private string m_RuleId = string.Empty;
+        private string m_RuleMode = string.Empty;
+        private readonly HashSet<string> m_RuleAssets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private int m_RuleToken;
         private static readonly FieldInfo s_AudioManagerUiGroupField =
             typeof(AudioManager).GetField("m_UIGroup", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -61,22 +64,16 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         }
 
                         string modeToken = scope.Token;
-                        MainThreadDispatcher.RunOnMainThread(() =>
-                            StopRule(m_RuleId, notify: true, modeToken: modeToken));
-
                         MainThreadDispatcher.RunOnMainThread(async () =>
                         {
-                            using (UseScope(scope))
-                            {
                             try
                             {
-                                await PlayAsset(requestedAssetName);
+                                await PlayAsset(scope, requestedAssetName);
                             }
                             catch (Exception ex)
                             {
-                                NotifyAsset(requestedAssetName, "error", ex.Message ?? string.Empty);
+                                NotifyAsset(modeToken, requestedAssetName, "error", ex.Message ?? string.Empty);
                                 LogException("PlayAsset", ex);
-                            }
                             }
                         });
 
@@ -126,17 +123,14 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         string modeToken = scope.Token;
                         MainThreadDispatcher.RunOnMainThread(async () =>
                         {
-                            using (UseScope(scope))
-                            {
                             try
                             {
-                                await PlayRule(lineId, ruleId, previewRule, modeToken);
+                                await PlayRule(scope, lineId, ruleId, previewRule);
                             }
                             catch (Exception ex)
                             {
                                 NotifyRule(modeToken, ruleId, "error", ex.Message ?? string.Empty);
                                 LogException("PlayRule", ex);
-                            }
                             }
                         });
                         }
@@ -255,24 +249,26 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     return global::RapidTransitMod.Workbenches.Json.Write(result);
                 }
 
-                internal async Task PlayAsset(string assetName)
+                internal async Task PlayAsset(ModeScope scope, string assetName)
                 {
+                    StopRule(m_RuleId, notify: true);
                     string requestedAssetName = assetName ?? string.Empty;
-                    BroadcastWorkbenchAssetDto asset = Catalog.FirstOrDefault(candidate =>
+                    string modeToken = scope.Token;
+                    BroadcastWorkbenchAssetDto asset = m_State.AssetState(scope).Catalog.FirstOrDefault(candidate =>
                         string.Equals(candidate?.name, requestedAssetName, StringComparison.OrdinalIgnoreCase));
                     string assetPath = Assets.Path(asset?.path);
-                    if (string.IsNullOrEmpty(assetPath) || !File.Exists(assetPath))
+                    if (string.IsNullOrEmpty(assetPath))
                     {
-                        StopAsset(requestedAssetName, notify: false);
-                        NotifyAsset(requestedAssetName, "error", "Selected asset file was not found.");
+                        StopAsset(requestedAssetName, notify: false, modeToken: modeToken);
+                        NotifyAsset(modeToken, requestedAssetName, "error", "Selected asset file was not found.");
                         return;
                     }
 
                     AudioType audioType = AudioType(assetPath);
                     if (audioType == UnityEngine.AudioType.UNKNOWN)
                     {
-                        StopAsset(requestedAssetName, notify: false);
-                        NotifyAsset(requestedAssetName, "error", "Unsupported audio format.");
+                        StopAsset(requestedAssetName, notify: false, modeToken: modeToken);
+                        NotifyAsset(modeToken, requestedAssetName, "error", "Unsupported audio format.");
                         return;
                     }
 
@@ -283,6 +279,8 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     }
 
                     int playbackToken = unchecked(++m_Token);
+                    m_AssetName = requestedAssetName;
+                    m_AssetMode = modeToken;
                     using UnityWebRequest request = Preview.Request(assetPath, audioType);
                     DownloadHandlerAudioClip downloadHandler = request.downloadHandler as DownloadHandlerAudioClip;
                     if (downloadHandler != null)
@@ -291,24 +289,24 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     }
 
                     await WaitUnityWebRequest(request);
+                    if (playbackToken != m_Token)
+                    {
+                        if (request.result == UnityWebRequest.Result.Success)
+                            DestroyClip(DownloadHandlerAudioClip.GetContent(request));
+                        return;
+                    }
                     if (request.result == UnityWebRequest.Result.ConnectionError
                         || request.result == UnityWebRequest.Result.ProtocolError
                         || request.result == UnityWebRequest.Result.DataProcessingError)
                     {
-                        NotifyAsset(requestedAssetName, "error", request.error ?? "Audio preview load failed.");
+                        NotifyAsset(modeToken, requestedAssetName, "error", request.error ?? "Audio preview load failed.");
                         return;
                     }
 
                     AudioClip clip = DownloadHandlerAudioClip.GetContent(request);
                     if (clip == null)
                     {
-                        NotifyAsset(requestedAssetName, "error", "Audio preview load returned no clip.");
-                        return;
-                    }
-
-                    if (playbackToken != m_Token)
-                    {
-                        UnityEngine.Object.Destroy(clip);
+                        NotifyAsset(modeToken, requestedAssetName, "error", "Audio preview load returned no clip.");
                         return;
                     }
 
@@ -318,16 +316,17 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     m_Source.clip = clip;
                     m_Source.loop = false;
                     m_Source.pitch = 1f;
-                    m_Source.volume = VolumeScalar(DraftVol);
+                    m_Source.volume = VolumeScalar(m_State.GetDraftVolume(scope));
                     m_Source.timeSamples = 0;
                     AudioManager.AudioSourcePool.Play(m_Source);
-                    m_AssetName = requestedAssetName;
-                    NotifyAsset(requestedAssetName, "started", string.Empty);
-                    MainThreadDispatcher.RegisterUpdater(() => ObserveAsset(playbackToken, requestedAssetName));
+                    NotifyAsset(modeToken, requestedAssetName, "started", string.Empty);
+                    MainThreadDispatcher.RegisterUpdater(() => ObserveAsset(playbackToken, requestedAssetName, modeToken));
                 }
 
                 internal void StopAsset(string assetName, bool notify, string modeToken = null)
                 {
+                    if (!string.IsNullOrEmpty(modeToken) && m_AssetMode != modeToken) return;
+                    modeToken ??= m_AssetMode;
                     string resolvedAssetName = !string.IsNullOrWhiteSpace(assetName)
                         ? assetName
                         : m_AssetName;
@@ -360,7 +359,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     }
                 }
 
-                internal bool ObserveAsset(int playbackToken, string assetName)
+                internal bool ObserveAsset(int playbackToken, string assetName, string modeToken)
                 {
                     if (playbackToken != m_Token || m_Source == null)
                     {
@@ -376,7 +375,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     StopAsset(assetName, notify: false);
                     if (wasCurrentAsset)
                     {
-                        NotifyAsset(assetName, "ended", string.Empty);
+                        NotifyAsset(modeToken, assetName, "ended", string.Empty);
                     }
 
                     return true;
@@ -428,12 +427,17 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     m_Clip = null;
                 }
 
-                internal async Task PlayRule(string lineId, string ruleId, BroadcastWorkbenchRuleDto previewRule = null, string modeToken = null)
+                internal async Task PlayRule(ModeScope scope, string lineId, string ruleId, BroadcastWorkbenchRuleDto previewRule = null)
                 {
+                    string modeToken = scope.Token;
                     StopAsset(m_AssetName, notify: true);
                     StopRule(ruleId, notify: false);
 
-                    BroadcastWorkbenchRuleDto rule = previewRule != null
+                    BroadcastWorkbenchRuleDto rule;
+                    TriggerContext context;
+                    using (UseScope(scope))
+                    {
+                    rule = previewRule != null
                         && string.Equals(previewRule.id, ruleId, StringComparison.Ordinal)
                             ? Rules.Clone(previewRule)
                             : m_Ctx.Rules.DraftRows(lineId).FirstOrDefault(candidate =>
@@ -444,14 +448,28 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         return;
                     }
 
-                    if (!Context(lineId, out TriggerContext context))
+                    if (!Context(lineId, out context))
                     {
                         NotifyRule(modeToken, ruleId, "error", "Preview context is unavailable.");
                         return;
                     }
+                    }
 
                     int playbackToken = unchecked(++m_RuleToken);
                     m_RuleId = ruleId;
+                    m_RuleMode = modeToken;
+                    m_RuleAssets.Clear();
+                    Dictionary<string, string> paths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (BroadcastWorkbenchRuleNodeDto node in rule.nodes)
+                    {
+                        if (node == null || node.type == "delay") continue;
+                        string name = m_Announcements.AssetName(node, context);
+                        if (string.IsNullOrEmpty(name)) continue;
+                        m_RuleAssets.Add(name);
+                        BroadcastWorkbenchAssetDto asset = m_State.AssetState(scope).Catalog.FirstOrDefault(candidate =>
+                            string.Equals(candidate?.name, name, StringComparison.OrdinalIgnoreCase));
+                        paths[name] = asset?.path ?? string.Empty;
+                    }
                     NotifyRule(modeToken, ruleId, "started", string.Empty);
                     bool skippedMissingAsset = false;
 
@@ -485,7 +503,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                             continue;
                         }
 
-                        AudioClip clip = await Load(assetName);
+                        AudioClip clip = await Load(paths.TryGetValue(assetName, out string path) ? path : string.Empty);
                         if (playbackToken != m_RuleToken)
                         {
                             DestroyClip(clip);
@@ -504,7 +522,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         m_RuleSource.clip = clip;
                         m_RuleSource.loop = false;
                         m_RuleSource.pitch = 1f;
-                        m_RuleSource.volume = VolumeScalar(DraftVol);
+                        m_RuleSource.volume = VolumeScalar(m_State.GetDraftVolume(scope));
                         m_RuleSource.timeSamples = 0;
                         AudioManager.AudioSourcePool.Play(m_RuleSource);
                         await Task.Delay(Mathf.Max(1, Mathf.RoundToInt(clip.length * 1000f)));
@@ -526,12 +544,8 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     NotifyRule(modeToken, ruleId, "ended", string.Empty);
                 }
 
-                internal async Task<AudioClip> Load(string assetName)
+                internal async Task<AudioClip> Load(string assetPath)
                 {
-                    string requestedAssetName = assetName ?? string.Empty;
-                    BroadcastWorkbenchAssetDto asset = Catalog.FirstOrDefault(candidate =>
-                        string.Equals(candidate?.name, requestedAssetName, StringComparison.OrdinalIgnoreCase));
-                    string assetPath = Assets.Path(asset?.path);
                     if (string.IsNullOrEmpty(assetPath) || !File.Exists(assetPath))
                     {
                         return null;
@@ -583,6 +597,8 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                 internal void StopRule(string ruleId, bool notify, string modeToken = null)
                 {
+                    if (!string.IsNullOrEmpty(modeToken) && m_RuleMode != modeToken) return;
+                    modeToken ??= m_RuleMode;
                     string resolvedRuleId = !string.IsNullOrWhiteSpace(ruleId)
                         ? ruleId
                         : m_RuleId;
@@ -608,6 +624,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                     ReleaseRule();
                     m_RuleId = string.Empty;
+                    m_RuleAssets.Clear();
 
                     if (notify && !string.IsNullOrWhiteSpace(resolvedRuleId))
                     {
@@ -620,6 +637,15 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     StopAsset(m_AssetName, notify: true);
                     StopRule(m_RuleId, notify: true);
                     m_Announcements.Clear();
+                }
+
+                internal void StopForAsset(ModeScope scope, string name)
+                {
+                    if (m_AssetMode == scope.Token && (string.IsNullOrEmpty(name)
+                        || string.Equals(m_AssetName, name, StringComparison.OrdinalIgnoreCase)))
+                        StopAsset(name, true, scope.Token);
+                    if (m_RuleMode == scope.Token && (string.IsNullOrEmpty(name) || m_RuleAssets.Contains(name)))
+                        StopRule(m_RuleId, true, scope.Token);
                 }
 
                 internal void RuleSource()
@@ -726,12 +752,12 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                 internal void ApplyVolume()
                 {
                     float volume = VolumeScalar(DraftVol);
-                    if (m_Source != null)
+                    if (m_Source != null && m_AssetMode == CurrentScope.Token)
                     {
                         m_Source.volume = volume;
                     }
 
-                    if (m_RuleSource != null)
+                    if (m_RuleSource != null && m_RuleMode == CurrentScope.Token)
                     {
                         m_RuleSource.volume = volume;
                     }
