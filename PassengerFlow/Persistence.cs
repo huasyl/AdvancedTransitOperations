@@ -19,15 +19,11 @@ namespace RapidTransitMod.PassengerFlow
         {
             internal PassengerFlowPersistentState State;
             internal List<string> Chunks;
-            internal int PayloadLength;
-            internal double CaptureMilliseconds;
-            internal double EncodeMilliseconds;
         }
 
         // 只编码已经脱离运行态的快照，同步保存与后台准备共用此入口。
-        internal static PreparedSave Prepare(PassengerFlowPersistentState state, double captureMilliseconds)
+        internal static PreparedSave Prepare(PassengerFlowPersistentState state)
         {
-            long started = System.Diagnostics.Stopwatch.GetTimestamp();
             var strings = new List<string>();
             var settings = new JsonSerializerSettings
             {
@@ -44,11 +40,7 @@ namespace RapidTransitMod.PassengerFlow
             return new PreparedSave
             {
                 State = state,
-                Chunks = chunks,
-                PayloadLength = payload.Length,
-                CaptureMilliseconds = captureMilliseconds,
-                EncodeMilliseconds = (System.Diagnostics.Stopwatch.GetTimestamp() - started)
-                    * 1000d / System.Diagnostics.Stopwatch.Frequency
+                Chunks = chunks
             };
         }
 
@@ -60,19 +52,13 @@ namespace RapidTransitMod.PassengerFlow
                 return;
             }
 
-            bool timing = Diagnostics.Enabled;
-            long started = timing ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
             if (!entityManager.HasBuffer<PassengerFlowStateElement>(city))
             {
                 entityManager.AddBuffer<PassengerFlowStateElement>(city);
                 Diagnostics.Log("PassengerFlowPersistSave", "action=createBuffer city=" + Diagnostics.DescribeEntity(city));
             }
 
-            bool background = prepared != null;
-            long captureStarted = System.Diagnostics.Stopwatch.GetTimestamp();
             PassengerFlowPersistentState state = prepared != null ? prepared.State : Capture();
-            double captureMilliseconds = (System.Diagnostics.Stopwatch.GetTimestamp() - captureStarted)
-                * 1000d / System.Diagnostics.Stopwatch.Frequency;
             if (state == null)
             {
                 DynamicBuffer<PassengerFlowStateElement> emptyBuffer = entityManager.GetBuffer<PassengerFlowStateElement>(city);
@@ -81,32 +67,10 @@ namespace RapidTransitMod.PassengerFlow
                 return;
             }
 
-            prepared ??= Prepare(state, captureMilliseconds);
-            long runtimeStarted = timing ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
+            prepared ??= Prepare(state);
             SaveRuntime(entityManager, city, SamplingSystem.CurrentState, Runtime.Current.Frame());
-            long runtimeFinished = timing ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
             DynamicBuffer<PassengerFlowStateElement> buffer = entityManager.GetBuffer<PassengerFlowStateElement>(city);
             Write(buffer, prepared.Chunks);
-            if (timing)
-            {
-                long finished = System.Diagnostics.Stopwatch.GetTimestamp();
-                double tickMs = 1000d / System.Diagnostics.Stopwatch.Frequency;
-                long runtimeTicks = runtimeFinished - runtimeStarted;
-                Diagnostics.Log(
-                    "PassengerFlowPersistSave",
-                    "result=saved city=" + Diagnostics.DescribeEntity(city)
-                    + " scope=saveToCity mode=" + (background ? "background" : "synchronous")
-                    + " totalMs=" + ((finished - started) * tickMs).ToString("F3", System.Globalization.CultureInfo.InvariantCulture)
-                    + " captureMainMs=" + prepared.CaptureMilliseconds.ToString("F3", System.Globalization.CultureInfo.InvariantCulture)
-                    + " encodeMs=" + prepared.EncodeMilliseconds.ToString("F3", System.Globalization.CultureInfo.InvariantCulture)
-                    + " encodeThread=" + (background ? "background" : "main")
-                    + " commitMainMs=" + ((finished - runtimeStarted) * tickMs).ToString("F3", System.Globalization.CultureInfo.InvariantCulture)
-                    + " runtimeMs=" + (runtimeTicks * tickMs).ToString("F3", System.Globalization.CultureInfo.InvariantCulture)
-                    + " payloadLength=" + prepared.PayloadLength.ToString()
-                    + " chunkCount=" + prepared.Chunks.Count.ToString()
-                    + " " + DescribePersistedState(state)
-                    + " " + DescribeRuntimeState(SamplingSystem.CurrentState));
-            }
         }
 
         internal static bool RestoreFromCity(EntityManager entityManager, Entity city)

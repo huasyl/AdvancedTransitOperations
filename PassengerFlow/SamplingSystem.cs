@@ -287,17 +287,9 @@ namespace RapidTransitMod.PassengerFlow
                 m_SaveFrame = m_SimulationSystem.frameIndex;
                 m_SaveGameSystem.Enabled = false;
                 m_SaveDeferred = true;
-                long started = System.Diagnostics.Stopwatch.GetTimestamp();
                 SealForSave(port, state);
-                long capturedAt = System.Diagnostics.Stopwatch.GetTimestamp();
                 PassengerFlowPersistentState snapshot = Persistence.Capture();
-                long finished = System.Diagnostics.Stopwatch.GetTimestamp();
-                double tickMs = 1000d / System.Diagnostics.Stopwatch.Frequency;
-                double captureMilliseconds = (finished - capturedAt) * tickMs;
-                m_SavePreparation = Task.Run(() => Persistence.Prepare(snapshot, captureMilliseconds));
-                Diagnostics.Log("PassengerFlowSaveTiming", "scope=mainLoopPreparation"
-                    + " sealMainMs=" + ((capturedAt - started) * tickMs).ToString("F3", System.Globalization.CultureInfo.InvariantCulture)
-                    + " captureMainMs=" + captureMilliseconds.ToString("F3", System.Globalization.CultureInfo.InvariantCulture));
+                m_SavePreparation = Task.Run(() => Persistence.Prepare(snapshot));
             }
             catch (Exception ex)
             {
@@ -353,13 +345,6 @@ namespace RapidTransitMod.PassengerFlow
                 return;
             }
 
-            bool timing = Diagnostics.Enabled;
-            long started = timing ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
-            long sealedAt = 0;
-            int gc0 = timing ? GC.CollectionCount(0) : 0;
-            int gc1 = timing ? GC.CollectionCount(1) : 0;
-            int gc2 = timing ? GC.CollectionCount(2) : 0;
-            string result = "completed";
             try
             {
                 Persistence.PreparedSave prepared = m_PreparedSave;
@@ -371,30 +356,11 @@ namespace RapidTransitMod.PassengerFlow
                 ClearSavePreparation();
                 if (prepared == null)
                     SealForSave(Runtime.Current, CurrentState);
-                sealedAt = timing ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
                 Persistence.SaveToCity(EntityManager, runtime.m_CitySystem.City, prepared);
             }
             catch (Exception ex)
             {
-                result = "failed";
                 Mod.log.Info("[PassengerFlowPersistence] Save failed -> " + ex.GetType().Name + ": " + ex.Message);
-            }
-            finally
-            {
-                if (timing)
-                {
-                    long finished = System.Diagnostics.Stopwatch.GetTimestamp();
-                    double tickMs = 1000d / System.Diagnostics.Stopwatch.Frequency;
-                    long sealEnd = sealedAt != 0 ? sealedAt : finished;
-                    Diagnostics.Log("PassengerFlowSaveTiming",
-                        "result=" + result + " scope=preSerialize"
-                        + " totalMs=" + ((finished - started) * tickMs).ToString("F3", System.Globalization.CultureInfo.InvariantCulture)
-                        + " sealMs=" + ((sealEnd - started) * tickMs).ToString("F3", System.Globalization.CultureInfo.InvariantCulture)
-                        + " persistMs=" + ((finished - sealEnd) * tickMs).ToString("F3", System.Globalization.CultureInfo.InvariantCulture)
-                        + " gc0=" + (GC.CollectionCount(0) - gc0)
-                        + " gc1=" + (GC.CollectionCount(1) - gc1)
-                        + " gc2=" + (GC.CollectionCount(2) - gc2));
-                }
             }
         }
 
