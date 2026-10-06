@@ -44,11 +44,14 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         importedCount = 0,
                         error = string.Empty
                     };
+                    List<BroadcastAssetImportItem> items = new List<BroadcastAssetImportItem>();
+                    result.items = Array.Empty<BroadcastAssetImportItem>();
 
                     try
                     {
                         LoadWorkbench();
                         ModeScope scope = Workbenches.ModeRequest.ReadBroadcastScope(requestJson, "importBroadcastExternalAssets");
+                        result.mode = scope.Token;
                         using (UseScope(scope))
                         {
                         BroadcastWorkbenchImportExternalAssetsRequest request =
@@ -60,56 +63,101 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                             return global::RapidTransitMod.Workbenches.Json.Write(result);
                         }
 
-                        string managedAssetDirectory = EnsureDir();
-                        if (string.IsNullOrEmpty(managedAssetDirectory))
-                        {
-                            result.error = "Broadcast asset directory is unavailable.";
-                            return global::RapidTransitMod.Workbenches.Json.Write(result);
-                        }
-
                         HashSet<string> allowedExtensions = new HashSet<string>(s_Extensions, StringComparer.OrdinalIgnoreCase);
-                        HashSet<string> existingNames = new HashSet<string>(
-                            Catalog
-                                .Select(asset => asset?.name)
-                                .Where(name => !string.IsNullOrWhiteSpace(name)),
-                            StringComparer.OrdinalIgnoreCase);
+                        HashSet<string> pendingDeletes = new HashSet<string>(request?.pendingDeleteNames ?? Array.Empty<string>(), StringComparer.OrdinalIgnoreCase);
+                        Dictionary<string, BroadcastWorkbenchAssetDto> existing = Catalog
+                            .Where(asset => asset != null && !string.IsNullOrWhiteSpace(asset.name))
+                            .ToDictionary(asset => asset.name, StringComparer.OrdinalIgnoreCase);
 
                         List<BroadcastWorkbenchAssetDto> importedAssets = new List<BroadcastWorkbenchAssetDto>();
                         for (int i = 0; i < selectedPaths.Length; i++)
                         {
+                            string selectedPath = selectedPaths[i] ?? string.Empty;
+                            BroadcastAssetImportItem item = new BroadcastAssetImportItem { name = string.Empty, path = selectedPath, status = "failed", error = string.Empty };
+                            items.Add(item);
+                            try
+                            {
+                            item.name = IoPath.GetFileName(selectedPath);
                             string normalizedFilePath = Path(selectedPaths[i]);
                             if (string.IsNullOrEmpty(normalizedFilePath))
                             {
+                                item.error = "Selected audio file was not found.";
                                 continue;
                             }
 
                             string extension = IoPath.GetExtension(normalizedFilePath);
-                            if (string.IsNullOrEmpty(extension) || !allowedExtensions.Contains(extension))
+                            if (!allowedExtensions.Contains(extension))
                             {
+                                item.error = "Unsupported audio format.";
                                 continue;
                             }
 
-                            string destinationFileName = IoPath.GetFileName(normalizedFilePath);
-                            if (string.IsNullOrEmpty(destinationFileName) || !existingNames.Add(destinationFileName))
+                            string destinationFileName = item.name;
+                            item.path = normalizedFilePath;
+                            if (pendingDeletes.Contains(destinationFileName))
                             {
+                                item.status = "pending-delete";
                                 continue;
                             }
-
-                            string destinationPath = IoPath.Combine(managedAssetDirectory, destinationFileName);
-                            if (!File.Exists(destinationPath))
+                            string destinationPath = AssetStore.Import(normalizedFilePath, out string assetId, out string error, out bool created);
+                            if (destinationPath.Length == 0)
                             {
-                                File.Copy(normalizedFilePath, destinationPath, false);
+                                item.error = error;
+                                Mod.log.Info("Broadcast import failed: " + error);
+                                continue;
                             }
-
-                            importedAssets.Add(Dto(destinationPath));
+                            item.assetId = assetId;
+                            bool reused = AssetStore.HasFile(assetId);
+                            AssetStore.Register(assetId, newImport: created);
+                            existing.TryGetValue(destinationFileName, out BroadcastWorkbenchAssetDto current);
+                            if (current != null && !string.IsNullOrEmpty(Path(current.path)))
+                            {
+                                bool same = current.assetId == assetId;
+                                if (string.IsNullOrEmpty(current.assetId))
+                                {
+                                    same = AssetStore.HasContent(current.path, assetId, out error);
+                                    if (!string.IsNullOrEmpty(error))
+                                    {
+                                        item.error = error;
+                                        Mod.log.Info("Broadcast import failed: " + error);
+                                        continue;
+                                    }
+                                }
+                                if (same) { item.status = "existing"; continue; }
+                                item.previousId = !string.IsNullOrEmpty(current.assetId) ? current.assetId : AssetStore.LegacyPath(current.path);
+                                BroadcastAssetImportItem confirmation = (request?.confirmations ?? Array.Empty<BroadcastAssetImportItem>())
+                                    .FirstOrDefault(candidate => string.Equals(candidate?.path, normalizedFilePath, StringComparison.OrdinalIgnoreCase)
+                                        && candidate.assetId == assetId && candidate.previousId == item.previousId);
+                                if (confirmation == null) { item.status = "conflict"; continue; }
+                            }
+                            BroadcastWorkbenchAssetDto imported = Dto(destinationPath);
+                            imported.name = current?.name ?? destinationFileName;
+                            imported.assetId = assetId;
+                            if (current != null)
+                            {
+                                Catalog.Remove(current);
+                                importedAssets.Remove(current);
+                                string name = current.name;
+                                MainThreadDispatcher.RunOnMainThread(() =>
+                                {
+                                    m_Ctx.Preview.StopForAsset(scope, name);
+                                    m_Announcements.RemoveAsset(scope, name);
+                                });
+                            }
+                            importedAssets.Add(imported);
+                            existing[destinationFileName] = imported;
+                            item.status = current != null ? "replaced" : reused ? "reused" : "added";
+                            }
+                            catch (Exception ex)
+                            {
+                                item.error = ex.Message;
+                                Mod.log.Info("Broadcast import failed: " + ex.Message);
+                            }
                         }
 
-                        if (importedAssets.Count == 0)
+                        result.importedCount = importedAssets.Count;
+                        if (importedAssets.Count != 0)
                         {
-                            result.success = true;
-                            return global::RapidTransitMod.Workbenches.Json.Write(result);
-                        }
-
                         Catalog.AddRange(importedAssets);
                         Catalog.Sort((left, right) =>
                             string.Compare(left?.name, right?.name, StringComparison.OrdinalIgnoreCase));
@@ -120,15 +168,14 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                             BrowseFolder = normalizedCurrentPath;
                         }
 
-                        AssetFolder = managedAssetDirectory;
                         PendingConflicts.Clear();
                         IncrementWorkbenchSnapshotVersion();
                         SaveWorkbench();
-                        result.success = true;
-                        result.importedCount = importedAssets.Count;
 
                         global::RapidTransitMod.Workbenches.UiEvents.Push(
                             m_Ctx.Snapshot.Build(scope, string.Empty));
+                        }
+                        result.success = !items.Any(item => item.status == "failed");
                         }
                     }
                     catch (Exception ex)
@@ -136,6 +183,15 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         result.error = ex.Message ?? string.Empty;
                         LogException("ImportBroadcastExternalAssetsJson", ex);
                     }
+
+                    AssetLifecycle.Instance?.CurrentChanged(m_State);
+                    if (!AssetStore.Flush())
+                    {
+                        result.success = false;
+                        result.error = AssetStore.Error;
+                    }
+                    m_Ctx.Persistence.MigrateLegacy();
+                    result.items = items.ToArray();
 
                     return global::RapidTransitMod.Workbenches.Json.Write(result);
                 }
@@ -148,11 +204,13 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         error = string.Empty
                     };
                     List<BroadcastWorkbenchAssetDto> catalogSnapshot = null;
+                    ModeScope requestScope = ModeScope.DefaultWorkbench;
 
                     try
                     {
                         LoadWorkbench();
                         ModeScope scope = Workbenches.ModeRequest.ReadBroadcastScope(requestJson, "deleteBroadcastAsset");
+                        requestScope = scope;
                         using (UseScope(scope))
                         {
                         catalogSnapshot = Catalog.Select(CloneAsset).ToList();
@@ -163,32 +221,32 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                             return global::RapidTransitMod.Workbenches.Json.Write(result);
                         }
 
-                        if (HasAppliedRefs(scope, normalizedAssetName))
+                        result.error = CheckAssetRefs(scope,
+                            new HashSet<string>(StringComparer.OrdinalIgnoreCase) { normalizedAssetName }, out List<Action> cleanup);
+                        foreach (Action action in cleanup) action();
+                        if (!string.IsNullOrEmpty(result.error))
                         {
-                            result.error = "broadcast-asset-in-use";
+                            if (cleanup.Count > 0) SaveAssetChanges(scope, true);
                             return global::RapidTransitMod.Workbenches.Json.Write(result);
                         }
 
                         if (!Remove(normalizedAssetName))
                         {
-                            result.error = "Selected asset was not found.";
+                            result.error = "broadcast-asset-not-found";
+                            if (cleanup.Count > 0) SaveAssetChanges(scope, true);
                             return global::RapidTransitMod.Workbenches.Json.Write(result);
                         }
 
                         PendingConflicts.Clear();
-                        IncrementWorkbenchSnapshotVersion();
-                        SaveWorkbench();
+                        SaveAssetChanges(scope, cleanup.Count > 0);
                         result.success = true;
-
-                        global::RapidTransitMod.Workbenches.UiEvents.Push(
-                            m_Ctx.Snapshot.Build(scope, string.Empty));
                         }
                     }
                     catch (Exception ex)
                     {
-                        RestoreCatalogSnapshot(catalogSnapshot);
-                        result.error = ex.Message ?? string.Empty;
-                        LogException("DeleteBroadcastAssetJson", ex);
+                        using (UseScope(requestScope)) RestoreCatalogSnapshot(catalogSnapshot);
+                        result.error = "broadcast-asset-delete-failed";
+                        log.Info("[BroadcastWorkbenchException] DeleteBroadcastAssetJson -> " + ex.ToString());
                     }
 
                     return global::RapidTransitMod.Workbenches.Json.Write(result);
@@ -202,35 +260,37 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         error = string.Empty
                     };
                     List<BroadcastWorkbenchAssetDto> catalogSnapshot = null;
+                    ModeScope requestScope = ModeScope.DefaultWorkbench;
 
                     try
                     {
                         ModeScope scope = Workbenches.ModeRequest.ReadBroadcastScope(requestJson, "deleteAllBroadcastAssets");
+                        requestScope = scope;
                         using (UseScope(scope))
                         {
                         LoadWorkbench();
                         catalogSnapshot = Catalog.Select(CloneAsset).ToList();
-                        if (HasAnyAppliedRefs(scope))
+                        HashSet<string> assetNames = new HashSet<string>(Catalog
+                            .Select(asset => asset?.name?.Trim()).Where(name => !string.IsNullOrEmpty(name)), StringComparer.OrdinalIgnoreCase);
+                        result.error = CheckAssetRefs(scope, assetNames, out List<Action> cleanup);
+                        foreach (Action action in cleanup) action();
+                        if (!string.IsNullOrEmpty(result.error))
                         {
-                            result.error = "broadcast-asset-in-use";
+                            if (cleanup.Count > 0) SaveAssetChanges(scope, true);
                             return global::RapidTransitMod.Workbenches.Json.Write(result);
                         }
 
                         RemoveAll();
                         PendingConflicts.Clear();
-                        IncrementWorkbenchSnapshotVersion();
-                        SaveWorkbench();
+                        SaveAssetChanges(scope, cleanup.Count > 0);
                         result.success = true;
-
-                        global::RapidTransitMod.Workbenches.UiEvents.Push(
-                            m_Ctx.Snapshot.Build(scope, string.Empty));
                         }
                     }
                     catch (Exception ex)
                     {
-                        RestoreCatalogSnapshot(catalogSnapshot);
-                        result.error = ex.Message ?? string.Empty;
-                        LogException("DeleteAllBroadcastAssetsJson", ex);
+                        using (UseScope(requestScope)) RestoreCatalogSnapshot(catalogSnapshot);
+                        result.error = "broadcast-asset-delete-failed";
+                        log.Info("[BroadcastWorkbenchException] DeleteAllBroadcastAssetsJson -> " + ex.ToString());
                     }
 
                     return global::RapidTransitMod.Workbenches.Json.Write(result);
@@ -446,6 +506,15 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                                 continue;
                             }
 
+                            if (!string.IsNullOrEmpty(current.assetId))
+                            {
+                                BroadcastWorkbenchAssetDto shared = CloneAsset(current);
+                                shared.path = AssetStore.Resolve(shared.assetId);
+                                shared.missing = string.IsNullOrEmpty(shared.path);
+                                refreshedCatalog.Add(shared);
+                                continue;
+                            }
+
                             if (scannedByName.TryGetValue(current.name, out BroadcastWorkbenchAssetDto scanned))
                             {
                                 refreshedCatalog.Add(CloneAsset(scanned));
@@ -455,6 +524,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                             refreshedCatalog.Add(new BroadcastWorkbenchAssetDto
                             {
                                 name = current.name ?? string.Empty,
+                                assetId = current.assetId ?? string.Empty,
                                 desc = current.desc ?? string.Empty,
                                 length = current.length ?? string.Empty,
                                 path = string.Empty,
@@ -465,6 +535,10 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                         Catalog.Clear();
                         Catalog.AddRange(refreshedCatalog.OrderBy(asset => asset?.name, StringComparer.OrdinalIgnoreCase));
+                        IncrementWorkbenchSnapshotVersion();
+                        SaveWorkbench();
+                        AssetLifecycle.Instance?.CurrentChanged(m_State);
+                        m_Ctx.Persistence.MigrateLegacy();
 
                         global::RapidTransitMod.Workbenches.UiEvents.Push(
                             m_Ctx.Snapshot.Build(scope, string.Empty));
@@ -726,7 +800,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                     ModeScope scope = CurrentScope;
                     MainThreadDispatcher.RunOnMainThread(() =>
-                        m_Ctx.Preview.StopAsset(normalizedAssetName, notify: true, modeToken: scope.Token));
+                        m_Ctx.Preview.StopForAsset(scope, normalizedAssetName));
 
                     for (int i = Catalog.Count - 1; i >= 0; i--)
                     {
@@ -755,7 +829,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                 {
                     ModeScope scope = CurrentScope;
                     MainThreadDispatcher.RunOnMainThread(() =>
-                        m_Ctx.Preview.StopAsset(string.Empty, notify: true, modeToken: scope.Token));
+                        m_Ctx.Preview.StopForAsset(scope, string.Empty));
 
                     // Keep broadcast source files on disk for now; deletion only mutates save state.
                     Catalog.Clear();
@@ -785,170 +859,95 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                 }
 
                 internal bool HasUsableAsset(string assetName)
+                    => AssetError(assetName).Length == 0;
+
+                internal string AssetError(string assetName)
                 {
                     if (string.IsNullOrWhiteSpace(assetName))
                     {
-                        return false;
+                        return "broadcast-asset-not-found";
                     }
 
-                    return Catalog.Any(asset =>
-                        string.Equals(asset?.name, assetName, StringComparison.OrdinalIgnoreCase)
-                        && !string.IsNullOrEmpty(Path(asset?.path)));
+                    bool found = false;
+                    foreach (BroadcastWorkbenchAssetDto asset in Catalog)
+                    {
+                        if (!string.Equals(asset?.name, assetName, StringComparison.OrdinalIgnoreCase)) continue;
+                        found = true;
+                        if (!string.IsNullOrEmpty(Path(asset?.path))) return string.Empty;
+                    }
+                    return found ? "broadcast-asset-file-not-found" : "broadcast-asset-not-found";
                 }
 
-                private bool HasAnyAppliedRefs(ModeScope scope)
+                private void SaveAssetChanges(ModeScope scope, bool refsChanged)
                 {
-                    HashSet<string> assetNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                    for (int i = 0; i < Catalog.Count; i++)
-                    {
-                        string assetName = Catalog[i]?.name?.Trim() ?? string.Empty;
-                        if (!string.IsNullOrEmpty(assetName))
-                        {
-                            assetNames.Add(assetName);
-                        }
-                    }
-
-                    if (assetNames.Count == 0)
-                    {
-                        return false;
-                    }
-
-                    foreach (string assetName in assetNames)
-                    {
-                        if (HasAppliedRefs(scope, assetName))
-                        {
-                            return true;
-                        }
-                    }
-
-                    return false;
+                    IncrementWorkbenchSnapshotVersion();
+                    SaveWorkbench();
+                    AssetLifecycle.Instance?.CurrentChanged(m_State);
+                    if (refsChanged) m_Announcements.ClearLineChecks();
+                    global::RapidTransitMod.Workbenches.UiEvents.Push(m_Ctx.Snapshot.Build(scope, string.Empty));
                 }
 
-                private bool HasAppliedRefs(ModeScope scope, string assetName)
+                private string CheckAssetRefs(ModeScope scope, HashSet<string> names, out List<Action> cleanup)
                 {
-                    if (string.IsNullOrWhiteSpace(assetName))
+                    cleanup = new List<Action>();
+                    if (names.Count == 0) return string.Empty;
+                    ModRuntimeHostSystem runtime = ModRuntimeHostSystem.Instance;
+                    List<WorkbenchLineRuntime> lines = null;
+                    bool inUse = false;
+                    bool unknown = false;
+                    foreach (string lineId in AppliedBindings.Keys.Concat(AppliedRules.Keys).Concat(AppliedPlatforms.Keys)
+                        .Distinct(StringComparer.Ordinal).Where(id => MatchesAppliedLineScope(scope, id)))
                     {
-                        return false;
-                    }
+                        AppliedBindings.TryGetValue(lineId, out var bindings);
+                        AppliedRules.TryGetValue(lineId, out var rules);
+                        AppliedPlatforms.TryGetValue(lineId, out var platforms);
+                        var bindingRefs = bindings?.Where(entry => entry.Value?.Any(binding => names.Contains(binding?.assetName ?? string.Empty)) == true).ToArray();
+                        var ruleRefs = rules?.Where(rule => rule?.nodes?.Any(node => IsTargetNode(node, names)) == true).ToArray();
+                        var platformRefs = platforms?.Where(entry => entry.Value != null
+                            && TriggerConstants.IsPlatformTrigger(entry.Value.triggerId)
+                            && entry.Value.nodes?.Any(node => IsTargetNode(node, names)) == true).ToArray();
+                        if ((bindingRefs?.Length ?? 0) + (ruleRefs?.Length ?? 0) + (platformRefs?.Length ?? 0) == 0) continue;
+                        if (runtime?.m_SystemReady != true) { unknown = true; continue; }
 
-                    return HasBindingRefs(scope, AppliedBindings, assetName)
-                        || HasRuleRefs(scope, AppliedRules, assetName)
-                        || HasPlatformRefs(scope, AppliedPlatforms, assetName);
-                }
+                        lines = lines ?? Lines();
+                        Entity line = lines?.FirstOrDefault(candidate => string.Equals(candidate?.Id, lineId, StringComparison.Ordinal))?.Entity ?? Entity.Null;
+                        if (line == Entity.Null && LineKey.TryParse(lineId, scope.Mode, out LineKey key))
+                            runtime.m_LineAnchorCatalog?.TryEntity(key, out line);
+                        if (line == Entity.Null) { unknown = true; continue; }
+                        bool deleted = !EntityManager.Exists(line) || EntityManager.HasComponent<Game.Common.Deleted>(line);
+                        LineCache cache = null;
+                        bool stationsReady = deleted || ((bindingRefs?.Length ?? 0) + (platformRefs?.Length ?? 0) > 0
+                            && EntityManager.HasBuffer<RouteWaypoint>(line)
+                            && m_Announcements.Stations.TryCache(line, EntityManager.GetBuffer<RouteWaypoint>(line, true), out cache));
 
-                private static bool HasBindingRefs(
-                    ModeScope scope,
-                    Dictionary<string, Dictionary<string, List<BroadcastWorkbenchStationBindingDto>>> allBindings,
-                    string assetName)
-                {
-                    foreach (KeyValuePair<string, Dictionary<string, List<BroadcastWorkbenchStationBindingDto>>> lineEntry in allBindings)
-                    {
-                        if (!MatchesAppliedLineScope(scope, lineEntry.Key))
+                        foreach (var entry in bindingRefs ?? Array.Empty<KeyValuePair<string, List<BroadcastWorkbenchStationBindingDto>>>())
                         {
-                            continue;
-                        }
-
-                        Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> bindings = lineEntry.Value;
-                        if (bindings == null)
-                        {
-                            continue;
-                        }
-
-                        foreach (KeyValuePair<string, List<BroadcastWorkbenchStationBindingDto>> stationEntry in bindings)
-                        {
-                            if ((stationEntry.Value ?? new List<BroadcastWorkbenchStationBindingDto>())
-                                .Any(binding => string.Equals(binding?.assetName, assetName, StringComparison.OrdinalIgnoreCase)))
+                            if (!stationsReady) { unknown = true; continue; }
+                            if (!deleted && cache.StationById.ContainsKey(entry.Key)) { inUse = true; continue; }
+                            cleanup.Add(() =>
                             {
-                                return true;
-                            }
+                                entry.Value.RemoveAll(binding => names.Contains(binding?.assetName ?? string.Empty));
+                                if (entry.Value.Count == 0) bindings.Remove(entry.Key);
+                                if (bindings.Count == 0) AppliedBindings.Remove(lineId);
+                            });
+                        }
+                        foreach (BroadcastWorkbenchRuleDto rule in ruleRefs ?? Array.Empty<BroadcastWorkbenchRuleDto>())
+                        {
+                            if (!deleted) { inUse = true; continue; }
+                            cleanup.Add(() => rule.nodes = rule.nodes.Where(node => !IsTargetNode(node, names)).ToArray());
+                        }
+                        foreach (var entry in platformRefs ?? Array.Empty<KeyValuePair<string, BroadcastWorkbenchPlatformAnnouncementDto>>())
+                        {
+                            if (!stationsReady) { unknown = true; continue; }
+                            if (!deleted && cache.StationById.ContainsKey(entry.Value.stationId)) { inUse = true; continue; }
+                            cleanup.Add(() => entry.Value.nodes = entry.Value.nodes.Where(node => !IsTargetNode(node, names)).ToArray());
                         }
                     }
-
-                    return false;
+                    return inUse ? "broadcast-asset-in-use" : unknown ? "broadcast-asset-refs-unverified" : string.Empty;
                 }
 
-                private static bool HasRuleRefs(
-                    ModeScope scope,
-                    Dictionary<string, List<BroadcastWorkbenchRuleDto>> allRules,
-                    string assetName)
-                {
-                    foreach (KeyValuePair<string, List<BroadcastWorkbenchRuleDto>> lineEntry in allRules)
-                    {
-                        if (!MatchesAppliedLineScope(scope, lineEntry.Key))
-                        {
-                            continue;
-                        }
-
-                        List<BroadcastWorkbenchRuleDto> rules = lineEntry.Value;
-                        if (rules == null)
-                        {
-                            continue;
-                        }
-
-                        for (int i = 0; i < rules.Count; i++)
-                        {
-                            if (HasAssetNode(rules[i]?.nodes, assetName))
-                            {
-                                return true;
-                            }
-                        }
-                    }
-
-                    return false;
-                }
-
-                private static bool HasPlatformRefs(
-                    ModeScope scope,
-                    Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> allAnnouncements,
-                    string assetName)
-                {
-                    foreach (KeyValuePair<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> lineEntry in allAnnouncements)
-                    {
-                        if (!MatchesAppliedLineScope(scope, lineEntry.Key))
-                        {
-                            continue;
-                        }
-
-                        Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> announcements = lineEntry.Value;
-                        if (announcements == null)
-                        {
-                            continue;
-                        }
-
-                        foreach (KeyValuePair<string, BroadcastWorkbenchPlatformAnnouncementDto> stationEntry in announcements)
-                        {
-                            if (stationEntry.Value != null
-                                && TriggerConstants.IsPlatformTrigger(stationEntry.Value.triggerId)
-                                && HasAssetNode(stationEntry.Value.nodes, assetName))
-                            {
-                                return true;
-                            }
-                        }
-                    }
-
-                    return false;
-                }
-
-                private static bool HasAssetNode(BroadcastWorkbenchRuleNodeDto[] nodes, string assetName)
-                {
-                    if (nodes == null || nodes.Length == 0)
-                    {
-                        return false;
-                    }
-
-                    for (int i = 0; i < nodes.Length; i++)
-                    {
-                        BroadcastWorkbenchRuleNodeDto node = nodes[i];
-                        if (node != null
-                            && string.Equals(node.type, "asset", StringComparison.Ordinal)
-                            && string.Equals(node.name, assetName, StringComparison.OrdinalIgnoreCase))
-                        {
-                            return true;
-                        }
-                    }
-
-                    return false;
-                }
+                private static bool IsTargetNode(BroadcastWorkbenchRuleNodeDto node, HashSet<string> names)
+                    => node != null && string.Equals(node.type, "asset", StringComparison.Ordinal) && names.Contains(node.name ?? string.Empty);
 
                 private static bool MatchesAppliedLineScope(ModeScope scope, string lineId)
                 {
@@ -975,6 +974,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     return new BroadcastWorkbenchAssetDto
                     {
                         name = asset.name ?? string.Empty,
+                        assetId = asset.assetId ?? string.Empty,
                         desc = asset.desc ?? string.Empty,
                         length = asset.length ?? string.Empty,
                         path = asset.path ?? string.Empty,

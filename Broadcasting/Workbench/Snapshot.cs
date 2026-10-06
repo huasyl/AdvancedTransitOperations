@@ -30,6 +30,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     ModeScope scope = Workbenches.ModeRequest.ReadBroadcastScope(requestJson, "loadBroadcastSnapshot");
                     string preferredLineId = scope.NormalizeLineId(Workbenches.ModeRequest.ReadPreferredLine(requestJson));
                     LoadWorkbench();
+                    m_Ctx.Persistence.MigrateLegacy();
                     using (UseScope(scope))
                     {
                         return global::RapidTransitMod.Workbenches.Json.Write(Build(scope, preferredLineId));
@@ -67,6 +68,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                     return new BroadcastWorkbenchSnapshot
                     {
+                        assetStorage = AssetLifecycle.Instance?.Latest,
                         mode = scope.Token,
                         selectedLineId = activeRuntime?.Id ?? string.Empty,
                         lines = runtimeLines.Select(Line).ToArray(),
@@ -138,6 +140,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                     return new BroadcastWorkbenchSnapshot
                     {
+                        assetStorage = AssetLifecycle.Instance?.Latest,
                         mode = scope.Token,
                         selectedLineId = activeLineId,
                         lines = runtimeLines.Select(Line).ToArray(),

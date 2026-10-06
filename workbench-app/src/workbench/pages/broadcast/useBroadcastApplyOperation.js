@@ -11,6 +11,10 @@ function isTerminalBroadcastApplyState(state) {
   return state === "completed" || state === "failed" || state === "missing" || state === "superseded";
 }
 
+export function isBroadcastAssetValidationError(result) {
+  return !result?.success && (result?.error === "broadcast-asset-not-found" || result?.error === "broadcast-asset-file-not-found");
+}
+
 export default function useBroadcastApplyOperation(workbenchApi) {
   const [applyState, setApplyState] = useState({
     phase: "idle",
@@ -81,11 +85,16 @@ export default function useBroadcastApplyOperation(workbenchApi) {
         return { interrupted: false, superseded: true, result: null, latestStatus };
       }
 
+      const result = latestStatus?.result || null;
+      if (isBroadcastAssetValidationError(result)) {
+        setApplyState({ phase: "error", error: "", operationId: startedOperation.operationId, result });
+        return { interrupted: false, superseded: false, result, latestStatus };
+      }
+
       if (!latestStatus || latestStatus.state === "missing" || latestStatus.state === "failed") {
         throw new Error(latestStatus?.error || "broadcast-apply-operation-failed");
       }
 
-      const result = latestStatus.result || null;
       if (!result?.success) {
         throw new Error(result?.error || "broadcast-apply-failed");
       }
@@ -101,12 +110,11 @@ export default function useBroadcastApplyOperation(workbenchApi) {
       });
       return { interrupted: false, superseded: false, result, latestStatus };
     } catch (error) {
-      const message = error instanceof Error ? error.message : "broadcast-apply-failed";
       if (generationRef.current === generation
         && (typeof isCurrentMode !== "function" || isCurrentMode(mode))) {
         setApplyState({
           phase: "error",
-          error: message,
+          error: "broadcast-apply-failed",
           operationId: "",
           result: null,
         });

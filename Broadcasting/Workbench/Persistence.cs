@@ -34,6 +34,101 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
         internal Persistence(Context context) : base(context) { }
 
+        private bool m_Migrating;
+
+        internal async void MigrateLegacy()
+        {
+            AssetLifecycle lifecycle = AssetLifecycle.Instance;
+            if (m_Migrating || lifecycle == null) return;
+            bool started = false;
+            try
+            {
+                int generation = lifecycle.Generation;
+                if (!lifecycle.IsCurrent(m_State, generation)) return;
+                var targets = new Dictionary<string, List<BroadcastWorkbenchAssetDto>>(StringComparer.OrdinalIgnoreCase);
+                foreach (var mode in m_State.AssetsByMode.Values)
+                    foreach (BroadcastWorkbenchAssetDto asset in mode.Catalog)
+                        if (asset != null && string.IsNullOrEmpty(asset.assetId) && !string.IsNullOrEmpty(asset.path))
+                        {
+                            string path = AssetStore.LegacyPath(asset.path);
+                            if (!targets.TryGetValue(path, out var assets)) targets[path] = assets = new List<BroadcastWorkbenchAssetDto>();
+                            assets.Add(asset);
+                        }
+                if (targets.Count == 0) return;
+                m_Migrating = true;
+                lifecycle.BeginMigration();
+                started = true;
+                List<MigrationResult> results = await Task.Run(() =>
+                {
+                    var migrated = new List<MigrationResult>();
+                    foreach (string source in targets.Keys)
+                    {
+                        var result = new MigrationResult { Source = source };
+                        result.Path = AssetStore.Import(source, out result.Id, out result.Error);
+                        migrated.Add(result);
+                    }
+                    return migrated;
+                }).ConfigureAwait(false);
+                MainThreadDispatcher.RunOnMainThread(() =>
+                {
+                    m_Migrating = false;
+                    if (!ReferenceEquals(AssetLifecycle.Instance, lifecycle)) return;
+                    lifecycle.EndMigration();
+                    try
+                    {
+                        bool current = lifecycle.IsCurrent(m_State, generation);
+                        var present = new HashSet<BroadcastWorkbenchAssetDto>();
+                        if (current)
+                            foreach (var mode in m_State.AssetsByMode.Values)
+                                foreach (var asset in mode.Catalog) present.Add(asset);
+                        bool changed = false;
+                        foreach (MigrationResult result in results)
+                        {
+                            if (!string.IsNullOrEmpty(result.Error)) { lifecycle.Report(result.Error); continue; }
+                            AssetStore.Register(result.Id, result.Source);
+                            foreach (BroadcastWorkbenchAssetDto asset in targets[result.Source])
+                            {
+                                if (!present.Contains(asset) || !string.IsNullOrEmpty(asset.assetId)
+                                    || AssetStore.LegacyPath(asset.path) != result.Source) continue;
+                                asset.assetId = result.Id;
+                                asset.path = result.Path;
+                                asset.missing = false;
+                                changed = true;
+                            }
+                        }
+                        if (changed)
+                        {
+                            IncrementWorkbenchSnapshotVersion();
+                            SaveWorkbench();
+                            lifecycle.CurrentChanged(m_State);
+                        }
+                        if (!AssetStore.Flush()) lifecycle.Report(AssetStore.Error);
+                    }
+                    catch (Exception ex) { lifecycle.Report(ex); }
+                });
+            }
+            catch (Exception ex)
+            {
+                MainThreadDispatcher.RunOnMainThread(() =>
+                {
+                    m_Migrating = false;
+                    if (ReferenceEquals(AssetLifecycle.Instance, lifecycle))
+                    {
+                        if (started) lifecycle.EndMigration();
+                        lifecycle.Report(ex);
+                    }
+                });
+            }
+        }
+
+        private sealed class MigrationResult
+        {
+            internal string Source;
+            internal string Id;
+            internal string Path;
+            internal string Error;
+        }
+
         internal void Build(DispatchWorkbenchPersistentState persisted)
         {
             if (persisted == null)
@@ -86,6 +181,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     : new BroadcastWorkbenchPersistedAssetState
                     {
                         name = asset.name ?? string.Empty,
+                        assetId = asset.assetId ?? string.Empty,
                         desc = asset.desc ?? string.Empty,
                         length = asset.length ?? string.Empty,
                         extension = asset.extension ?? string.Empty
@@ -305,10 +401,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                 if (!string.IsNullOrEmpty(broadcastAssetDirectory))
                 {
                     string persistedDirectory = RapidTransitMod.Broadcasting.WorkbenchBackend.Assets.Dir(broadcastAssetDirectory);
-                    string legacyRootDirectory = RapidTransitMod.Broadcasting.WorkbenchBackend.Assets.NormalizeDirectoryBrowserPath(
-                        AssetScope.RootDir());
-                    if (!string.IsNullOrEmpty(persistedDirectory)
-                        && !string.Equals(persistedDirectory, legacyRootDirectory, StringComparison.OrdinalIgnoreCase))
+                    if (!string.IsNullOrEmpty(persistedDirectory))
                     {
                         managedAssetDirectory = persistedDirectory;
                     }
@@ -324,17 +417,31 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                 for (int i = 0; i < persistedAssets.Length; i++)
                 {
                     BroadcastWorkbenchPersistedAssetState asset = persistedAssets[i];
-                    if (asset == null || string.IsNullOrWhiteSpace(asset.name) || string.IsNullOrEmpty(managedAssetDirectory))
+                    if (asset == null || string.IsNullOrWhiteSpace(asset.name))
                     {
                         continue;
                     }
 
-                    string candidatePath = IoPath.Combine(managedAssetDirectory, asset.name);
-                    string resolvedPath = RapidTransitMod.Broadcasting.WorkbenchBackend.Assets.Path(candidatePath);
+                    string candidatePath = string.IsNullOrEmpty(managedAssetDirectory)
+                        ? string.Empty : IoPath.Combine(managedAssetDirectory, asset.name);
+                    string resolvedPath = !string.IsNullOrEmpty(asset.assetId)
+                        ? AssetStore.Resolve(asset.assetId)
+                        : RapidTransitMod.Broadcasting.WorkbenchBackend.Assets.Path(candidatePath);
+                    if (string.IsNullOrEmpty(asset.assetId)
+                        && string.IsNullOrEmpty(resolvedPath)
+                        && scope.Mode == ModeScope.DefaultWorkbench.Mode
+                        && string.Equals(managedAssetDirectory,
+                            RapidTransitMod.Broadcasting.WorkbenchBackend.Assets.NormalizeDirectoryBrowserPath(AssetScope.RootDir()),
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        resolvedPath = RapidTransitMod.Broadcasting.WorkbenchBackend.Assets.Path(
+                            IoPath.Combine(AssetScope.RootDir(), scope.Token, asset.name));
+                    }
 
                     Catalog.Add(new BroadcastWorkbenchAssetDto
                     {
                         name = asset.name ?? string.Empty,
+                        assetId = asset.assetId ?? string.Empty,
                         desc = !string.IsNullOrEmpty(asset.desc)
                             ? asset.desc
                             : (asset.extension ?? string.Empty).TrimStart('.').ToUpperInvariant(),

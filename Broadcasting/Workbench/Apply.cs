@@ -114,8 +114,10 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                 }
 
                     HashSet<string> validStationIds = ValidStationIds(m_Ctx.Snapshot.Groups(runtime.Entity));
-                    m_Ctx.Bindings.Validate(line.StationBindings);
-                    PreparedLineCommit preparedLine = PrepareLine(line, validStationIds);
+                    ApplyResult validation = new ApplyResult { mode = prepared.Scope.Token, lineId = line.LineId };
+                    if (!m_Ctx.Bindings.Validate(line.StationBindings, validation)) return validation;
+                    PreparedLineCommit preparedLine = PrepareLine(line, validStationIds, validation);
+                    if (preparedLine == null) return validation;
                     preparedCommits[line.LineId] = preparedLine;
                     warnings.AddRange(m_Ctx.Snapshot.Warnings(line.LineId));
                 }
@@ -173,7 +175,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
             }
         }
 
-        private PreparedLineCommit PrepareLine(PreparedLine line, HashSet<string> validStationIds)
+        private PreparedLineCommit PrepareLine(PreparedLine line, HashSet<string> validStationIds, ApplyResult validation)
         {
             Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> bindings =
                 new Dictionary<string, List<BroadcastWorkbenchStationBindingDto>>(StringComparer.Ordinal);
@@ -190,7 +192,14 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
             }
 
             List<BroadcastWorkbenchRuleDto> rules = Rules.Normalize(line.Rules);
-            ValidateRuleAssetNodes(rules.SelectMany(rule => rule?.nodes ?? Array.Empty<BroadcastWorkbenchRuleNodeDto>()));
+            foreach (BroadcastWorkbenchRuleDto rule in rules)
+            {
+                if (!ValidateRuleAssetNodes(rule.nodes, validation))
+                {
+                    validation.ruleId = rule.id;
+                    return null;
+                }
+            }
             Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> platforms =
                 new Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>(StringComparer.Ordinal);
 
@@ -212,7 +221,11 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     throw new InvalidOperationException(
                         "Unsupported platform announcement trigger.");
                 }
-                ValidateRuleAssetNodes(normalized.nodes);
+                if (!ValidateRuleAssetNodes(normalized.nodes, validation))
+                {
+                    validation.stationId = normalized.stationId;
+                    return null;
+                }
                 platforms[Platforms.Key(normalized.stationId, normalized.uiTriggerId)] = normalized;
             }
 
@@ -241,11 +254,11 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
             }
         }
 
-        private void ValidateRuleAssetNodes(IEnumerable<BroadcastWorkbenchRuleNodeDto> nodes)
+        private bool ValidateRuleAssetNodes(IEnumerable<BroadcastWorkbenchRuleNodeDto> nodes, ApplyResult validation)
         {
             if (nodes == null)
             {
-                return;
+                return true;
             }
 
             foreach (BroadcastWorkbenchRuleNodeDto node in nodes)
@@ -261,14 +274,15 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     continue;
                 }
 
-                if (!m_Ctx.Assets.HasUsableAsset(assetName))
+                string error = m_Ctx.Assets.AssetError(assetName);
+                if (error.Length != 0)
                 {
-                    throw new InvalidOperationException(
-                        m_Ctx.Assets.HasCatalogAsset(assetName)
-                            ? "Selected asset file was not found."
-                            : "Selected asset was not found.");
+                    validation.error = error;
+                    validation.assetName = assetName;
+                    return false;
                 }
             }
+            return true;
         }
 
         private void CommitLine(string lineId, PreparedLineCommit prepared)

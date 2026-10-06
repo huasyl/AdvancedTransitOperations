@@ -204,11 +204,11 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     }
                 }
 
-                internal void Validate(IEnumerable<BroadcastWorkbenchStationBindingDto> bindings)
+                internal bool Validate(IEnumerable<BroadcastWorkbenchStationBindingDto> bindings, ApplyResult result = null)
                 {
                     if (bindings == null)
                     {
-                        return;
+                        return true;
                     }
 
                     foreach (BroadcastWorkbenchStationBindingDto binding in bindings)
@@ -219,14 +219,23 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                             continue;
                         }
 
-                        if (!m_Ctx.Assets.HasUsableAsset(assetName))
+                        string error = m_Ctx.Assets.AssetError(assetName);
+                        if (error.Length != 0)
                         {
+                            if (result != null)
+                            {
+                                result.error = error;
+                                result.assetName = assetName;
+                                result.stationId = binding.stationId;
+                                return false;
+                            }
                             throw new InvalidOperationException(
-                                m_Ctx.Assets.HasCatalogAsset(assetName)
+                                error == "broadcast-asset-file-not-found"
                                     ? "Selected asset file was not found."
                                     : "Selected asset was not found.");
                         }
                     }
+                    return true;
                 }
 
                 internal Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> EnsureDraft(string lineId)

@@ -62,8 +62,11 @@ namespace RapidTransitMod.Broadcasting
 
         internal int ClampVolume(int volumePercent) => m_Source.Clamp(volumePercent);
 
-        internal string AssetCacheKey(string lineId, string assetName)
-            => m_Source.AssetCacheKey(lineId, assetName);
+        internal BroadcastWorkbenchAssetDto AssetForLine(string lineId, string assetName)
+            => m_Source.AssetForLine(lineId, assetName);
+
+        internal string AssetCacheKey(string lineId, string assetName, string assetId)
+            => m_Source.AssetCacheKey(lineId, assetName, assetId);
 
         internal LineFlags Flags(string lineId)
         {

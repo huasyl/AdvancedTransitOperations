@@ -8,6 +8,8 @@ namespace RapidTransitMod
         [DataMember]
         public string name;
         [DataMember]
+        public string assetId;
+        [DataMember]
         public string desc;
         [DataMember]
         public string length;
@@ -22,6 +24,10 @@ namespace RapidTransitMod
     [DataContract]
     public class BroadcastWorkbenchSnapshot
     {
+        [DataMember]
+        public BroadcastAssetStorageResult assetStorage;
+        [DataMember]
+        public bool assetsOnly;
         [DataMember]
         public string mode;
         [DataMember]
@@ -199,6 +205,10 @@ namespace RapidTransitMod
         public string currentPath;
         [DataMember]
         public string[] selectedPaths;
+        [DataMember]
+        public string[] pendingDeleteNames;
+        [DataMember]
+        public BroadcastAssetImportItem[] confirmations;
     }
 
     [DataContract]
@@ -209,7 +219,33 @@ namespace RapidTransitMod
         [DataMember]
         public int importedCount;
         [DataMember]
+        public string mode;
+        [DataMember]
+        public BroadcastAssetImportItem[] items;
+        [DataMember]
         public string error;
+    }
+
+    [DataContract]
+    public class BroadcastAssetImportItem
+    {
+        [DataMember] public string name;
+        [DataMember] public string path;
+        [DataMember] public string assetId;
+        [DataMember] public string previousId;
+        [DataMember] public string status;
+        [DataMember] public string error;
+    }
+
+    [DataContract]
+    public class BroadcastAssetStorageResult
+    {
+        [DataMember] public string state;
+        [DataMember] public int generation;
+        [DataMember] public int deleted;
+        [DataMember] public int failed;
+        [DataMember] public string error;
+        [DataMember] public string errorFile;
     }
 
     [DataContract]
@@ -458,6 +494,14 @@ namespace RapidTransitMod
         [DataMember]
         public string error;
         [DataMember]
+        public string assetName;
+        [DataMember]
+        public string lineId;
+        [DataMember]
+        public string ruleId;
+        [DataMember]
+        public string stationId;
+        [DataMember]
         public string version;
         [DataMember]
         public string[] appliedLineIds;
@@ -511,6 +555,8 @@ namespace RapidTransitMod
     {
         [DataMember]
         public string name;
+        [DataMember]
+        public string assetId;
         [DataMember]
         public string desc;
         [DataMember]

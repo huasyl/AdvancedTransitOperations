@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using Unity.Entities;
 using UnityEngine;
 using UnityEngine.Networking;
@@ -42,8 +43,13 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
         internal int Clamp(int volumePercent) => Preview.Clamp(volumePercent);
 
-        internal string AssetCacheKey(string lineId, string assetName)
-            => ScopeForLine(lineId).Token + ":" + (assetName ?? string.Empty);
+        internal BroadcastWorkbenchAssetDto AssetForLine(string lineId, string assetName)
+            => AssetsForLine(lineId).FirstOrDefault(asset =>
+                string.Equals(asset?.name, assetName, System.StringComparison.OrdinalIgnoreCase));
+
+        internal string AssetCacheKey(string lineId, string assetName, string assetId)
+            => ScopeForLine(lineId).Token + ":" + (assetName ?? string.Empty)
+                + ":" + (string.IsNullOrEmpty(assetId) ? "legacy" : assetId);
 
         private static ModeScope ScopeForLine(string lineId)
         {
