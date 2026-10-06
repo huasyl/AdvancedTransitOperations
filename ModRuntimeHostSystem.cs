@@ -2908,8 +2908,6 @@ namespace RapidTransitMod
 
         public void PreSerialize(Context context)
         {
-            bool timing = RtLog.VerboseEnabled;
-            long started = timing ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
             try
             {
                 m_VehicleCache?.Ensure();
@@ -2943,13 +2941,6 @@ namespace RapidTransitMod
             catch (Exception ex)
             {
                 log.Info("[OverviewFeatureSettingsPersist] Save failed -> " + ex.GetType().Name + ": " + ex.Message);
-            }
-            if (timing)
-            {
-                double elapsed = (System.Diagnostics.Stopwatch.GetTimestamp() - started)
-                    * 1000d / System.Diagnostics.Stopwatch.Frequency;
-                log.Info("[RtSaveTiming] scope=hostPreparation totalMs="
-                    + elapsed.ToString("F3", System.Globalization.CultureInfo.InvariantCulture));
             }
         }
 
