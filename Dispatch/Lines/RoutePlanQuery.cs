@@ -84,6 +84,7 @@ namespace RapidTransitMod.Dispatch.Lines
 
             List<RouteWaypointRef> ordered = new List<RouteWaypointRef>(waypoints.Length);
             List<RouteStopRef> stops = new List<RouteStopRef>();
+            Dictionary<string, int> occurrences = new Dictionary<string, int>(StringComparer.Ordinal);
             for (int i = 0; i < waypoints.Length; i++)
             {
                 Entity waypoint = waypoints[i].m_Waypoint;
@@ -101,7 +102,9 @@ namespace RapidTransitMod.Dispatch.Lines
                     if (string.IsNullOrEmpty(stopKey))
                         return false;
 
-                    stops.Add(new RouteStopRef(i, waypoint, stop, stopKey));
+                    occurrences.TryGetValue(stopKey, out int occurrence);
+                    occurrences[stopKey] = ++occurrence;
+                    stops.Add(new RouteStopRef(i, waypoint, stop, stopKey, occurrence));
                 }
 
                 ordered.Add(new RouteWaypointRef(i, waypoint, stop, stopKey));
@@ -211,13 +214,15 @@ namespace RapidTransitMod.Dispatch.Lines
         public readonly Entity Waypoint;
         public readonly Entity Stop;
         public readonly string StopKey;
+        public readonly int StationOccurrence;
 
-        public RouteStopRef(int waypointIndex, Entity waypoint, Entity stop, string stopKey)
+        public RouteStopRef(int waypointIndex, Entity waypoint, Entity stop, string stopKey, int stationOccurrence)
         {
             WaypointIndex = waypointIndex;
             Waypoint = waypoint;
             Stop = stop;
             StopKey = stopKey ?? string.Empty;
+            StationOccurrence = stationOccurrence;
         }
     }
 }

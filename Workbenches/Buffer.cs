@@ -69,11 +69,6 @@ namespace RapidTransitMod.Workbenches
             while (offset < payload.Length)
             {
                 int chunkLength = Fit(payload, offset);
-                if (chunkLength <= 0)
-                {
-                    chunkLength = 1;
-                }
-
                 chunks.Add(payload.Substring(offset, chunkLength));
                 offset += chunkLength;
             }
@@ -99,57 +94,21 @@ namespace RapidTransitMod.Workbenches
 
         internal static int Fit(string payload, int offset)
         {
-            int remaining = payload.Length - offset;
-            if (remaining <= 0)
+            int capacity = default(FixedString4096Bytes).Capacity;
+            int bytes = 0;
+            int end = offset;
+            while (end < payload.Length)
             {
-                return 0;
+                char character = payload[end];
+                bool pair = char.IsHighSurrogate(character) && end + 1 < payload.Length
+                    && char.IsLowSurrogate(payload[end + 1]);
+                int size = pair ? 4 : character <= 0x7f ? 1 : character <= 0x7ff ? 2 : 3;
+                if (bytes + size > capacity)
+                    break;
+                bytes += size;
+                end += pair ? 2 : 1;
             }
-
-            int low = 1;
-            int high = remaining;
-            int best = 1;
-            while (low <= high)
-            {
-                int mid = low + (high - low) / 2;
-                int candidateLength = Fit(payload, offset, mid);
-                if (candidateLength <= 0)
-                {
-                    high = mid - 1;
-                    continue;
-                }
-
-                string candidate = payload.Substring(offset, candidateLength);
-                FixedString4096Bytes fixedCandidate = candidate;
-                if (fixedCandidate.ToString() == candidate)
-                {
-                    best = candidateLength;
-                    low = candidateLength + 1;
-                }
-                else
-                {
-                    high = candidateLength - 1;
-                }
-            }
-
-            return best;
-        }
-
-        private static int Fit(string payload, int offset, int proposedLength)
-        {
-            int endIndex = Math.Min(payload.Length, offset + proposedLength);
-            if (endIndex <= offset)
-            {
-                return 0;
-            }
-
-            if (endIndex < payload.Length
-                && char.IsHighSurrogate(payload[endIndex - 1])
-                && char.IsLowSurrogate(payload[endIndex]))
-            {
-                endIndex--;
-            }
-
-            return endIndex - offset;
+            return end - offset;
         }
     }
 }

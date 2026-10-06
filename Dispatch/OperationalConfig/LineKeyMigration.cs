@@ -30,7 +30,6 @@ namespace RapidTransitMod
 
             RunDomain("workbench", () => global::RapidTransitMod.Dispatch.Workbench.LineMigration.Run(catalog, report));
             RunDomain("broadcasting", () => global::RapidTransitMod.Broadcasting.LineMigration.Run(catalog, report));
-            RunDomain("passengerflow", () => global::RapidTransitMod.PassengerFlow.LineMigration.Run(catalog, report));
             RunDomain("planner", () => global::RapidTransitMod.Planner.LineMigration.Run(catalog, report));
         }
 

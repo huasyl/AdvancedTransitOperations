@@ -1,323 +1,340 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getWorkbenchApi } from "../../shared/workbench-api";
-import { buildPassengerFlowViewModel, filterPassengerFlow } from "./passenger-view-model";
-import PassengerLineTabs from "./components/PassengerLineTabs";
-import PassengerMetricCards from "./components/PassengerMetricCards";
-import PassengerOdFlowDiagram from "./components/PassengerOdFlowDiagram";
-import PassengerSectionRanking from "./components/PassengerSectionRanking";
-import PassengerStationVolumeChart from "./components/PassengerStationVolumeChart";
-import PassengerTrendChart from "./components/PassengerTrendChart";
-import { traceWorkbench } from "../../shared/workbench-trace";
 import WorkbenchScrollArea from "../../shared/WorkbenchScrollArea";
+import { traceWorkbench } from "../../shared/workbench-trace";
 import { useNativeScheduleI18n } from "../../shared/workbench-i18n";
+import PassengerFlowDashboard from "./PassengerFlowDashboard";
+import { DEFAULT_SERVICE_PERIODS } from "../../../lib/service-periods";
+import { buildBuckets, stationOptions, mergeStationGroups, restoreStationSelection } from "./passenger-analysis";
 
-function ChartPanel({ title, children, large = false }) {
-  return (
-    <section className={`rtw-passenger-panel ${large ? "is-large" : ""}`}>
-      <h3 className="rtw-passenger-panel-title">{title}</h3>
-      {children}
-    </section>
-  );
+const asArray = (value) => Array.isArray(value) ? value : [];
+const directoryOnly = { directoryOnly: true, includeSeries: false, includeSummary: false, includePurposes: false,
+  includeTransfers: false, includeStationWaiting: false, includeSections: false, includeVehicleSections: false };
+function modeToken(value) {
+  const token = String(value || "").toLowerCase();
+  return ["train", "subway", "tram", "bus"].includes(token) ? token : "train";
 }
 
-function normalizePassengerMode(mode) {
-  const token = String(mode || "").trim().toLowerCase();
-  return token === "subway" || token === "tram" || token === "bus" ? token : "train";
+function buildLines(catalog) {
+  const map = new Map();
+  asArray(catalog?.lines).forEach((line) => {
+    const id = String(line.id || "");
+    if (id) map.set(id, { id, code: String(line.displayCode || line.routeNumber || ""),
+      name: String(line.name || line.displayCode || line.routeNumber || id),
+      color: line.color || "#64748b" });
+  });
+  return [...map.values()];
 }
 
-const PASSENGER_FLOW_POLL_INTERVAL_MS = 5000;
-const PASSENGER_CATALOG_RETRY_INTERVAL_MS = 30000;
-
-function hasPassengerLineIds(snapshot) {
-  const directRows = [snapshot?.stationVolumes, snapshot?.sectionVolumes];
-  if (directRows.some((rows) => Array.isArray(rows) && rows.some((entry) => String(entry?.lineId || "").trim()))) {
-    return true;
-  }
-
-  return Array.isArray(snapshot?.odFlows) && snapshot.odFlows.some((entry) => (
-    String(entry?.lineId || entry?.firstLineId || entry?.lastLineId || "").trim()
-  ));
-}
-
-function hasCatalogLines(snapshot) {
-  return Array.isArray(snapshot?.lines)
-    && snapshot.lines.some((line) => String(line?.id || "").trim());
-}
-
-function buildEmptyPassengerFlowViewModel() {
-  return {
-    lines: [],
-    lineTrendById: {},
-    systemTrend: [],
-    stationVolumes: [],
-    sectionVolumes: [],
-    odFlows: [],
-    warnings: []
-  };
-}
-
-export default function PassengerFlowPage({ activeTransportMode = "train", isActive = false, registerHostActions }) {
+export default function PassengerFlowPage({ activeTransportMode = "train", isActive = false, registerHostActions, readServicePeriods, writeServicePeriods }) {
   const { t } = useNativeScheduleI18n();
-  const supportsSections = normalizePassengerMode(activeTransportMode) !== "bus";
-  const [snapshot, setSnapshot] = useState(null);
-  const [lineCatalogSnapshot, setLineCatalogSnapshot] = useState(null);
-  const [selectedLineId, setSelectedLineId] = useState("ALL");
-  const [error, setError] = useState("");
-  const loadGenerationRef = useRef(0);
-  const mountedRef = useRef(false);
-  const refreshInFlightRef = useRef(false);
-  const pollInFlightRef = useRef(false);
-  const catalogReadyRef = useRef(false);
-  const passengerHasLineRef = useRef(false);
-  const catalogRetryAfterRef = useRef(0);
-  const catalogRequestsRef = useRef(new Map());
-  const activeModeRef = useRef(normalizePassengerMode(activeTransportMode));
-  activeModeRef.current = normalizePassengerMode(activeTransportMode);
-
+  const mode = modeToken(activeTransportMode);
+  const [context, setContext] = useState(null), [analysis, setAnalysis] = useState(null);
+  const [catalogs, setCatalogs] = useState({}), [lineCatalogs, setLineCatalogs] = useState({});
+  const [stopCatalogs, setStopCatalogs] = useState({});
+  const [lineId, setLineId] = useState("ALL"), [stationId, setStationId] = useState("");
+  const [renderedLineId, setRenderedLineId] = useState("ALL");
+  const [page, setPage] = useState("line"), [range, setRange] = useState(null);
+  const [day, setDay] = useState("today");
+  const [servicePeriods, setServicePeriods] = useState(DEFAULT_SERVICE_PERIODS);
   useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      loadGenerationRef.current += 1;
-      traceWorkbench("passenger.unmount");
-    };
+    if (isActive) setServicePeriods(readServicePeriods?.(mode, lineId) || DEFAULT_SERVICE_PERIODS);
+  }, [isActive, mode, lineId, readServicePeriods]);
+  function changeServicePeriods(periods) {
+    setServicePeriods(periods);
+    writeServicePeriods?.(mode, lineId, periods);
+  }
+  const [pending, setPending] = useState(false), [error, setError] = useState("");
+  const scrollRef = useRef(null);
+  const generation = useRef(0), busy = useRef(false), mounted = useRef(false);
+  const directoryEpoch = useRef(0), directoryRequests = useRef(new Set());
+  const directories = useRef({ catalogs: {}, stations: {}, stops: {} });
+  const queued = useRef(null), initialized = useRef(false), contextKey = useRef("");
+  const trendRefresh = useRef(false);
+  const contextRef = useRef(null), activeRef = useRef(isActive);
+  const selectionRef = useRef({ mode, lineId, stationId, page, range, day });
+  activeRef.current = isActive;
+  const modeRef = useRef(mode); modeRef.current = mode;
+  const catalog = catalogs[mode];
+  const lines = useMemo(() => buildLines(catalog), [catalog]);
+  const stations = useMemo(() => stationOptions(context, lineId), [context, lineId]);
+  const activeStation = stationId && stations.some((item) => item.id === stationId) ? stationId : stations[0]?.id || "";
+  const bucketCount = buildBuckets(context).length;
+
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; generation.current += 1; }; }, []);
+  const acceptCatalog = useCallback((token, nextCatalog) => {
+    directories.current.catalogs[token] = nextCatalog;
+    setCatalogs((previous) => ({ ...previous, [token]: nextCatalog }));
+    setLineCatalogs((previous) => ({ ...previous, [token]: buildLines(nextCatalog) }));
   }, []);
 
-  const loadLineCatalog = useCallback((api, mode) => {
-    const existingRequest = catalogRequestsRef.current.get(mode);
-    if (existingRequest) {
-      return existingRequest;
-    }
-
-    const request = api.refreshTransitCatalog({ mode }).catch((metadataError) => {
-      traceWorkbench("passenger.lineCatalog.error", { mode, message: metadataError?.message || metadataError });
-      return null;
-    });
-    catalogRequestsRef.current.set(mode, request);
-    request.finally(() => {
-      if (catalogRequestsRef.current.get(mode) === request) {
-        catalogRequestsRef.current.delete(mode);
-      }
-    });
-    return request;
-  }, []);
-
-  const shouldLoadLineCatalog = useCallback((mode) => (
-    catalogRequestsRef.current.has(mode)
-      || (passengerHasLineRef.current
-        && !catalogReadyRef.current
-        && Date.now() >= catalogRetryAfterRef.current)
-  ), []);
-
-  const refreshPassengerFlow = useCallback(async ({ includeCatalog = false, reset = false, reason = "refresh" } = {}) => {
-    const mode = normalizePassengerMode(activeTransportMode);
-    if (reason === "poll" && (pollInFlightRef.current || refreshInFlightRef.current)) {
-      return;
-    }
-
-    const generation = loadGenerationRef.current + 1;
-    loadGenerationRef.current = generation;
-    refreshInFlightRef.current = true;
-    if (reason === "poll") {
-      pollInFlightRef.current = true;
-    }
-
-    traceWorkbench("passenger.load.begin", { mode, reason, includeCatalog });
-    const api = getWorkbenchApi();
-
-    if (reset) {
-      setSelectedLineId("ALL");
-      setSnapshot(null);
-      setLineCatalogSnapshot(null);
-      catalogReadyRef.current = false;
-      passengerHasLineRef.current = false;
-      catalogRetryAfterRef.current = 0;
-    }
-    setError("");
-
-    try {
-      const [nextSnapshot, nextLineCatalogSnapshot] = await Promise.all([
-        api.loadPassengerFlowSnapshot({ mode }),
-        includeCatalog
-          ? loadLineCatalog(api, mode)
-          : Promise.resolve(null)
-      ]);
-
-      if (!mountedRef.current || loadGenerationRef.current !== generation || activeModeRef.current !== mode) {
-        return;
-      }
-
-      const nextHasPassengerLines = hasPassengerLineIds(nextSnapshot);
-      const nextHasCatalogLines = hasCatalogLines(nextLineCatalogSnapshot);
-      passengerHasLineRef.current = nextHasPassengerLines;
-      setSnapshot(nextSnapshot);
-      if (nextLineCatalogSnapshot) {
-        setLineCatalogSnapshot(nextLineCatalogSnapshot);
-      }
-      if (nextHasCatalogLines) {
-        catalogReadyRef.current = true;
-        catalogRetryAfterRef.current = 0;
-      } else if (includeCatalog && nextHasPassengerLines) {
-        catalogRetryAfterRef.current = Date.now() + PASSENGER_CATALOG_RETRY_INTERVAL_MS;
-      }
-      setError("");
-      traceWorkbench("passenger.load.done", {
-        mode,
-        reason,
-        stationVolumes: Array.isArray(nextSnapshot?.stationVolumes) ? nextSnapshot.stationVolumes.length : 0,
-        sectionVolumes: Array.isArray(nextSnapshot?.sectionVolumes) ? nextSnapshot.sectionVolumes.length : 0,
-        odFlows: Array.isArray(nextSnapshot?.odFlows) ? nextSnapshot.odFlows.length : 0,
-        lines: Array.isArray(nextLineCatalogSnapshot?.lines) ? nextLineCatalogSnapshot.lines.length : 0
+  const acceptStops = useCallback((token, key, result) => {
+    directories.current.groups = { ...directories.current.groups,
+      [token]: mergeStationGroups(directories.current.groups?.[token], result?.stationGroups) };
+    if (!result?.lineStopsAvailable) return;
+    const stops = asArray(result.lineStops);
+    const updates = new Map(stops.map((stop) => [stop.stationId, stop]));
+    asArray(result.stationGroups).forEach((group) => asArray(group.memberStationIds).forEach((id) =>
+      updates.set(id, { ...updates.get(id), stationName: group.stationName, stationGroupId: group.stationGroupId })));
+    Object.keys(directories.current.stops).filter((item) => item.startsWith(`${token}:`)).forEach((item) => {
+      directories.current.stops[item] = directories.current.stops[item].map((stop) => {
+        const update = updates.get(stop.stationId);
+        return update ? { ...stop, stationName: update.stationName, stationGroupId: update.stationGroupId } : stop;
       });
-    } catch (loadError) {
-      if (!mountedRef.current || loadGenerationRef.current !== generation || activeModeRef.current !== mode) {
-        return;
-      }
-      setError(loadError?.message || t("nativeWorkbench.passenger.error.loadFailed"));
-      traceWorkbench("passenger.load.error", { mode, reason, message: loadError?.message || loadError });
-    } finally {
-      if (loadGenerationRef.current === generation) {
-        refreshInFlightRef.current = false;
-      }
-      if (reason === "poll") {
-        pollInFlightRef.current = false;
-      }
-    }
-  }, [activeTransportMode, loadLineCatalog, t]);
-
-  useEffect(() => {
-    refreshPassengerFlow({ includeCatalog: true, reset: true, reason: "mode" });
-  }, [refreshPassengerFlow]);
-
-  useEffect(() => {
-    if (!isActive) {
-      return undefined;
-    }
-
-    refreshPassengerFlow({
-      includeCatalog: shouldLoadLineCatalog(normalizePassengerMode(activeTransportMode)),
-      reason: "active"
     });
-    const intervalId = window.setInterval(() => {
-      const includeCatalog = passengerHasLineRef.current
-        && !catalogReadyRef.current
-        && Date.now() >= catalogRetryAfterRef.current;
-      refreshPassengerFlow({ includeCatalog, reason: "poll" });
-    }, PASSENGER_FLOW_POLL_INTERVAL_MS);
-
-    return () => {
-      window.clearInterval(intervalId);
-    };
-  }, [activeTransportMode, isActive, refreshPassengerFlow, shouldLoadLineCatalog]);
-
-  useEffect(() => {
-    if (!isActive) {
-      return undefined;
-    }
-
-    const mode = normalizePassengerMode(activeTransportMode);
-    if (typeof window !== "undefined") {
-      window.__RT_WORKBENCH_ACTIVE_PAGE__ = "passenger";
-      window.__RT_WORKBENCH_SELECTED_LINE_ID__ = selectedLineId === "ALL" ? "" : selectedLineId;
-      window.__RT_WORKBENCH_SELECTED_EDIT_LINE__ = "";
-    }
-    getWorkbenchApi().setHostState?.({
-      mode,
-      activePage: "passenger",
-      selectedLineId: selectedLineId === "ALL" ? "" : selectedLineId,
-      selectedEditLine: ""
+    directories.current.stops[key] = stops;
+    if (directories.current.stations[token]) directories.current.stations[token] = directories.current.stations[token].map((station) => {
+      const update = updates.get(station.stationId);
+      return update ? { ...station, stationName: update.stationName, stationGroupId: update.stationGroupId } : station;
     });
-    return undefined;
-  }, [activeTransportMode, isActive, selectedLineId]);
+  }, []);
+
+  const readSelection = useCallback(async () => {
+    if (busy.current) return;
+    busy.current = true;
+    const api = getWorkbenchApi();
+    while (queued.current && mounted.current && activeRef.current) {
+      const job = queued.current; queued.current = null;
+      const { mode: token, lineId: selectedLine, page: selectedPage, range: selectedRange, day: selectedDay } = job.selection;
+      let selectedStation = job.selection.stationId;
+      const ticket = job.ticket, epoch = directoryEpoch.current;
+      const current = () => mounted.current && ticket === generation.current && modeRef.current === token;
+      const stopsKey = `${token}:${selectedLine}`;
+      let directoryStops = [];
+      let directoryContext = contextRef.current;
+      try {
+        if (!directories.current.catalogs[token]) {
+          const nextCatalog = await api.refreshTransitCatalog({ mode: token });
+          if (!current()) continue;
+          if (epoch === directoryEpoch.current) acceptCatalog(token, nextCatalog);
+        }
+        if (!activeRef.current) continue;
+        if (!job.selection.refreshStops && selectedLine !== "ALL" && !directories.current.stops[stopsKey] && directories.current.stops[`${token}:ALL`])
+          directories.current.stops[stopsKey] = directories.current.stops[`${token}:ALL`].filter((stop) => stop.lineId === selectedLine);
+        // 车站选择需要当前方式的停站目录；带站点条件的投影不能覆盖完整站序。
+        if (selectedPage === "station" && (job.selection.refreshStops || !directories.current.stops[stopsKey])) {
+          const result = await api.loadPassengerFlowSnapshot({ ...directoryOnly, mode: token,
+            ...(selectedLine !== "ALL" ? { lineId: selectedLine } : {}),
+            includeLineStops: true, includeStationCatalog: false });
+          if (!current()) continue;
+          directoryContext = result;
+          directoryStops = asArray(result.lineStops);
+          if (epoch === directoryEpoch.current) {
+            acceptStops(token, stopsKey, result);
+            selectionRef.current.refreshStops = false;
+          }
+        }
+        if (!activeRef.current) continue;
+        const cachedStops = directories.current.stops[stopsKey] || directoryStops;
+        if (selectedPage === "station") {
+          selectedStation = restoreStationSelection(contextRef.current,
+            { lineStops: cachedStops, stationGroups: directories.current.groups?.[token] }, selectedStation, selectedLine);
+          if (!selectedStation) {
+            contextRef.current = { ...directoryContext, mode: token, lineStops: cachedStops, stationCatalog: directories.current.stations[token] || [] };
+            contextKey.current = "";
+            setContext(contextRef.current); setAnalysis(null); setStationId("");
+            continue;
+          }
+          selectionRef.current.stationId = selectedStation; setStationId(selectedStation);
+        }
+        const objectKey = `${token}:${selectedDay}:${selectedPage}:${selectedLine}:${selectedPage === "station" ? selectedStation : ""}`;
+        const needsTrend = job.refreshTrend || contextKey.current !== objectKey;
+        const needsStops = selectedPage === "line" && selectedLine !== "ALL" && (job.selection.refreshStops || !directories.current.stops[stopsKey]);
+        const needsStations = !directories.current.stations[token];
+        const request = { mode: token, day: selectedDay, view: selectedPage === "station" ? "station" : selectedLine === "ALL" ? "network" : "line",
+          includeSeries: false, includeSummary: true, includePurposes: true,
+          includeTransfers: selectedPage === "station", includeStationWaiting: selectedPage === "line" && selectedLine !== "ALL",
+          includeLineComparison: selectedPage === "line" && selectedLine === "ALL",
+          includeSections: selectedPage === "line", includeVehicleSections: false,
+          includeLineStops: false, includeStationCatalog: false,
+          ...(selectedPage === "line" ? { sectionKind: selectedLine === "ALL" ? "track" : "stops" } : {}),
+          ...(selectedLine !== "ALL" ? { lineId: selectedLine } : {}),
+          ...(selectedPage === "station" ? { stationGroupId: selectedStation } : {}) };
+        const trendRequest = { ...request, includeSeries: true,
+          includeLineStops: needsStops, includeStationCatalog: needsStations };
+        traceWorkbench("passenger.load.begin", { mode: token, lineId: selectedLine, page: selectedPage });
+        let nextContext = contextRef.current;
+        let nextAnalysis;
+        if (needsTrend) {
+          nextContext = await api.loadPassengerFlowSnapshot(selectedRange ? { ...trendRequest,
+            includeSummary: false, includePurposes: false, includeTransfers: false,
+            includeStationWaiting: false, includeSections: false } : trendRequest);
+          if (!current()) continue;
+          if (epoch === directoryEpoch.current) {
+            if (needsStations) directories.current.stations[token] = asArray(nextContext.stationCatalog);
+            acceptStops(token, stopsKey, nextContext);
+            if (needsStops) selectionRef.current.refreshStops = false;
+          }
+          nextContext = { ...nextContext, stationCatalog: directories.current.stations[token] || asArray(nextContext.stationCatalog),
+            lineStops: directories.current.stops[stopsKey] || (selectedPage === "station" ? cachedStops : asArray(nextContext.lineStops)),
+            stationGroups: directories.current.groups?.[token] || nextContext.stationGroups };
+          if (selectedPage === "line" && selectionRef.current.stationId) {
+            const restored = restoreStationSelection(contextRef.current, nextContext, selectionRef.current.stationId, selectedLine);
+            selectionRef.current.stationId = restored; setStationId(restored);
+          }
+          contextRef.current = nextContext; contextKey.current = objectKey;
+          trendRefresh.current = false;
+          if (!selectedRange) nextAnalysis = nextContext;
+        }
+        if (!nextAnalysis) {
+          if (!activeRef.current) continue;
+          nextAnalysis = await api.loadPassengerFlowSnapshot({ ...request,
+            includeLineStops: !needsTrend && needsStops, includeStationCatalog: !needsTrend && needsStations,
+            ...(selectedRange ? { fromMinute: selectedRange[0] % 1440,
+              toMinute: selectedRange[1] - Math.floor(selectedRange[0] / 1440) * 1440 } : {}) });
+          if (!current()) continue;
+          if (epoch === directoryEpoch.current) acceptStops(token, stopsKey, nextAnalysis);
+          if (epoch === directoryEpoch.current && !needsTrend) {
+            if (needsStops) selectionRef.current.refreshStops = false;
+            if (needsStations) directories.current.stations[token] = asArray(nextAnalysis.stationCatalog);
+          }
+          nextContext = { ...nextContext, lineStops: directories.current.stops[stopsKey] ||
+            (selectedPage === "station" ? cachedStops : needsStops ? asArray(nextAnalysis.lineStops) : asArray(nextContext?.lineStops)),
+            stationCatalog: directories.current.stations[token] || asArray(nextContext?.stationCatalog),
+            stationGroups: directories.current.groups?.[token] || nextContext?.stationGroups };
+          contextRef.current = nextContext;
+        }
+        setStopCatalogs({ ...directories.current.stops });
+        setContext(nextContext); setAnalysis(nextAnalysis); setRenderedLineId(selectedLine); setError("");
+        traceWorkbench("passenger.load.done", { mode: token, buckets: buildBuckets(nextContext).length });
+      } catch (failure) {
+        if (current()) setError(failure?.message || t("nativeWorkbench.passenger.error.loadFailed"));
+      }
+    }
+    busy.current = false;
+    if (mounted.current) setPending(false);
+  }, [acceptCatalog, acceptStops, t]);
+
+  const querySelection = useCallback((changes = {}, refreshTrend = false) => {
+    selectionRef.current = { ...selectionRef.current, ...changes };
+    if (refreshTrend) trendRefresh.current = true;
+    const ticket = ++generation.current;
+    if (!Object.prototype.hasOwnProperty.call(changes, "lineId")) setAnalysis(null);
+    setError("");
+    if (!activeRef.current) return;
+    queued.current = { selection: { ...selectionRef.current }, ticket,
+      refreshTrend: trendRefresh.current };
+    setPending(true); readSelection();
+  }, [readSelection]);
 
   useEffect(() => {
-    if (!isActive || typeof registerHostActions !== "function") {
-      return undefined;
+    if (selectionRef.current.mode !== mode) {
+      selectionRef.current = { mode, lineId: "ALL", stationId: "", page: "line", range: null, day: selectionRef.current.day };
+      setLineId("ALL"); setRenderedLineId("ALL"); setStationId(""); setRange(null); setPage("line");
+      contextRef.current = null; contextKey.current = ""; setContext(null); setAnalysis(null);
+      generation.current += 1; queued.current = null; initialized.current = false;
     }
+    if (!isActive) { queued.current = null; setPending(false); return; }
+    if (!initialized.current) { initialized.current = true; querySelection(); }
+  }, [mode, isActive, querySelection]);
 
-    registerHostActions({
-      refreshData: async () => {
-        await refreshPassengerFlow({
-          includeCatalog: true,
-          reason: "host"
+  useEffect(() => {
+    const api = getWorkbenchApi();
+    function updateDirectory(event) {
+      const token = event?.mode || event?.sourceMode;
+      const tokens = token ? [token] : Object.keys(directories.current.catalogs);
+      directoryEpoch.current += 1;
+      directoryRequests.current.clear();
+      tokens.forEach((item) => {
+        if (Array.isArray(event?.lines)) acceptCatalog(item, event);
+        else delete directories.current.catalogs[item];
+        delete directories.current.stations[item];
+        const ids = asArray(event?.lineIds);
+        Object.keys(directories.current.stops).forEach((key) => {
+          if (key.startsWith(`${item}:`) && (!ids.length || key === `${item}:ALL` || ids.some((id) => key === `${item}:${id}`)))
+            delete directories.current.stops[key];
         });
-      }
-    });
-
-    return () => {
-      registerHostActions(null);
-    };
-  }, [isActive, refreshPassengerFlow, registerHostActions]);
-
-  const viewModel = useMemo(
-    () => (snapshot ? buildPassengerFlowViewModel(snapshot || {}, lineCatalogSnapshot || {}) : buildEmptyPassengerFlowViewModel()),
-    [lineCatalogSnapshot, snapshot]
-  );
-  const filteredData = useMemo(
-    () => filterPassengerFlow(viewModel, selectedLineId),
-    [selectedLineId, viewModel]
-  );
+        setStopCatalogs((previous) => Object.fromEntries(Object.entries(previous).filter(([key]) =>
+          !key.startsWith(`${item}:`) || ids.length && !ids.some((id) => key === `${item}:${id}`))));
+      });
+    }
+    const offCatalog = api.onCatalogChanged?.(updateDirectory);
+    const offLine = api.onLineInvalidated?.(updateDirectory);
+    const offSnapshot = api.onSnapshotChanged?.(updateDirectory);
+    return () => { offCatalog?.(); offLine?.(); offSnapshot?.(); };
+  }, [acceptCatalog]);
 
   useEffect(() => {
-    traceWorkbench("passenger.data.ready", {
-      active: isActive,
-      selectedLineId,
-      lines: viewModel.lines.length,
-      trend: filteredData.systemTrend.length,
-      stations: filteredData.stationVolumes.length,
-      od: filteredData.odFlows.length,
-      sections: filteredData.sectionVolumes.length
+    if (!isActive || page !== "station" || !analysis || analysis.mode !== mode) return;
+    const transfers = asArray(analysis?.summary?.transferFlows);
+    const epoch = directoryEpoch.current;
+    const transferModes = new Set(transfers
+      .flatMap((row) => [row.fromMode, row.toMode]).filter((token) => token && token !== mode && !directories.current.catalogs[token]));
+    transferModes.forEach((otherMode) => {
+      const key = `catalog:${otherMode}`;
+      if (directoryRequests.current.has(key)) return;
+      directoryRequests.current.add(key);
+      getWorkbenchApi().refreshTransitCatalog({ mode: otherMode }).then((result) => {
+        if (!mounted.current || modeRef.current !== mode || directoryEpoch.current !== epoch) return;
+        acceptCatalog(otherMode, result);
+      }).catch((failure) => traceWorkbench("passenger.lineCatalog.error", { mode: otherMode, message: failure?.message || failure }))
+        .finally(() => { if (directoryEpoch.current === epoch) directoryRequests.current.delete(key); });
     });
-  }, [filteredData, isActive, selectedLineId, viewModel.lines.length]);
+    const transferLines = new Map();
+    transfers.forEach((row) => {
+      if (row.fromMode && row.fromLineId) transferLines.set(`${row.fromMode}:${row.fromLineId}`, [row.fromMode, row.fromLineId]);
+      if (row.toMode && row.toLineId) transferLines.set(`${row.toMode}:${row.toLineId}`, [row.toMode, row.toLineId]);
+    });
+    transferLines.forEach(([otherMode, otherLineId], key) => {
+      if (!directories.current.stops[key] && directories.current.stops[`${otherMode}:ALL`]) {
+        const stops = directories.current.stops[`${otherMode}:ALL`].filter((stop) => stop.lineId === otherLineId);
+        directories.current.stops[key] = stops;
+        setStopCatalogs((previous) => ({ ...previous, [key]: stops }));
+      }
+      if (directories.current.stops[key] !== undefined || directoryRequests.current.has(`stops:${key}`)) return;
+      directoryRequests.current.add(`stops:${key}`);
+      getWorkbenchApi().loadPassengerFlowSnapshot({ ...directoryOnly, mode: otherMode, lineId: otherLineId,
+        includeLineStops: true, includeStationCatalog: false }).then((result) => {
+        if (!mounted.current || modeRef.current !== mode || directoryEpoch.current !== epoch) return;
+        if (result?.lineStopsAvailable) directories.current.stops[key] = asArray(result?.lineStops);
+        setStopCatalogs((previous) => ({ ...previous, [key]: asArray(result?.lineStops) }));
+      }).catch((failure) => traceWorkbench("passenger.stopCatalog.error", { mode: otherMode, lineId: otherLineId, message: failure?.message || failure }))
+        .finally(() => { if (directoryEpoch.current === epoch) directoryRequests.current.delete(`stops:${key}`); });
+    });
+  }, [analysis, acceptCatalog]);
 
-  function handleLineSelect(lineId) {
-    traceWorkbench("passenger.line.select", { lineId, from: selectedLineId });
-    setSelectedLineId(lineId);
+  useEffect(() => {
+    if (!isActive) return;
+    window.__RT_WORKBENCH_ACTIVE_PAGE__ = "passenger";
+    window.__RT_WORKBENCH_SELECTED_LINE_ID__ = lineId === "ALL" ? "" : lineId;
+    window.__RT_WORKBENCH_SELECTED_EDIT_LINE__ = "";
+    getWorkbenchApi().setHostState?.({ mode, activePage: "passenger", selectedLineId: lineId === "ALL" ? "" : lineId,
+      selectedEditLine: "" });
+  }, [isActive, mode, lineId]);
+  useEffect(() => {
+    if (!isActive || typeof registerHostActions !== "function") return undefined;
+    registerHostActions({ refreshData: async () => {} });
+    return () => registerHostActions(null);
+  }, [isActive, registerHostActions]);
+
+  function selectLine(next) {
+    setLineId(next);
+    querySelection({ lineId: next, refreshStops: next !== "ALL" }, true);
   }
-
-  if (error) {
-    return (
-      <div className="rtw-passenger-root">
-        <div className="rtw-passenger-error">{error}</div>
-      </div>
-    );
+  function selectStation(next) {
+    setStationId(next);
+    selectionRef.current.stationId = next;
+    if (page === "station") querySelection({ stationId: next }, true);
   }
-
-  return (
-    <div className="rtw-passenger-root">
-      <WorkbenchScrollArea className="rtw-passenger-body" metricsKey={`${selectedLineId}:${filteredData.stationVolumes.length}:${filteredData.sectionVolumes.length}:${filteredData.odFlows.length}`}>
-        <div className="rtw-passenger-content">
-          <div className="rtw-passenger-header">
-            <h2 className="rtw-passenger-title">{t("nativeWorkbench.passenger.title")}</h2>
-            <PassengerLineTabs lines={viewModel.lines} selectedLineId={selectedLineId} onSelect={handleLineSelect} />
-          </div>
-          <PassengerMetricCards data={filteredData} showSections={supportsSections} />
-          <div className="rtw-passenger-panels">
-            <ChartPanel title={selectedLineId === "ALL" ? t("nativeWorkbench.passenger.chart.systemTrend") : t("nativeWorkbench.passenger.chart.lineTrend")}>
-              <div className="rtw-passenger-chart is-trend">
-                <PassengerTrendChart points={filteredData.systemTrend} />
-              </div>
-            </ChartPanel>
-            <ChartPanel title={t("nativeWorkbench.passenger.chart.stationVolumes")}>
-              <div className="rtw-passenger-chart is-stations">
-                <PassengerStationVolumeChart volumes={filteredData.stationVolumes} />
-              </div>
-            </ChartPanel>
-            <ChartPanel title={t("nativeWorkbench.passenger.chart.odFlow")} large>
-              <div className="rtw-passenger-chart is-od">
-                <PassengerOdFlowDiagram flows={filteredData.odFlows} lines={viewModel.lines} isActive={isActive} />
-              </div>
-            </ChartPanel>
-            {supportsSections ? (
-              <ChartPanel title={t("nativeWorkbench.passenger.chart.sectionRanking")} large>
-                <div className="rtw-passenger-chart is-ranking">
-                  <PassengerSectionRanking sections={filteredData.sectionVolumes} lines={viewModel.lines} />
-                </div>
-              </ChartPanel>
-            ) : null}
-          </div>
-        </div>
-      </WorkbenchScrollArea>
-    </div>
-  );
+  function selectPage(next) {
+    setPage(next); querySelection({ page: next }, true);
+  }
+  function selectRange(next) {
+    setRange(next); querySelection({ range: next });
+  }
+  function selectDay(next) {
+    setDay(next); setRange(null);
+    contextRef.current = null; contextKey.current = ""; setContext(null);
+    querySelection({ day: next, range: null }, true);
+  }
+  return <div className="rtw-passenger-root"><WorkbenchScrollArea className="rtw-passenger-body" externalScrollRef={scrollRef}
+    metricsKey={`${lineId}:${page}:${bucketCount}:${asArray(analysis?.summary?.sectionVolumes).length}`}>
+    {error ? <div className="rtw-passenger-error">{t("passengerFlow.queryFailed")}：{error}</div> : null}
+    {!context && !error ? <div className="rtw-passenger-status">{t("passengerFlow.loading")}</div> : null}
+    <PassengerFlowDashboard mode={mode} isActive={isActive} context={context} analysis={analysis}
+      pending={pending} lines={lines} lineCatalogs={lineCatalogs} stopCatalogs={stopCatalogs} lineId={renderedLineId} selectedLineId={lineId} onLineChange={selectLine}
+      page={page} onPageChange={selectPage} stationId={activeStation} onStationChange={selectStation}
+      range={range} onRangeChange={selectRange} day={day} onDayChange={selectDay}
+      servicePeriods={servicePeriods} onServicePeriodsChange={changeServicePeriods} scrollRef={scrollRef} />
+  </WorkbenchScrollArea></div>;
 }

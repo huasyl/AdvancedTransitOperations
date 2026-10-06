@@ -226,6 +226,10 @@ namespace RapidTransitMod.Dispatch.Workbench
             else if (m_CanPushSnapshot())
             {
                 m_PushSnapshot(m_BuildSnapshot());
+                Push(TransitMode.Train);
+                Push(TransitMode.Subway);
+                Push(TransitMode.Tram);
+                Push(TransitMode.Bus);
             }
             else
             {

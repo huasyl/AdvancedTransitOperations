@@ -145,6 +145,11 @@ namespace RapidTransitMod.TrackModel
 
         internal void RequestTramStopAudit() => m_TramStops.RequestAudit();
 
+        internal string[] RefreshTramStationNames(Entity line) => m_TramStops.RefreshNames(line);
+
+        internal TramStationGroup[] ReadTramStationGroups(Entity line, string stationId, string[] affected = null)
+            => m_TramStops.ReadGroups(line, stationId, affected);
+
         internal void TickTramStopIndex()
         {
             m_TramStops.Tick();

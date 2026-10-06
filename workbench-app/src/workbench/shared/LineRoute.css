@@ -1,0 +1,25 @@
+.rtw-line-route { position: relative; width: 100%; font-size: 14rem; font-family: var(--dw-native-font-family); overflow-x: auto; }
+.rtw-line-route button, .rtw-line-route button * { font-family: var(--dw-native-font-family); }
+.rtw-line-route-unit { position: absolute; width: 100rem; height: 0; visibility: hidden; }
+/* 测量样本保留自然宽度，但不能把不可见长文字计入线路图滚动范围。 */
+.rtw-line-route-measure { position: absolute; display: flex; flex-direction: column; align-items: flex-start; width: 0; height: 0; overflow: hidden; visibility: hidden; pointer-events: none; }
+.rtw-line-route-measure > span { display: block; flex: 0 0 auto; white-space: pre; }
+.rtw-line-route-empty { padding: 24rem 0; color: #aebdc7; }
+.rtw-line-route-stage { position: relative; margin-left: auto; margin-right: auto; }
+.rtw-line-route-track { position: absolute; left: 0; top: 0; }
+.rtw-line-route-hit { cursor: pointer; }
+.rtw-line-route-dot { position: absolute; z-index: 3; width: 12rem; height: 12rem; padding: 0; border: 0; border-radius: 999rem; background: #ffffff; cursor: pointer; }
+.rtw-line-route-dot.is-selected { background: #81d4d4; box-shadow: 0 0 0 2rem #ffffff; }
+.rtw-line-route-label { display: flex; flex-direction: column; align-items: center; position: absolute; z-index: 2; padding: 0; border: 0; background: transparent; color: #edf5f9; text-align: center; cursor: pointer; }
+.rtw-line-route-name { display: flex; flex-direction: column; align-items: center; width: 100%; font-size: 14rem; line-height: 18rem; }
+.rtw-line-route-name > span { display: block; height: 18rem; flex: 0 0 18rem; line-height: 18rem; white-space: nowrap; }
+.rtw-line-route-label.is-right .rtw-line-route-name { align-items: flex-start; text-align: left; }
+.rtw-line-route-label.is-left .rtw-line-route-name { align-items: flex-end; text-align: right; }
+.rtw-line-route-origin { display: flex; flex-direction: row; align-items: center; justify-content: center; width: 100%; min-width: 48rem; height: 18rem; flex: 0 0 18rem; color: #81d4d4; font-size: 12rem; line-height: 18rem; white-space: nowrap; }
+.rtw-line-route-origin > span { display: block; height: 18rem; line-height: 18rem; white-space: nowrap; }
+.rtw-line-route-origin-arrow { margin-left: 8rem; }
+.rtw-line-route-label.is-left .rtw-line-route-origin { justify-content: flex-end; }
+.rtw-line-route-detail { display: flex; flex-direction: column; align-items: center; width: 100%; padding-top: 8rem; color: #c4d1d9; font-size: 12rem; line-height: 16rem; }
+.rtw-line-route-detail > span { display: block; height: 16rem; flex: 0 0 16rem; line-height: 16rem; white-space: nowrap; }
+.rtw-line-route-edge { position: absolute; z-index: 2; transform: translateX(-50%); min-width: 42rem; height: 24rem; line-height: 24rem; padding: 0; border: 0; background: transparent; color: #edf5f9; font-size: 12rem; cursor: pointer; }
+.rtw-line-route-edge.is-selected { color: #81d4d4; }

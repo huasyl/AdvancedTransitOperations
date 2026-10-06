@@ -132,7 +132,7 @@ export default function OverviewPage({ activeTransportMode = "train", isActive =
 
     const snapshotPromise = shouldForceRefresh || !cached?.snapshot ? api.loadOverviewSnapshot({ mode }) : Promise.resolve(cached.snapshot);
     const passengerPromise = shouldRefreshPassenger || !cached?.passengerSnapshot
-      ? api.loadPassengerFlowSnapshot({ mode })
+      ? api.loadPassengerFlowSnapshot({ mode, sectionKind: mode === "bus" ? "stops" : "track", includeSections: true })
       : Promise.resolve(cached.passengerSnapshot);
 
     Promise.all([snapshotPromise, passengerPromise])
