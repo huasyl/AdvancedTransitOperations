@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useMemo, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import PlannerPage from "./pages/planner/PlannerPage";
 import BroadcastPage from "./pages/broadcast/BroadcastPage";
 import { useNativeScheduleI18n } from "./shared/workbench-i18n";
@@ -8,6 +8,7 @@ import SchedulePage from "./pages/schedule/SchedulePage";
 import TimetablePage from "./pages/timetable/TimetablePage";
 import { setWorkbenchApiTransportMode } from "../lib/workbench-api";
 import { traceWorkbench } from "./shared/workbench-trace";
+import { DEFAULT_SERVICE_PERIODS } from "../lib/service-periods";
 
 const DEFAULT_NATIVE_WORKBENCH_PAGE = "overview";
 const WORKBENCH_PAGE_TRANSITION_MS = 220;
@@ -54,6 +55,14 @@ export default function WorkbenchApp({ registerHostActions }) {
   const [broadcastEnterSequence, setBroadcastEnterSequence] = useState(0);
   const [debugToolsEnabled, setDebugToolsEnabled] = useState(getWorkbenchDebugToolsEnabled);
   const [snapshotsByMode, setSnapshotsByMode] = useState({});
+  const servicePeriodsRef = useRef({});
+  const readServicePeriods = useCallback((mode, lineId) =>
+    servicePeriodsRef.current[mode]?.[lineId] || DEFAULT_SERVICE_PERIODS, []);
+  const writeServicePeriods = useCallback((mode, lineId, periods) => {
+    const scoped = servicePeriodsRef.current[mode] || {};
+    servicePeriodsRef.current[mode] = { ...scoped, [lineId]: periods.map(({ id, labelKey, start, end }) =>
+      ({ id, labelKey, start, end })) };
+  }, []);
   const [stickyPages, setStickyPages] = useState({
     overview: false,
     passenger: false
@@ -283,6 +292,8 @@ export default function WorkbenchApp({ registerHostActions }) {
             activeTransportMode={modeForPage("schedule")}
             isActive={renderedPage === "schedule"}
             onSnapshot={shareSnapshot}
+            readServicePeriods={readServicePeriods}
+            writeServicePeriods={writeServicePeriods}
           />
         </div>
         <div
@@ -335,6 +346,8 @@ export default function WorkbenchApp({ registerHostActions }) {
             <PassengerFlowPage
               activeTransportMode={modeForPage("passenger")}
               isActive={renderedPage === "passenger"}
+              readServicePeriods={readServicePeriods}
+              writeServicePeriods={writeServicePeriods}
               registerHostActions={registerHostActions}
             />
           ) : null}

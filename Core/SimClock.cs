@@ -10,6 +10,7 @@ namespace RapidTransitMod.Core
             int nowMinute,
             double nowMinuteExact,
             DateTime nowDate,
+            int dayIndex,
             int ticksPerDay,
             double framesPerMinute,
             long clockEpoch)
@@ -17,6 +18,7 @@ namespace RapidTransitMod.Core
             NowMinute = nowMinute;
             NowMinuteExact = nowMinuteExact;
             NowDate = nowDate;
+            DayIndex = dayIndex;
             TicksPerDay = ticksPerDay;
             FramesPerMinute = framesPerMinute;
             ClockEpoch = clockEpoch;
@@ -27,6 +29,8 @@ namespace RapidTransitMod.Core
         public double NowMinuteExact { get; }
 
         public DateTime NowDate { get; }
+
+        public int DayIndex { get; }
 
         public int TicksPerDay { get; }
 
@@ -96,6 +100,11 @@ namespace RapidTransitMod.Core
         private bool m_ProviderAssemblyRescanUsed;
         private bool m_HasProbeFrame;
         private uint m_LastProbeFrame;
+        private bool m_HasDate;
+        private int m_DateYear;
+        private int m_DateDaysPerYear;
+        private int m_DateDayOfYear;
+        private DateTime m_Date;
 
         public SimClock(TimeSystem gameClockSystem)
         {
@@ -129,7 +138,29 @@ namespace RapidTransitMod.Core
             }
         }
 
-        public DateTime NowDate => m_GameClockSystem.GetCurrentDateTime().Date;
+        public DateTime NowDate
+        {
+            get
+            {
+                int year = m_GameClockSystem.year;
+                int daysPerYear = m_GameClockSystem.daysPerYear;
+                float normalizedDate = m_GameClockSystem.normalizedDate;
+                int dayOfYear = 1 + (int)Math.Floor((float)daysPerYear * normalizedDate) % daysPerYear;
+                if (!m_HasDate || year != m_DateYear || daysPerYear != m_DateDaysPerYear
+                    || dayOfYear != m_DateDayOfYear)
+                {
+                    m_Date = m_GameClockSystem.GetCurrentDateTime().Date;
+                    m_DateYear = year;
+                    m_DateDaysPerYear = daysPerYear;
+                    m_DateDayOfYear = dayOfYear;
+                    m_HasDate = true;
+                }
+                return m_Date;
+            }
+        }
+
+        public int DayIndex => (m_GameClockSystem.year - 1) * m_GameClockSystem.daysPerYear
+            + (int)Math.Floor(m_GameClockSystem.normalizedDate * m_GameClockSystem.daysPerYear);
 
         public int TicksPerDay { get; private set; }
 
@@ -192,12 +223,15 @@ namespace RapidTransitMod.Core
             if (!TryReadProviderTicksPerDay(out int providerTicksPerDay) || providerTicksPerDay == TicksPerDay)
                 return;
 
-            int nowMinute = NowMinute;
+            double nowMinuteExact = NowMinuteExact;
+            int nowMinute = (int)Math.Floor(nowMinuteExact);
             DateTime nowDate = NowDate;
+            int dayIndex = DayIndex;
             ClockSnapshot oldSnapshot = new ClockSnapshot(
                 nowMinute,
-                NowMinuteExact,
+                nowMinuteExact,
                 nowDate,
+                dayIndex,
                 TicksPerDay,
                 FramesPerMinute,
                 ClockEpoch);
@@ -208,8 +242,9 @@ namespace RapidTransitMod.Core
 
             ClockSnapshot newSnapshot = new ClockSnapshot(
                 nowMinute,
-                NowMinuteExact,
+                nowMinuteExact,
                 nowDate,
+                dayIndex,
                 TicksPerDay,
                 FramesPerMinute,
                 ClockEpoch);
@@ -229,6 +264,7 @@ namespace RapidTransitMod.Core
                 (int)Math.Floor(nowMinuteExact),
                 nowMinuteExact,
                 NowDate,
+                DayIndex,
                 TicksPerDay,
                 FramesPerMinute,
                 ClockEpoch);

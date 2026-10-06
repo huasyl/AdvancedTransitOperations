@@ -1993,6 +1993,12 @@ namespace RapidTransitMod
 
         private void ConsumeLifecycleEvent(LifecycleEvent lifecycleEvent)
         {
+            if (lifecycleEvent.Kind == LifecycleFactKind.Registered)
+            {
+                PassengerFlow.Runtime.Current?.RegisterVehicle(
+                    lifecycleEvent.Vehicle, lifecycleEvent.Line, lifecycleEvent.State, lifecycleEvent.Frame);
+                return;
+            }
             if (lifecycleEvent.Kind == LifecycleFactKind.Rebound)
             {
                 m_Observation.EndMonitor(
@@ -2001,11 +2007,8 @@ namespace RapidTransitMod
                     MonitorEndReason.Rebound);
                 m_Observation.CancelBusSeg(lifecycleEvent.Vehicle);
                 m_Announcements.RemoveVehicle(lifecycleEvent.Vehicle);
-                if (RuntimePorts.TryResolveLineLifecycle(this, lifecycleEvent.Line, out LifecycleKind reboundLifecycle)
-                    && reboundLifecycle == LifecycleKind.Road)
-                {
-                    PassengerFlow.Runtime.Current?.RemoveVehicle(lifecycleEvent.Vehicle);
-                }
+                PassengerFlow.Runtime.Current?.RebindVehicle(
+                    lifecycleEvent.Vehicle, lifecycleEvent.Line, lifecycleEvent.State, lifecycleEvent.Frame);
                 return;
             }
 
@@ -2303,6 +2306,9 @@ namespace RapidTransitMod
 
             if (dispatchEvent.Kind != DispatchFactKind.State)
                 return;
+
+            PassengerFlow.Runtime.Current?.RegisterVehicle(
+                dispatchEvent.Vehicle, dispatchEvent.Line, dispatchEvent.CurrentState, dispatchEvent.Frame);
 
             if (RuntimePorts.TryResolveVehicleLifecycle(this, dispatchEvent.Vehicle, out LifecycleKind stateLifecycle)
                 && stateLifecycle == LifecycleKind.Rail)
@@ -2902,6 +2908,8 @@ namespace RapidTransitMod
 
         public void PreSerialize(Context context)
         {
+            bool timing = RtLog.VerboseEnabled;
+            long started = timing ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
             try
             {
                 m_VehicleCache?.Ensure();
@@ -2935,6 +2943,13 @@ namespace RapidTransitMod
             catch (Exception ex)
             {
                 log.Info("[OverviewFeatureSettingsPersist] Save failed -> " + ex.GetType().Name + ": " + ex.Message);
+            }
+            if (timing)
+            {
+                double elapsed = (System.Diagnostics.Stopwatch.GetTimestamp() - started)
+                    * 1000d / System.Diagnostics.Stopwatch.Frequency;
+                log.Info("[RtSaveTiming] scope=hostPreparation totalMs="
+                    + elapsed.ToString("F3", System.Globalization.CultureInfo.InvariantCulture));
             }
         }
 

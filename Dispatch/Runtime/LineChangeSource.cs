@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System;
 using Game.Common;
 using Game.Routes;
 using Game.Tools;
@@ -15,6 +16,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly TrackModelService m_TrackModel;
         private readonly LineProfile m_LineProfile;
         private readonly LineStructureInvalidator m_LineStructureInvalidator;
+        private readonly Action<Entity> m_InvalidateWaitingDirectory;
         private readonly List<LineChangeCandidate> m_Candidates =
             new List<LineChangeCandidate>(128);
 
@@ -23,13 +25,15 @@ namespace RapidTransitMod.Dispatch.Runtime
             LineChangeSourceSystem sourceSystem,
             TrackModelService trackModel,
             LineProfile lineProfile,
-            LineStructureInvalidator lineStructureInvalidator)
+            LineStructureInvalidator lineStructureInvalidator,
+            Action<Entity> invalidateWaitingDirectory)
         {
             m_EntityManager = entityManager;
             m_SourceSystem = sourceSystem;
             m_TrackModel = trackModel;
             m_LineProfile = lineProfile;
             m_LineStructureInvalidator = lineStructureInvalidator;
+            m_InvalidateWaitingDirectory = invalidateWaitingDirectory;
         }
 
         internal void ConfirmChanges()
@@ -42,6 +46,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             for (int i = 0; i < m_Candidates.Count; i++)
             {
                 LineChangeCandidate candidate = m_Candidates[i];
+                m_InvalidateWaitingDirectory(candidate.Line);
                 if (candidate.IsDeleted)
                 {
                     SubmitRoadDeleted(candidate);

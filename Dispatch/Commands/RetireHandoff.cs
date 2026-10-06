@@ -34,6 +34,7 @@ namespace RapidTransitMod.Dispatch.Commands
         public uint NextProbeFrame;
         public uint NextDiagnosticFrame;
         public RetireBoardingState Boarding;
+        public bool ServiceEnded;
     }
 
     internal sealed class RetireHandoff
@@ -315,6 +316,12 @@ namespace RapidTransitMod.Dispatch.Commands
                 ? EntityManager.GetComponentData<Owner>(vehicle).m_Owner
                 : Entity.Null;
             bool hardAck = IsRetireHandoffHardAck(vehicle, ownerDepot);
+            if (hardAck && !stage.ServiceEnded
+                && m_RetireHost.TryVehicleLine(vehicle, out Entity serviceLine))
+            {
+                stage.ServiceEnded = true;
+                m_RetireHost.EndService(vehicle, serviceLine, nowFrame);
+            }
             bool currentRoutePresent = EntityManager.HasComponent<CurrentRoute>(vehicle);
             if (RtLog.VerboseEnabled
                 && (!currentRoutePresent || hardAck)
@@ -613,6 +620,16 @@ namespace RapidTransitMod.Dispatch.Commands
 
             return m_RetireHost.HasParkingNavLane(vehicle)
                 || (headVehicle != vehicle && m_RetireHost.HasParkingNavLane(headVehicle));
+        }
+
+        internal bool? ServiceActive(Entity vehicle)
+        {
+            if (vehicle == Entity.Null || !EntityManager.Exists(vehicle)
+                || !EntityManager.HasComponent<PublicTransport>(vehicle))
+                return null;
+            Entity depot = EntityManager.HasComponent<Owner>(vehicle)
+                ? EntityManager.GetComponentData<Owner>(vehicle).m_Owner : Entity.Null;
+            return !IsRetireHandoffHardAck(vehicle, depot);
         }
 
         private bool TryGetWatch(Entity vehicle, out RetireHandoffWatchRecord watch)

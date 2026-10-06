@@ -12,6 +12,7 @@ namespace RapidTransitMod.Dispatch.Commands
     {
         private sealed class Entry
         {
+            internal Entity Line;
             internal Entity Owner;
             internal uint NextProbeFrame;
             internal bool Accepted;
@@ -41,6 +42,7 @@ namespace RapidTransitMod.Dispatch.Commands
 
             Entry entry = new Entry
             {
+                Line = start.SourceLine,
                 Owner = m_Runtime.CanonDepot(input.Owner.m_Owner),
                 NextProbeFrame = m_CommandHost.Frame
             };
@@ -76,6 +78,23 @@ namespace RapidTransitMod.Dispatch.Commands
         internal void Clear()
         {
             m_Entries.Clear();
+        }
+
+        internal bool? ServiceActive(Entity vehicle)
+        {
+            if (vehicle == Entity.Null || !m_CommandHost.EntityManager.Exists(vehicle)
+                || !m_CommandHost.EntityManager.HasComponent<PublicTransport>(vehicle))
+                return null;
+            PublicTransport transport = m_CommandHost.ReadPublicTransport(vehicle);
+            if (m_Entries.TryGetValue(vehicle, out Entry entry))
+                return !entry.Accepted && !IsAccepted(vehicle, entry.Owner, transport);
+            Entity owner = m_CommandHost.EntityManager.HasComponent<Owner>(vehicle)
+                ? m_Runtime.CanonDepot(m_CommandHost.EntityManager.GetComponentData<Owner>(vehicle).m_Owner)
+                : Entity.Null;
+            if (IsAccepted(vehicle, owner, transport))
+                return false;
+            return m_CommandHost.EntityManager.HasComponent<CurrentRoute>(vehicle)
+                ? true : (bool?)null;
         }
 
         private void Tick(Entity vehicle, Entry entry, uint nowFrame)
@@ -159,6 +178,7 @@ namespace RapidTransitMod.Dispatch.Commands
                 return;
 
             entry.Accepted = true;
+            m_RetireHost.EndService(vehicle, entry.Line, m_CommandHost.Frame);
             m_Runtime.m_RoadEventSource.RemoveRetireSource(vehicle);
             m_Runtime.m_RouteProgress.Remove(vehicle);
         }

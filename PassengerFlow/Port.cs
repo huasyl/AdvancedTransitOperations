@@ -2,14 +2,19 @@ using Game.Routes;
 using RapidTransitMod.Dispatch.Observation;
 using RapidTransitMod.TrackModel;
 using RapidTransitMod.Core;
+using RapidTransitMod.Dispatch.Lines;
+using RapidTransitMod.Dispatch.Runtime;
 using System;
+using System.Collections.Generic;
 using Unity.Entities;
+using Unity.Collections;
 
 namespace RapidTransitMod.PassengerFlow
 {
     internal sealed class Port
     {
         private readonly ModRuntimeHostSystem m_Runtime;
+        private Func<Entity, bool?> m_ServiceStatus;
 
         internal Port(ModRuntimeHostSystem runtime)
         {
@@ -19,14 +24,41 @@ namespace RapidTransitMod.PassengerFlow
         internal uint Frame()
             => m_Runtime.m_SimulationSystem != null ? m_Runtime.m_SimulationSystem.frameIndex : 0u;
 
+        internal bool IsReady => m_Runtime.m_SystemReady;
+
+        internal ulong PublishedTraversalVersion => m_Runtime.m_TrackModel.PublishedTraversalVersion;
+
+        internal int CopyTraversalChanges(ulong afterVersion, int budget,
+            List<PublishedTraversalSnapshot> output, out bool historyGap)
+            => m_Runtime.m_TrackModel.CopyPublishedTraversalChanges(afterVersion, budget, output, out historyGap);
+
+        internal void InvalidateWaitingDirectory(Entity line)
+            => SamplingSystem.CurrentState?.Anchors.InvalidateLine(line);
+
+        internal IReadOnlyDictionary<string, AppliedLine> AppliedLines => m_Runtime.AppliedLines;
+
+        internal TramStationGroup[] ReadStationGroups(FlowQueryDto request)
+        {
+            Entity line = Entity.Null;
+            string[] affected = null;
+            if (!string.IsNullOrEmpty(request.lineId))
+            {
+                if (!AppliedLines.TryGetValue(request.lineId, out AppliedLine applied))
+                    return Array.Empty<TramStationGroup>();
+                line = applied.LineEntity;
+                if ((request.includeLineStops ?? false) && m_Runtime.m_TrackModel != null)
+                    affected = m_Runtime.m_TrackModel.RefreshTramStationNames(line);
+            }
+            return m_Runtime.m_TrackModel != null
+                ? m_Runtime.m_TrackModel.ReadTramStationGroups(line, request.stationGroupId ?? request.stationId, affected)
+                : Array.Empty<TramStationGroup>();
+        }
+
         internal ClockSnapshot Clock()
             => m_Runtime.m_SimClock.Snapshot;
 
         internal int NowMinute()
             => m_Runtime.m_SimClock.Snapshot.NowMinute;
-
-        internal DateTime NowDate()
-            => m_Runtime.m_SimClock.Snapshot.NowDate;
 
         internal uint ToFramesCeil(double gameMinutes)
             => m_Runtime.m_SimClock.Snapshot.ToFramesCeil(gameMinutes);
@@ -46,6 +78,21 @@ namespace RapidTransitMod.PassengerFlow
         internal bool TryLine(Entity vehicle, out Entity line)
             => m_Runtime.m_VehicleView.TryGetLine(vehicle, out line);
 
+        internal NativeArray<Entity> VehicleViews(Allocator allocator)
+            => m_Runtime.m_VehicleView.Keys(allocator);
+
+        internal void RegisterVehicle(Entity vehicle, Entity line, VehicleState vehicleState, uint frame)
+            => Observer.RegisterVehicle(this, SamplingSystem.CurrentState, vehicle, line, vehicleState, frame);
+
+        internal void EndService(Entity vehicle, Entity line, uint frame)
+            => Observer.EndService(this, SamplingSystem.CurrentState, vehicle, line, frame);
+
+        internal void BindServiceStatus(Func<Entity, bool?> readStatus)
+            => m_ServiceStatus = readStatus;
+
+        internal bool? ServiceActive(Entity vehicle)
+            => m_ServiceStatus?.Invoke(vehicle);
+
         internal void OpenStop(Entity vehicle, Entity line, int waypointIndex, uint frame)
             => Observer.OpenStop(this, SamplingSystem.CurrentState, vehicle, line, waypointIndex, frame);
 
@@ -59,13 +106,35 @@ namespace RapidTransitMod.PassengerFlow
             => Observer.LaunchOrigin(this, SamplingSystem.CurrentState, vehicle, frame);
 
         internal void CancelStop(Entity vehicle)
-            => Observer.CancelStop(SamplingSystem.CurrentState, vehicle);
+        {
+            State state = SamplingSystem.CurrentState;
+            if (state != null && state.OpenStops.TryGetValue(vehicle, out OpenStop stop))
+                SamplingSystem.CancelRepresentatives(vehicle, stop.OpenFrame);
+            Observer.CancelStop(state, vehicle);
+        }
 
         internal void RemoveVehicle(Entity vehicle)
-            => Observer.RemoveVehicle(this, SamplingSystem.CurrentState, vehicle);
+        {
+            SamplingSystem.CancelRepresentatives(vehicle, null);
+            Observer.RemoveVehicle(this, SamplingSystem.CurrentState, vehicle);
+        }
+
+        internal void RebindVehicle(Entity vehicle, Entity line, VehicleState vehicleState, uint frame)
+        {
+            SamplingSystem.CancelRepresentatives(vehicle, null);
+            Observer.RemoveVehicle(this, SamplingSystem.CurrentState, vehicle, true, frame);
+            Observer.RegisterVehicle(this, SamplingSystem.CurrentState, vehicle, line, vehicleState, frame);
+        }
 
         internal void InvalidateAnchors(Entity line)
-            => SamplingSystem.CurrentState?.Anchors.InvalidateLine(line);
+        {
+            State state = SamplingSystem.CurrentState;
+            if (state == null)
+                return;
+            state.Anchors.InvalidateLine(line);
+            state.Sections.InvalidateLine(line);
+            SamplingSystem.CloseWaitingLine(state, line, Frame(), Clock());
+        }
 
         internal bool HasWaypoints(Entity line)
             => line != Entity.Null && m_Runtime.EntityManager.HasBuffer<RouteWaypoint>(line);
@@ -91,6 +160,28 @@ namespace RapidTransitMod.PassengerFlow
             return waypoint != Entity.Null;
         }
 
+        internal bool IsBoardingWaypoint(Entity line, int waypointIndex)
+        {
+            if (!TryWaypoint(line, waypointIndex, out Entity waypoint)
+                || !m_Runtime.EntityManager.HasComponent<Connected>(waypoint))
+            {
+                return false;
+            }
+
+            Entity stop = m_Runtime.EntityManager.GetComponentData<Connected>(waypoint).m_Connected;
+            return stop != Entity.Null
+                && m_Runtime.EntityManager.HasComponent<BoardingVehicle>(stop);
+        }
+
+        internal Entity ConnectedStop(Entity waypoint)
+        {
+            if (!m_Runtime.EntityManager.HasComponent<Connected>(waypoint))
+                return Entity.Null;
+            Entity stop = m_Runtime.EntityManager.GetComponentData<Connected>(waypoint).m_Connected;
+            return stop != Entity.Null && m_Runtime.EntityManager.HasComponent<BoardingVehicle>(stop)
+                ? stop : Entity.Null;
+        }
+
         internal bool TryDwellAnchor(Entity line, int waypointIndex, out StationDwellAnchor anchor)
         {
             anchor = default;
@@ -102,6 +193,8 @@ namespace RapidTransitMod.PassengerFlow
             chain = null;
             return m_Runtime.m_TrackModel != null && m_Runtime.m_TrackModel.TryGetChainForLine(line, waypoints, out chain);
         }
+
+        internal TransitMode LineMode(Entity line) => TransportModeResolver.Resolve(m_Runtime.EntityManager, line);
 
         internal bool LineExists(Entity line)
             => line != Entity.Null && m_Runtime.EntityManager.Exists(line);
@@ -130,6 +223,7 @@ namespace RapidTransitMod.PassengerFlow
             return false;
         }
 
+
         internal string Name(Entity entity)
             => entity != Entity.Null ? m_Runtime.EntityName(entity) : string.Empty;
 
@@ -144,6 +238,16 @@ namespace RapidTransitMod.PassengerFlow
 
         internal string EnsureSak(Entity anchor)
             => m_Runtime.m_Resolve != null ? m_Runtime.m_Resolve.EnsureSak(anchor) : string.Empty;
+
+        internal bool TryRoutePlan(Entity line, out RoutePlan plan)
+        {
+            plan = null;
+            return RuntimePorts.TryResolveLineLifecycle(m_Runtime, line, out LifecycleKind lifecycle)
+                && m_Runtime.m_RoutePlans.TryGet(line, lifecycle, out plan);
+        }
+
+        internal Entity AnchorFromStop(Entity stop)
+            => m_Runtime.m_Resolve.AnchorFromStop(stop);
 
         internal Entity RuntimeVehicle(Entity vehicle)
             => m_Runtime.m_Resolve != null ? m_Runtime.m_Resolve.RuntimeVehicle(vehicle) : vehicle;

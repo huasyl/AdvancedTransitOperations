@@ -20,6 +20,12 @@ namespace RapidTransitMod
             m_NameSystem = nameSystem;
         }
 
+        internal bool TryCustom(Unity.Entities.Entity entity, out string name)
+        {
+            return m_NameSystem.TryGetCustomName(entity, out name)
+                && !string.IsNullOrWhiteSpace(name);
+        }
+
         internal string Get(Unity.Entities.Entity entity)
         {
             return Lookup(entity);

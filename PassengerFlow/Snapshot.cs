@@ -2,37 +2,71 @@ namespace RapidTransitMod.PassengerFlow
 {
     internal static class Snapshot
     {
-        internal const int SchemaVersion = 1;
+        internal const int SchemaVersion = 5;
         internal const int BucketMinutes = 15;
         private const uint SummaryLogIntervalFrames = 1800;
 
-        internal static FlowSnapshotDto Build(ModeScope scope, State state, uint generatedAtFrame, Port port = null)
+        internal static FlowSnapshotDto Build(State state, uint generatedAtFrame, FlowQuery query,
+            Core.ClockSnapshot clock, Port port = null)
         {
-            SnapshotRows rows = state != null
-                ? state.Aggregates.BuildSnapshotRows(scope, state.Anchors)
-                : SnapshotRows.Empty(scope);
-            StationCatalogDto[] stationCatalog = state != null
+            FlowOptions options = query.Options;
+            SnapshotRows rows = state != null && !query.DirectoryOnly
+                ? state.Aggregates.BuildSnapshotRows(state.Anchors, query, clock)
+                : SnapshotRows.Empty();
+            StationCatalogDto[] stationCatalog = options.includeStationCatalog && !query.DirectoryOnly && state != null
                 ? state.Anchors.BuildCatalog(port)
                 : System.Array.Empty<StationCatalogDto>();
+            query.Groups.Apply(rows, query.SectionKind);
+            foreach (StationCatalogDto station in stationCatalog)
+            {
+                station.stationGroupId = query.Groups.Id(station.stationId);
+                station.stationName = query.Groups.Name(station.stationId, station.stationName);
+            }
+            bool lineStopsAvailable = false;
+            LineStopDto[] lineStops = options.includeLineStops && port != null && state != null
+                ? state.Anchors.BuildLineStops(port, query, out lineStopsAvailable)
+                : System.Array.Empty<LineStopDto>();
 
             FlowSnapshotDto snapshot = new FlowSnapshotDto
             {
                 schemaVersion = SchemaVersion,
-                mode = scope.Token,
+                mode = query.ModeToken,
+                view = query.View,
+                day = query.Day,
+                selectedDayIndex = query.SelectedDayIndex,
+                sectionKind = options.includeSections ? (query.SectionKind == SectionKind.Stops ? "stops" : "track") : null,
+                requestedFromBucket = query.RequestedFrom,
+                requestedToBucket = query.RequestedTo,
                 generatedAtFrame = generatedAtFrame,
                 bucketMinutes = BucketMinutes,
                 stationVolumes = rows.StationVolumes,
                 sectionVolumes = rows.SectionVolumes,
                 odFlows = rows.OdFlows,
                 stationCatalog = stationCatalog,
-                warnings = rows.Warnings
+                warnings = rows.Warnings,
+                transferFlows = rows.TransferFlows,
+                stationWaiting = rows.StationWaiting,
+                lineTimeLoads = rows.LineTimeLoads,
+                networkTimeLoads = rows.NetworkTimeLoads,
+                currentDayIndex = clock.DayIndex,
+                currentMinute = port != null ? clock.NowMinute : 0,
+                samplingReady = port != null && port.IsReady && state != null
+                    && state.LoadsInitialized && !state.RuntimeRestorePending,
+                retainedFromBucket = query.RetainedFrom,
+                retainedToBucket = query.RetainedTo,
+                effectiveFromBucket = query.EffectiveFrom,
+                effectiveToBucket = query.EffectiveTo,
+                lineStops = lineStops,
+                lineStopsAvailable = lineStopsAvailable,
+                stationGroups = query.Groups.ToDtos(),
+                summary = rows.Summary
             };
 
-            LogSummary(scope, state, snapshot, generatedAtFrame, port);
+            if (!query.DirectoryOnly) LogSummary(state, snapshot, generatedAtFrame, port);
             return snapshot;
         }
 
-        private static void LogSummary(ModeScope scope, State state, FlowSnapshotDto snapshot, uint frame, Port port)
+        private static void LogSummary(State state, FlowSnapshotDto snapshot, uint frame, Port port)
         {
             if (state == null || port == null)
                 return;
@@ -42,19 +76,19 @@ namespace RapidTransitMod.PassengerFlow
                 return;
 
             state.LastSnapshotSummaryLogFrame = frame;
-            int odCompleted = 0;
-            OdFlowDto[] odFlows = snapshot.odFlows ?? System.Array.Empty<OdFlowDto>();
-            for (int i = 0; i < odFlows.Length; i++)
-                odCompleted += odFlows[i]?.completedCount ?? 0;
+            long odCompleted = snapshot.summary != null ? snapshot.summary.completedOdCount : 0;
+            if (snapshot.summary == null)
+                for (int i = 0; i < snapshot.odFlows.Length; i++)
+                    odCompleted += snapshot.odFlows[i].completedCount;
 
             string unknownOrigin = WarningCount(snapshot, Aggregates.WarningUnknownOriginAlighting).ToString();
             string transferExpired = WarningCount(snapshot, Aggregates.WarningTransferWindowExpired).ToString();
             string transferMismatch = WarningCount(snapshot, Aggregates.WarningTransferBoardStationMismatch).ToString();
             string overflow = WarningCount(snapshot, Aggregates.WarningPendingTransferOverflow).ToString();
-            port.Log("[PassengerFlowSummary] mode=" + scope.Token
-                + " stationRows=" + (snapshot.stationVolumes != null ? snapshot.stationVolumes.Length : 0).ToString()
-                + " sectionRows=" + (snapshot.sectionVolumes != null ? snapshot.sectionVolumes.Length : 0).ToString()
-                + " odRows=" + odFlows.Length.ToString()
+            port.Log("[PassengerFlowSummary] mode=" + snapshot.mode
+                + " stationRows=" + (snapshot.summary != null ? snapshot.summary.stationVolumes.Length : snapshot.stationVolumes.Length).ToString()
+                + " sectionRows=" + (snapshot.summary != null ? snapshot.summary.sectionVolumes.Length : snapshot.sectionVolumes.Length).ToString()
+                + " odRows=" + (snapshot.summary != null ? snapshot.summary.odFlows.Length : snapshot.odFlows.Length).ToString()
                 + " odCompleted=" + odCompleted.ToString()
                 + " unknownOrigin=" + unknownOrigin
                 + " transferExpired=" + transferExpired

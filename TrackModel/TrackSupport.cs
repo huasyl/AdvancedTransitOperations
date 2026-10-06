@@ -38,6 +38,7 @@ namespace RapidTransitMod.TrackModel
         internal Entity Stop(Entity waypoint) => m_Runtime.Stop(waypoint);
         internal Entity StationOf(Entity stop) => m_Runtime.StationOf(stop);
         internal string StopName(Entity stop) => m_Runtime.StopName(stop);
+        internal bool TryStopCustomName(Entity stop, out string name) => m_Runtime.TryStopCustomName(stop, out name);
         internal string StopKey(Entity stop) => m_Runtime.StopKey(stop);
         internal Entity ResolvePassingStationBuilding(Entity entity) => m_Runtime.ResolvePassingStation(entity);
         internal bool IsAppliedLocal(Entity line) => m_Runtime.IsAppliedLocal(line);

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using RapidTransitMod.Dispatch.Observation;
+using RapidTransitMod.Dispatch.Lines;
 using Unity.Entities;
 
 namespace RapidTransitMod.PassengerFlow
@@ -10,6 +11,7 @@ namespace RapidTransitMod.PassengerFlow
         private readonly Dictionary<string, int> m_IndexBySak = new Dictionary<string, int>();
         private readonly Dictionary<WaypointAnchorCacheKey, WaypointAnchorCacheEntry> m_WaypointCache = new Dictionary<WaypointAnchorCacheKey, WaypointAnchorCacheEntry>();
         private readonly List<StationKey> m_Stations = new List<StationKey>();
+        private readonly Dictionary<Entity, WaitingStop[]> m_WaitingDirectories = new Dictionary<Entity, WaitingStop[]>();
 
         internal int StationCount => m_Stations.Count;
 
@@ -17,6 +19,7 @@ namespace RapidTransitMod.PassengerFlow
         {
             m_IndexBySak.Clear();
             m_WaypointCache.Clear();
+            m_WaitingDirectories.Clear();
             m_Stations.Clear();
         }
 
@@ -25,13 +28,21 @@ namespace RapidTransitMod.PassengerFlow
             if (line == Entity.Null)
                 return;
 
-            List<WaypointAnchorCacheKey> keys = new List<WaypointAnchorCacheKey>();
+            m_WaitingDirectories.Remove(line);
+
+            List<WaypointAnchorCacheKey> keys = null;
             foreach (KeyValuePair<WaypointAnchorCacheKey, WaypointAnchorCacheEntry> entry in m_WaypointCache)
             {
                 if (entry.Key.IsLine(line))
+                {
+                    if (keys == null)
+                        keys = new List<WaypointAnchorCacheKey>();
                     keys.Add(entry.Key);
+                }
             }
 
+            if (keys == null)
+                return;
             for (int i = 0; i < keys.Count; i++)
                 m_WaypointCache.Remove(keys[i]);
         }
@@ -44,6 +55,39 @@ namespace RapidTransitMod.PassengerFlow
                 anchor.StopEntity,
                 anchor.BuildingEntity,
                 out key);
+        }
+
+        internal void ClearRouteCaches()
+        {
+            m_WaypointCache.Clear();
+            m_WaitingDirectories.Clear();
+        }
+
+        internal bool TryWaitingDirectory(Port port, Entity line, out WaitingStop[] stops)
+        {
+            if (m_WaitingDirectories.TryGetValue(line, out stops))
+                return true;
+            if (!port.HasWaypoints(line))
+                return false;
+
+            int waypointCount = port.Waypoints(line).Length;
+            for (int i = 0; i < waypointCount; i++)
+                TryForWaypoint(port, line, i, out _);
+            if (!port.TryRoutePlan(line, out RoutePlan plan))
+                return false;
+
+            stops = new WaitingStop[plan.Stops.Length];
+            bool complete = true;
+            for (int i = 0; i < stops.Length; i++)
+            {
+                RouteStopRef stop = plan.Stops[i];
+                bool known = TryGetIndex(stop.StopKey, out int index);
+                stops[i] = new WaitingStop(stop, known ? index : -1);
+                complete &= known;
+            }
+            if (complete)
+                m_WaitingDirectories[line] = stops;
+            return true;
         }
 
         internal bool TryRegisterSak(string sak, Entity anchorEntity, Entity stopEntity, Entity buildingEntity, out StationKey key)
@@ -95,6 +139,51 @@ namespace RapidTransitMod.PassengerFlow
             return true;
         }
 
+        internal bool TryForStop(Port port, Entity stop, out StationKey key)
+        {
+            key = default;
+            Entity anchor = port.AnchorFromStop(stop);
+            if (anchor == Entity.Null)
+                return false;
+
+            return TryRegisterSak(port.EnsureSak(anchor), anchor, stop, Entity.Null, out key);
+        }
+
+        internal bool TryPosition(Port port, Entity line, int waypointIndex, out StopPosition position)
+        {
+            position = default;
+            if (!port.TryWaypoint(line, waypointIndex, out Entity waypoint))
+                return false;
+            position = new StopPosition(port.ConnectedStop(waypoint), waypoint, waypointIndex, 0);
+            if (!port.TryRoutePlan(line, out RoutePlan plan))
+                return false;
+            for (int i = 0; i < plan.Stops.Length; i++)
+            {
+                RouteStopRef row = plan.Stops[i];
+                if (row.WaypointIndex != waypointIndex)
+                    continue;
+                Entity stop = port.ConnectedStop(row.Waypoint);
+                if (stop == Entity.Null)
+                    return false;
+                position = new StopPosition(stop, row.Waypoint, waypointIndex, row.StationOccurrence);
+                return true;
+            }
+            return false;
+        }
+
+        internal static Dictionary<Entity, StopPosition> BuildPositions(Port port, RoutePlan plan)
+        {
+            Dictionary<Entity, StopPosition> positions = new Dictionary<Entity, StopPosition>();
+            for (int i = 0; i < plan.Stops.Length; i++)
+            {
+                RouteStopRef row = plan.Stops[i];
+                Entity stop = port.ConnectedStop(row.Waypoint);
+                positions[row.Waypoint] = stop == Entity.Null ? default
+                    : new StopPosition(stop, row.Waypoint, row.WaypointIndex, row.StationOccurrence);
+            }
+            return positions;
+        }
+
         private bool TryGetCachedStation(WaypointAnchorCacheEntry cached, out StationKey key)
         {
             key = default;
@@ -117,6 +206,59 @@ namespace RapidTransitMod.PassengerFlow
 
             sak = m_Stations[index].Sak;
             return !string.IsNullOrWhiteSpace(sak);
+        }
+
+        internal bool TryGetIndex(string sak, out int index)
+            => m_IndexBySak.TryGetValue(sak, out index);
+
+        internal LineStopDto[] BuildLineStops(Port port, FlowQuery query, out bool available)
+        {
+            available = true;
+            List<LineStopDto> rows = new List<LineStopDto>();
+            IEnumerable<AppliedLine> appliedLines = port.AppliedLines.Values;
+            if (!string.IsNullOrEmpty(query.LineId))
+                appliedLines = port.AppliedLines.TryGetValue(query.LineId, out AppliedLine selected)
+                    ? new[] { selected } : Array.Empty<AppliedLine>();
+            foreach (AppliedLine applied in appliedLines)
+            {
+                Entity line = applied.LineEntity;
+                TransitMode mode;
+                string lineId;
+                if (!string.IsNullOrEmpty(query.LineId))
+                {
+                    mode = port.LineMode(line);
+                    lineId = query.LineId;
+                }
+                else if (!port.TryLineMetadata(line, out mode, out lineId)) continue;
+                if (!query.Includes(mode)) continue;
+                if (!port.TryRoutePlan(line, out RoutePlan plan))
+                {
+                    available = false;
+                    continue;
+                }
+                for (int i = 0; i < plan.Stops.Length; i++)
+                {
+                    RouteStopRef stop = plan.Stops[i];
+                    if (!string.IsNullOrEmpty(query.StationId)
+                        && !string.Equals(query.StationId, query.Groups.Id(stop.StopKey), StringComparison.Ordinal)
+                        && !string.Equals(query.StationId, stop.StopKey, StringComparison.Ordinal))
+                        continue;
+                    Entity specificStop = port.ConnectedStop(stop.Waypoint);
+                    if (specificStop == Entity.Null)
+                        specificStop = stop.Stop;
+                    rows.Add(new LineStopDto
+                    {
+                        mode = TransitModeCodec.Format(mode), lineId = lineId,
+                        waypointIndex = stop.WaypointIndex,
+                        stationOccurrence = stop.StationOccurrence,
+                        stationId = stop.StopKey,
+                        stationGroupId = query.Groups.Id(stop.StopKey),
+                        stationName = query.Groups.Name(stop.StopKey, port.StationName(stop.Stop)),
+                        stopName = port.Name(specificStop)
+                    });
+                }
+            }
+            return rows.ToArray();
         }
 
         internal StationCatalogDto[] BuildCatalog(Port port)
@@ -156,6 +298,7 @@ namespace RapidTransitMod.PassengerFlow
         {
             m_IndexBySak.Clear();
             m_WaypointCache.Clear();
+            m_WaitingDirectories.Clear();
             m_Stations.Clear();
             if (catalog == null)
                 return;
@@ -206,6 +349,18 @@ namespace RapidTransitMod.PassengerFlow
                 return name;
 
             return string.IsNullOrWhiteSpace(station.PersistedName) ? station.Sak : station.PersistedName;
+        }
+    }
+
+    internal readonly struct WaitingStop
+    {
+        internal readonly RouteStopRef Stop;
+        internal readonly int StationIndex;
+
+        internal WaitingStop(RouteStopRef stop, int stationIndex)
+        {
+            Stop = stop;
+            StationIndex = stationIndex;
         }
     }
 

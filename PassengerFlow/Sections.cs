@@ -1,12 +1,13 @@
 using System;
 using System.Collections.Generic;
 using Game.Routes;
-using RapidTransitMod.PassengerFlow.Jobs;
 using RapidTransitMod.TrackModel;
 using Unity.Entities;
 
 namespace RapidTransitMod.PassengerFlow
 {
+    internal enum SectionKind { Track, Stops }
+
     internal sealed class Sections
     {
         private readonly Dictionary<SectionCacheKey, Dictionary<int, SectionSegment[]>> m_Cache =
@@ -17,35 +18,47 @@ namespace RapidTransitMod.PassengerFlow
             m_Cache.Clear();
         }
 
-        internal static bool Supports(TransitMode mode)
-            => mode == TransitMode.Train || mode == TransitMode.Subway || mode == TransitMode.Tram;
+        internal void InvalidateLine(Entity line)
+        {
+            List<SectionCacheKey> remove = new List<SectionCacheKey>();
+            foreach (SectionCacheKey key in m_Cache.Keys)
+                if (key.IsLine(line)) remove.Add(key);
+            foreach (SectionCacheKey key in remove) m_Cache.Remove(key);
+        }
 
-        internal SectionLoadEvent[] Expand(
+        internal static bool Supports(TransitMode mode)
+            => mode == TransitMode.Train || mode == TransitMode.Subway || mode == TransitMode.Tram || mode == TransitMode.Bus;
+
+        internal SectionSegment[] PrepareTrack(
             Port port,
             State state,
-            PendingSample sample,
-            DepartureLoadEvent loadEvent,
+            OpenStop sample,
             uint frame)
         {
             if (!Supports(sample.Mode))
-                return Array.Empty<SectionLoadEvent>();
+                return Array.Empty<SectionSegment>();
 
-            if (port == null
-                || state == null
-                || sample.Line == Entity.Null
-                || !port.HasWaypoints(sample.Line))
+            if (sample.Mode == TransitMode.Bus)
+                return Array.Empty<SectionSegment>();
+
+            if (!port.HasWaypoints(sample.Line))
             {
-                state?.Aggregates.RecordWarning(
+                state.Aggregates.RecordWarning(
                     sample.Mode,
                     Aggregates.WarningSectionTopologyMissing,
                     sample.LineId,
                     sample.OpenStationSakIndex,
-                    state != null ? state.CurrentBucket : new TimeBucketKey(0, 0),
+                    state.CurrentBucket,
                     frame);
-                return Array.Empty<SectionLoadEvent>();
+                return Array.Empty<SectionSegment>();
             }
 
             DynamicBuffer<RouteWaypoint> waypoints = port.Waypoints(sample.Line);
+            if (sample.OpenWaypointIndex < 0 || sample.OpenWaypointIndex >= waypoints.Length
+                || waypoints[sample.OpenWaypointIndex].m_Waypoint != sample.Position.Waypoint
+                || !state.Anchors.TryForWaypoint(port, sample.Line, sample.OpenWaypointIndex, out StationKey origin)
+                || origin.Index != sample.OpenStationSakIndex)
+                return Array.Empty<SectionSegment>();
             if (!port.TryTrackChain(sample.Line, waypoints, out LineTrackChain chain)
                 || chain == null
                 || chain.TraversalProfile == null
@@ -59,7 +72,7 @@ namespace RapidTransitMod.PassengerFlow
                     sample.OpenStationSakIndex,
                     state.CurrentBucket,
                     frame);
-                return Array.Empty<SectionLoadEvent>();
+                return Array.Empty<SectionSegment>();
             }
 
             SectionCacheKey cacheKey = new SectionCacheKey(
@@ -68,7 +81,7 @@ namespace RapidTransitMod.PassengerFlow
                 chain.TraversalSignature);
             if (!m_Cache.TryGetValue(cacheKey, out Dictionary<int, SectionSegment[]> segmentsByWaypoint))
             {
-                segmentsByWaypoint = BuildSegments(port, state, sample, waypoints, chain, frame);
+                segmentsByWaypoint = BuildSegments(port, state, sample, chain, frame);
                 m_Cache[cacheKey] = segmentsByWaypoint;
             }
 
@@ -83,28 +96,37 @@ namespace RapidTransitMod.PassengerFlow
                     sample.OpenStationSakIndex,
                     state.CurrentBucket,
                     frame);
-                return Array.Empty<SectionLoadEvent>();
+                return Array.Empty<SectionSegment>();
             }
 
-            SectionLoadEvent[] events = new SectionLoadEvent[segments.Length];
-            for (int i = 0; i < segments.Length; i++)
+            return segments;
+        }
+
+        internal static SectionSegment[] PrepareStops(Port port, State state, OpenStop stop)
+        {
+            if (!port.TryRoutePlan(stop.Line, out Dispatch.Lines.RoutePlan plan))
+                return Array.Empty<SectionSegment>();
+            for (int i = 0; i < plan.Stops.Length; i++)
             {
-                events[i] = new SectionLoadEvent(
-                    sample.Mode,
-                    sample.LineId,
-                    segments[i].FromStationSakIndex,
-                    segments[i].ToStationSakIndex,
-                    loadEvent.PassengerCount);
+                Dispatch.Lines.RouteStopRef from = plan.Stops[i];
+                if (from.Waypoint != stop.Position.Waypoint
+                    || from.StationOccurrence != stop.Position.StationOccurrence
+                    || !state.Anchors.TryGetIndex(from.StopKey, out int fromStation)
+                    || fromStation != stop.OpenStationSakIndex)
+                    continue;
+                Dispatch.Lines.RouteStopRef to = plan.Stops[(i + 1) % plan.Stops.Length];
+                if (!state.Anchors.TryForWaypoint(port, stop.Line, to.WaypointIndex, out StationKey destination))
+                    return Array.Empty<SectionSegment>();
+                return new[] { new SectionSegment(fromStation, destination.Index,
+                    from.StationOccurrence, to.StationOccurrence) };
             }
-
-            return events;
+            return Array.Empty<SectionSegment>();
         }
 
         private Dictionary<int, SectionSegment[]> BuildSegments(
             Port port,
             State state,
-            PendingSample sample,
-            DynamicBuffer<RouteWaypoint> waypoints,
+            OpenStop sample,
             LineTrackChain chain,
             uint frame)
         {
@@ -152,10 +174,7 @@ namespace RapidTransitMod.PassengerFlow
                         {
                             segments.Add(new SectionSegment(
                                 previousStation.Index,
-                                currentStation.Index,
-                                previousEventIndex: stationEvents[(cursor - 1 + stationEvents.Count) % stationEvents.Count].EventIndex,
-                                toEventIndex: currentEvent.EventIndex,
-                                includesPassStation: currentEvent.Kind == TraversalEventKind.Pass));
+                                currentStation.Index));
                         }
 
                         previousStation = currentStation;
@@ -182,7 +201,7 @@ namespace RapidTransitMod.PassengerFlow
         private static bool TryResolveEventStation(
             Port port,
             State state,
-            PendingSample sample,
+            OpenStop sample,
             TraversalEvent traversalEvent,
             uint frame,
             out StationKey station)
@@ -268,6 +287,8 @@ namespace RapidTransitMod.PassengerFlow
             m_TraversalSignature = traversalSignature;
         }
 
+        internal bool IsLine(Entity line) => m_Line == line;
+
         public bool Equals(SectionCacheKey other)
             => m_Line == other.m_Line
                 && m_Signature == other.m_Signature
@@ -290,45 +311,20 @@ namespace RapidTransitMod.PassengerFlow
     {
         internal readonly int FromStationSakIndex;
         internal readonly int ToStationSakIndex;
-        internal readonly int FromEventIndex;
-        internal readonly int ToEventIndex;
-        internal readonly bool IncludesPassStation;
+        internal readonly int FromStationOccurrence;
+        internal readonly int ToStationOccurrence;
 
         internal SectionSegment(
             int fromStationSakIndex,
             int toStationSakIndex,
-            int previousEventIndex,
-            int toEventIndex,
-            bool includesPassStation)
+            int fromStationOccurrence = 0,
+            int toStationOccurrence = 0)
         {
             FromStationSakIndex = fromStationSakIndex;
             ToStationSakIndex = toStationSakIndex;
-            FromEventIndex = previousEventIndex;
-            ToEventIndex = toEventIndex;
-            IncludesPassStation = includesPassStation;
+            FromStationOccurrence = fromStationOccurrence;
+            ToStationOccurrence = toStationOccurrence;
         }
     }
 
-    internal readonly struct SectionLoadEvent
-    {
-        internal readonly TransitMode Mode;
-        internal readonly string LineId;
-        internal readonly int FromStationSakIndex;
-        internal readonly int ToStationSakIndex;
-        internal readonly int PassengerCount;
-
-        internal SectionLoadEvent(
-            TransitMode mode,
-            string lineId,
-            int fromStationSakIndex,
-            int toStationSakIndex,
-            int passengerCount)
-        {
-            Mode = mode;
-            LineId = lineId ?? string.Empty;
-            FromStationSakIndex = fromStationSakIndex;
-            ToStationSakIndex = toStationSakIndex;
-            PassengerCount = passengerCount;
-        }
-    }
 }

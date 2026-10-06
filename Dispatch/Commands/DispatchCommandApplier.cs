@@ -47,6 +47,18 @@ namespace RapidTransitMod
             m_RoadRetireHandoff = new RoadRetireHandoff(runtime, m_RetireHost, m_RoadCommandHost);
         }
 
+        internal void BindServiceEnd(Action<Entity, Entity, uint> ended)
+            => m_RetireHost.BindServiceEnd(ended);
+
+        internal bool? ServiceActive(Entity vehicle)
+        {
+            if (!RuntimePorts.TryResolveVehicleLifecycle(m_Runtime, vehicle, out LifecycleKind lifecycle))
+                return null;
+            return lifecycle == LifecycleKind.Road
+                ? m_RoadRetireHandoff.ServiceActive(vehicle)
+                : m_RetireHandoff.ServiceActive(vehicle);
+        }
+
         internal void HoldDeparture(
             Entity vehicle,
             ref Game.Vehicles.PublicTransport publicTransport,

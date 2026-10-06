@@ -10,6 +10,7 @@ import {
   quickMinutesToTime
 } from "../../../lib/auto-schedule";
 import { getWorkbenchApi } from "../../shared/workbench-api";
+import { DEFAULT_SERVICE_PERIODS, moveServiceBoundary } from "../../../lib/service-periods";
 import { minutesToTime, timeToMinutes } from "../../../lib/time";
 import { useNativeScheduleI18n } from "../../shared/workbench-i18n";
 import { validateManualRows } from "../../../lib/validation";
@@ -117,9 +118,6 @@ function getSnapshotRequestSequence(snapshot) {
   return Number.isFinite(numeric) ? Math.max(0, Math.trunc(numeric)) : 0;
 }
 
-function cloneQuickSegments() {
-  return QUICK_ADD_DEFAULT_SEGMENTS.map((segment) => ({ ...segment }));
-}
 
 function getQuickLineRowId(row) {
   return row?.lineId || row?.serviceId || "";
@@ -146,7 +144,7 @@ function getQuickPlanSignature(plan) {
     .join("|");
 }
 
-export default function useScheduleController({ registerHostActions, activeTransportMode = "train", isActive = false, onSnapshot } = {}) {
+export default function useScheduleController({ registerHostActions, activeTransportMode = "train", isActive = false, onSnapshot, readServicePeriods, writeServicePeriods } = {}) {
 
   const { t } = useNativeScheduleI18n();
   const scheduleMode = normalizeScheduleMode(activeTransportMode);
@@ -155,7 +153,8 @@ export default function useScheduleController({ registerHostActions, activeTrans
   const workbenchApi = useMemo(() => getWorkbenchApi(), []);
   const [activeRightTab, setActiveRightTab] = useState("auto");
   const [autoSubMode, setAutoSubMode] = useState("quick");
-  const [quickConfigsByLine, setQuickConfigsByLine] = useState({});
+  const [quickCountsByLine, setQuickCountsByLine] = useState({});
+  const [quickPeriods, setQuickPeriods] = useState(DEFAULT_SERVICE_PERIODS);
   const [quickImportRecordsByLine, setQuickImportRecordsByLine] = useState({});
   const [catalogRevision, setCatalogRevision] = useState(0);
   const dropdownPortalHostRef = useRef(null);
@@ -239,10 +238,22 @@ export default function useScheduleController({ registerHostActions, activeTrans
     () => (supportsExpress ? normalizeKind(selectedLineType) : "local"),
     [selectedLineType, supportsExpress]
   );
-  const currentQuickSegments = useMemo(
-    () => quickConfigsByLine[selectedLine.id] || cloneQuickSegments(),
-    [quickConfigsByLine, selectedLine.id]
-  );
+  const quickLineKey = `${scheduleMode}:${selectedLine.id}`;
+  useEffect(() => {
+    if (!isActive) return;
+    const periods = readServicePeriods?.(scheduleMode, selectedLine.id) || DEFAULT_SERVICE_PERIODS;
+    setQuickPeriods(periods);
+    setQuickCountsByLine((current) => {
+      const counts = periods.map((period, index) => Math.min(
+        current[quickLineKey]?.[index] ?? QUICK_ADD_DEFAULT_SEGMENTS[index].count,
+        getQuickAddSegmentCapacity(period.start, period.end)));
+      return { ...current, [quickLineKey]: counts };
+    });
+  }, [isActive, scheduleMode, selectedLine.id, quickLineKey, readServicePeriods]);
+  const currentQuickSegments = useMemo(() => quickPeriods.map((period, index) => ({ ...period,
+    count: Math.min(quickCountsByLine[quickLineKey]?.[index] ?? QUICK_ADD_DEFAULT_SEGMENTS[index].count,
+      getQuickAddSegmentCapacity(period.start, period.end)) })),
+    [quickPeriods, quickCountsByLine, quickLineKey]);
   const normalizedManualInput = useMemo(
     () => normalizeTimeInput(String(manualInput || "").trim()),
     [manualInput]
@@ -660,7 +671,6 @@ export default function useScheduleController({ registerHostActions, activeTrans
     setActiveRightTab((current) => (RIGHT_TAB_IDS.has(current) ? current : "auto"));
     if (!preserveQuickState) {
       setAutoSubMode("quick");
-      setQuickConfigsByLine({});
     }
     setQuickImportRecordsByLine({});
     setSelectedLineId(sourceLine.id);
@@ -840,7 +850,6 @@ export default function useScheduleController({ registerHostActions, activeTrans
     setAutoRules([]);
     setManualDrafts([]);
     setAutoSubMode("quick");
-    setQuickConfigsByLine({});
     setQuickImportRecordsByLine({});
     setCopySourceLineId("");
     setCopyExcludedSourceRowIds([]);
@@ -1396,18 +1405,15 @@ export default function useScheduleController({ registerHostActions, activeTrans
 
   function updateQuickSegments(updater) {
     clearPanelMessage();
-    setQuickConfigsByLine((current) => {
-      const source = current[selectedLine.id] || cloneQuickSegments();
-      const next = updater(source.map((segment) => ({ ...segment })))
-        .map((segment) => ({
-          ...segment,
-          count: Math.min(
-            Math.max(0, Math.trunc(Number(segment.count) || 0)),
-            getQuickAddSegmentCapacity(segment.start, segment.end)
-          )
-        }));
-      return { ...current, [selectedLine.id]: next };
-    });
+    const next = updater(currentQuickSegments.map((segment) => ({ ...segment })));
+    setQuickCountsByLine((current) => ({ ...current, [quickLineKey]: next.map((segment) => Math.min(
+      Math.max(0, Math.trunc(Number(segment.count) || 0)),
+      getQuickAddSegmentCapacity(segment.start, segment.end))) }));
+    if (next.some((segment, index) => segment.start !== quickPeriods[index].start || segment.end !== quickPeriods[index].end)) {
+      const periods = next.map(({ id, labelKey, start, end }) => ({ id, labelKey, start, end }));
+      setQuickPeriods(periods);
+      writeServicePeriods?.(scheduleMode, selectedLine.id, periods);
+    }
   }
 
   function changeQuickBoundary(segmentIndex, field, direction) {
@@ -1415,24 +1421,8 @@ export default function useScheduleController({ registerHostActions, activeTrans
       return;
     }
 
-    updateQuickSegments((segments) => {
-      const segment = segments[segmentIndex];
-      const nextValue = Number(segment[field]) + direction * QUICK_ADD_STEP_MINUTES;
-      segment[field] = nextValue;
-      if (field === "start" && direction < 0) {
-        const previous = segments[segmentIndex - 1];
-        if (previous && nextValue < previous.end) {
-          previous.end = nextValue;
-        }
-      }
-      if (field === "end" && direction > 0) {
-        const next = segments[segmentIndex + 1];
-        if (next && nextValue > next.start) {
-          next.start = nextValue;
-        }
-      }
-      return segments;
-    });
+    updateQuickSegments((segments) => moveServiceBoundary(segments, segmentIndex, field,
+      Number(segments[segmentIndex][field]) + direction * QUICK_ADD_STEP_MINUTES));
   }
 
   function changeQuickCount(segmentIndex, delta) {

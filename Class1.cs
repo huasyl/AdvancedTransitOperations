@@ -75,6 +75,7 @@ namespace RapidTransitMod
             updateSystem.UpdateAfter<Dispatch.Runtime.BoardingFirstFrameGuardSystem, TransportTrainAISystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAfter<ModRuntimeHostSystem, TrainMoveSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAfter<PassengerFlow.SamplingSystem, ModRuntimeHostSystem>(SystemUpdatePhase.GameSimulation);
+            updateSystem.UpdateBefore<PassengerFlow.SamplingSystem, SaveGameSystem>(SystemUpdatePhase.MainLoop);
             updateSystem.UpdateBefore<PreSerialize<ModRuntimeHostSystem>>(SystemUpdatePhase.Serialize);
             updateSystem.UpdateBefore<PreSerialize<PassengerFlow.SamplingSystem>>(SystemUpdatePhase.Serialize);
             updateSystem.UpdateBefore<PreSerialize<RtManagedVehicleRequestSystem>, BeginPrefabSerializationSystem>(SystemUpdatePhase.Serialize);

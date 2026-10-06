@@ -1163,7 +1163,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                         waypointIndices,
                         m_Runtime.m_SimulationSystem.frameIndex);
                     m_Runtime.m_StopRuntime.InvalidateVehiclePosition(vehicle);
-                    RapidTransitMod.PassengerFlow.Runtime.Current?.RemoveVehicle(vehicle);
+                    RapidTransitMod.PassengerFlow.Runtime.Current?.CancelStop(vehicle);
                     m_Runtime.m_RuntimeFramePlan.AddStage(vehicle, RuntimeStageMask.Stop);
                 }
             }

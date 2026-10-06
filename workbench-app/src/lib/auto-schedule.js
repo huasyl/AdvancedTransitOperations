@@ -1,17 +1,13 @@
 ﻿import { timeToMinutes } from "./time";
+import { DEFAULT_SERVICE_PERIODS, SERVICE_PERIOD_STEP } from "./service-periods";
 
 export const MIN_DEPARTURE_INTERVAL_MINUTES = 5;
 export const MAX_AUTO_RULE_TRIPS_PER_HOUR = 60 / MIN_DEPARTURE_INTERVAL_MINUTES;
 export const MAX_AUTO_RULE_GENERATED_TRIPS = (24 * 60) / MIN_DEPARTURE_INTERVAL_MINUTES;
 
-export const QUICK_ADD_STEP_MINUTES = 30;
-export const QUICK_ADD_DEFAULT_SEGMENTS = [
-  { id: "night-early", labelKey: "nativeSchedule.quick.segment.night", start: 0, end: 390, count: 5 },
-  { id: "morning", labelKey: "nativeSchedule.quick.segment.morning", start: 390, end: 570, count: 6 },
-  { id: "off-peak", labelKey: "nativeSchedule.quick.segment.offPeak", start: 570, end: 990, count: 7 },
-  { id: "evening", labelKey: "nativeSchedule.quick.segment.evening", start: 990, end: 1260, count: 8 },
-  { id: "night-late", labelKey: "nativeSchedule.quick.segment.night", start: 1260, end: 1440, count: 3 }
-];
+export const QUICK_ADD_STEP_MINUTES = SERVICE_PERIOD_STEP;
+export const QUICK_ADD_DEFAULT_SEGMENTS = DEFAULT_SERVICE_PERIODS.map((period, index) =>
+  ({ ...period, count: [5, 6, 7, 8, 3][index] }));
 
 function analyzeAutoRuleGeneration(rule) {
   const start = timeToMinutes(rule.start);

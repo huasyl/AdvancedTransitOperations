@@ -92,6 +92,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly FrameEvents m_Events;
         private readonly Action<StopFact> m_PublishStopFact;
         private readonly Action<Entity, int, StopControlResult> m_ApplyStopControl;
+        private Action<Entity, Entity, uint> m_ServiceEnded;
 
         public RetireHost(ModRuntimeHostSystem runtime)
         {
@@ -126,6 +127,15 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Events = runtime.m_FrameEvents;
             m_PublishStopFact = runtime.PublishStopFact;
             m_ApplyStopControl = runtime.ApplyStopControl;
+        }
+
+        internal void BindServiceEnd(Action<Entity, Entity, uint> ended)
+            => m_ServiceEnded = ended;
+
+        internal void EndService(Entity vehicle, Entity line, uint frame)
+        {
+            if (line != Entity.Null)
+                m_ServiceEnded?.Invoke(vehicle, line, frame);
         }
 
         public string RetireIntent(Entity vehicle) => m_SpawnIntentTrace.Retire(vehicle, Frame);

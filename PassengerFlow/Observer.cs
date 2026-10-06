@@ -1,9 +1,27 @@
 using Unity.Entities;
+using RapidTransitMod.Core;
 
 namespace RapidTransitMod.PassengerFlow
 {
     internal static class Observer
     {
+        internal static void RegisterVehicle(Port port, State state, Entity vehicle,
+            Entity line, VehicleState vehicleState, uint frame)
+        {
+            if (state == null || !port.IsReady
+                || !port.TryLineMetadata(line, out TransitMode mode, out string lineId)
+                || !SamplingSystem.SupportsMode(mode))
+                return;
+            bool qualified = vehicleState != VehicleState.Preparing
+                && (vehicleState != VehicleState.Retiring || port.ServiceActive(vehicle) != false);
+            state.RegisterVehicle(vehicle, line, qualified, mode, lineId, frame, port.Clock());
+        }
+
+        internal static void EndService(Port port, State state, Entity vehicle, Entity line, uint frame)
+        {
+            state?.EndVehicleService(vehicle, line, frame, port.Clock());
+        }
+
         internal static void OpenStop(
             Port port,
             State state,
@@ -12,7 +30,7 @@ namespace RapidTransitMod.PassengerFlow
             int waypointIndex,
             uint frame)
         {
-            RecordOpenStop(port, state, vehicle, line, waypointIndex, frame);
+            RecordOpenStop(port, state, vehicle, line, waypointIndex, frame, true);
         }
 
         internal static void RestoreStop(
@@ -23,7 +41,7 @@ namespace RapidTransitMod.PassengerFlow
             int waypointIndex,
             uint frame)
         {
-            RecordOpenStop(port, state, vehicle, line, waypointIndex, frame);
+            RecordOpenStop(port, state, vehicle, line, waypointIndex, frame, false);
         }
 
         internal static void ConfirmDeparture(Port port, State state, Entity vehicle, uint frame)
@@ -31,19 +49,8 @@ namespace RapidTransitMod.PassengerFlow
             if (state == null || !state.OpenStops.TryGetValue(vehicle, out OpenStop openStop))
                 return;
 
-            Entity runtimeVehicle = port != null ? port.RuntimeVehicle(openStop.Vehicle) : openStop.Vehicle;
-            Entity baselineKey = runtimeVehicle != Entity.Null ? runtimeVehicle : openStop.Vehicle;
-            if (RtLog.VerboseEnabled
-                && state.Baselines.TryGetValue(baselineKey, out PassengerBaseline baseline)
-                && baseline.Passengers.Count > 0
-                && !state.LastProbeFrames.ContainsKey(openStop.Vehicle))
-            {
-                SamplingSystem.ReportMissingProbe();
-            }
-
             EnqueueDepartureSample(port, state, frame, openStop);
             state.OpenStops.Remove(vehicle);
-            state.LastProbeFrames.Remove(vehicle);
         }
 
         internal static void LaunchOrigin(Port port, State state, Entity vehicle, uint frame)
@@ -55,12 +62,10 @@ namespace RapidTransitMod.PassengerFlow
                 return;
             }
 
-            state.LastLaunchFrames[vehicle] = frame;
             if (state.OpenStops.TryGetValue(vehicle, out OpenStop openStop))
             {
                 EnqueueDepartureSample(port, state, frame, openStop);
                 state.OpenStops.Remove(vehicle);
-                state.LastProbeFrames.Remove(vehicle);
                 return;
             }
 
@@ -78,26 +83,31 @@ namespace RapidTransitMod.PassengerFlow
             if (state == null)
                 return;
 
+            if (state.OpenStops.TryGetValue(vehicle, out OpenStop stop))
+                state.Trips.ReleaseAlightMarks(vehicle, stop.OpenFrame);
             state.OpenStops.Remove(vehicle);
-            state.LastProbeFrames.Remove(vehicle);
         }
 
-        internal static void RemoveVehicle(Port port, State state, Entity vehicle)
+        internal static void RemoveVehicle(Port port, State state, Entity vehicle,
+            bool preserveVehicleId = false, uint? factFrame = null)
         {
             if (state == null)
                 return;
 
             Entity runtimeVehicle = port != null ? port.RuntimeVehicle(vehicle) : vehicle;
+            state.RemoveVehicleLoad(vehicle, factFrame ?? port.Frame(), port.Clock());
             state.OpenStops.Remove(vehicle);
-            state.LastProbeFrames.Remove(vehicle);
             state.LastLaunchFrames.Remove(vehicle);
             state.Baselines.Remove(vehicle);
+            if (!preserveVehicleId)
+                state.VehicleIds.Remove(vehicle);
             if (runtimeVehicle != Entity.Null)
             {
                 state.OpenStops.Remove(runtimeVehicle);
-                state.LastProbeFrames.Remove(runtimeVehicle);
                 state.LastLaunchFrames.Remove(runtimeVehicle);
                 state.Baselines.Remove(runtimeVehicle);
+                if (!preserveVehicleId)
+                    state.VehicleIds.Remove(runtimeVehicle);
             }
 
             state.Trips.RemoveVehicle(vehicle);
@@ -121,6 +131,7 @@ namespace RapidTransitMod.PassengerFlow
                 else
                 {
                     state.Baselines.Remove(sample.RuntimeVehicle);
+                    state.Trips.ReleaseAlightMarks(sample.Vehicle, sample.OpenFrame);
                 }
             }
         }
@@ -131,7 +142,8 @@ namespace RapidTransitMod.PassengerFlow
             Entity vehicle,
             Entity line,
             int waypointIndex,
-            uint frame)
+            uint frame,
+            bool samplePlan)
         {
             if (state == null || waypointIndex < 0)
                 return;
@@ -144,9 +156,25 @@ namespace RapidTransitMod.PassengerFlow
             }
 
             state.OpenStops.Remove(vehicle);
-            state.LastProbeFrames.Remove(vehicle);
             if (TryCreateOpenStop(port, state, vehicle, line, waypointIndex, frame, out OpenStop openStop))
+            {
+                for (int i = 0; i < state.RestoredStops.Count; i++)
+                {
+                    PassengerFlowStopElement restored = state.RestoredStops[i];
+                    if (restored.m_Vehicle == vehicle && restored.m_Line == line
+                        && restored.m_WaypointIndex == waypointIndex)
+                    {
+                        openStop = new OpenStop(vehicle, openStop.Mode, openStop.LineId, line, waypointIndex,
+                            openStop.OpenStationSakIndex, restored.m_OpenFrame, 0,
+                            new StopPosition(restored.m_OpenStop, restored.m_OpenWaypoint, waypointIndex,
+                                restored.m_StationOccurrence));
+                        break;
+                    }
+                }
                 state.OpenStops[vehicle] = openStop;
+                if (samplePlan && openStop.OpenFrame == frame)
+                    state.StopSamples.Enqueue(openStop);
+            }
         }
 
         private static bool TryCreateOpenStop(
@@ -190,6 +218,7 @@ namespace RapidTransitMod.PassengerFlow
                 return false;
             }
 
+            state.Anchors.TryPosition(port, line, waypointIndex, out StopPosition position);
             openStop = new OpenStop(
                 vehicle,
                 mode,
@@ -198,7 +227,7 @@ namespace RapidTransitMod.PassengerFlow
                 waypointIndex,
                 stationKey.Index,
                 frame,
-                0);
+                0, position);
             return true;
         }
 
@@ -208,52 +237,32 @@ namespace RapidTransitMod.PassengerFlow
             uint currentFrame,
             OpenStop openStop)
         {
-            int nextWaypointIndex = -1;
-            int nextStationSakIndex = -1;
-            if (Sections.Supports(openStop.Mode))
-            {
-                nextWaypointIndex = ResolveNextWaypoint(port, openStop.Line, openStop.OpenWaypointIndex);
-                if (nextWaypointIndex < 0
-                    || !state.Anchors.TryForWaypoint(port, openStop.Line, nextWaypointIndex, out StationKey nextStation))
-                {
-                    state.Aggregates.RecordWarning(
-                        openStop.Mode,
-                        Aggregates.WarningSectionAnchorMissing,
-                        openStop.LineId,
-                        openStop.OpenStationSakIndex,
-                        state.CurrentBucket,
-                        currentFrame);
-                }
-                else
-                {
-                    nextStationSakIndex = nextStation.Index;
-                }
-            }
+            // 停站确认与始发事实共用一次离站消费，不为同帧的第二个入口重复采样。
+            if (state.LastLaunchFrames.TryGetValue(openStop.Vehicle, out uint departureFrame)
+                && departureFrame == currentFrame)
+                return;
+            state.LastLaunchFrames[openStop.Vehicle] = currentFrame;
+            SectionSegment[] stopSections = Sections.PrepareStops(port, state, openStop);
+            SectionSegment[] trackSections = state.Sections.PrepareTrack(port, state, openStop, currentFrame);
 
+            ClockSnapshot clock = port.Clock();
+            TimeBucketKey departureBucket = SamplingSystem.BucketFor(clock.DayIndex, clock.NowMinute);
+            Entity runtimeVehicle = port.RuntimeVehicle(openStop.Vehicle);
             state.PendingSamples.Enqueue(new PendingSample(
                 currentFrame + SamplingSystem.DepartureSampleDelayFrames,
+                openStop.OpenFrame,
+                currentFrame,
+                departureBucket,
+                state.GetVehicleId(runtimeVehicle != Entity.Null ? runtimeVehicle : openStop.Vehicle),
                 openStop.Mode,
                 openStop.LineId,
                 openStop.Line,
                 openStop.Vehicle,
-                port != null ? port.RuntimeVehicle(openStop.Vehicle) : openStop.Vehicle,
+                runtimeVehicle,
                 openStop.OpenWaypointIndex,
                 openStop.OpenStationSakIndex,
-                nextWaypointIndex,
-                nextStationSakIndex));
+                openStop.Position, stopSections, trackSections));
         }
 
-        private static int ResolveNextWaypoint(Port port, Entity line, int openWaypointIndex)
-        {
-            if (port == null || line == Entity.Null || openWaypointIndex < 0 || !port.HasWaypoints(line))
-                return -1;
-
-            Unity.Entities.DynamicBuffer<Game.Routes.RouteWaypoint> waypoints = port.Waypoints(line);
-            if (waypoints.Length <= 1 || openWaypointIndex >= waypoints.Length)
-                return -1;
-
-            int next = openWaypointIndex + 1;
-            return next < waypoints.Length ? next : 0;
-        }
     }
 }

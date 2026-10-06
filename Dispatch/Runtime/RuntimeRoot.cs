@@ -94,8 +94,16 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_SimClock.ClockChanged += (oldClockSnapshot, newClockSnapshot) =>
                 runtime.m_WorkbenchBridge.InvalidateRunTimeClock();
             runtime.m_WorkbenchBridge.AppliedStore.SetDirtyCallbacks(
-                line => runtime.m_SchedulerApply.MarkPendingDirty(line.ToString()),
-                () => runtime.m_SchedulerApply.MarkPendingAllDirty());
+                line =>
+                {
+                    runtime.m_SchedulerApply.MarkPendingDirty(line.ToString());
+                    PassengerFlow.SamplingSystem.AppliedLinesChanged();
+                },
+                () =>
+                {
+                    runtime.m_SchedulerApply.MarkPendingAllDirty();
+                    PassengerFlow.SamplingSystem.AppliedLinesChanged();
+                });
             runtime.m_WorkbenchBridge.LineStore.SetDirtyCallbacks(
                 line =>
                 {
@@ -289,6 +297,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 ResolveStop = runtime.m_Resolve.Stop,
                 FindStation = runtime.m_Resolve.StationOf,
                 StopName = stopService.StationRenderedName,
+                GetStopCustomName = stopService.TryStationCustomName,
                 StopKey = stop => stopService.Key(stopService.Anchor(stop)),
                 ResolveStation = runtime.m_Resolve.PassingStation,
                 IsLocal = line => runtime.m_LineView.Local(line),
@@ -315,7 +324,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                 lineChangeSourceSystem,
                 runtime.m_TrackModel,
                 runtime.m_LineProfile,
-                runtime.m_LineStructureInvalidator);
+                runtime.m_LineStructureInvalidator,
+                line => PassengerFlow.Runtime.Current?.InvalidateWaitingDirectory(line));
             runtime.m_LineServiceChangeSourceSystem =
                 runtime.World.GetOrCreateSystemManaged<LineServiceChangeSourceSystem>();
             runtime.m_LineServiceChangeSourceSystem.Bind(runtime.m_LineServiceState.Observe);
@@ -604,8 +614,10 @@ namespace RapidTransitMod.Dispatch.Runtime
             RuntimePorts.Build(runtime);
             PassengerFlow.Port passengerFlowPort = new PassengerFlow.Port(runtime);
             PassengerFlow.Runtime.Bind(passengerFlowPort);
+            passengerFlowPort.BindServiceStatus(runtime.m_CommandApplier.ServiceActive);
+            runtime.m_CommandApplier.BindServiceEnd(passengerFlowPort.EndService);
             passengerFlowPort.SubscribeClockChanged((oldClockSnapshot, newClockSnapshot) =>
-                PassengerFlow.SamplingSystem.ClockChanged(passengerFlowPort));
+                PassengerFlow.SamplingSystem.ClockChanged(passengerFlowPort, oldClockSnapshot, newClockSnapshot));
         }
 
         /// <summary>

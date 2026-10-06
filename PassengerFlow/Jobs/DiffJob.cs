@@ -1,3 +1,4 @@
+using System;
 using Unity.Burst;
 using Unity.Collections;
 using Unity.Entities;
@@ -23,12 +24,40 @@ namespace RapidTransitMod.PassengerFlow.Jobs
         internal int PassengerCount;
     }
 
+    internal readonly struct PassengerMemberKey : IEquatable<PassengerMemberKey>
+    {
+        private readonly int m_RequestIndex;
+        private readonly Entity m_Passenger;
+
+        internal PassengerMemberKey(int requestIndex, Entity passenger)
+        {
+            m_RequestIndex = requestIndex;
+            m_Passenger = passenger;
+        }
+
+        public bool Equals(PassengerMemberKey other)
+            => m_RequestIndex == other.m_RequestIndex && m_Passenger == other.m_Passenger;
+
+        public override bool Equals(object obj)
+            => obj is PassengerMemberKey other && Equals(other);
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                return ((m_RequestIndex * 397) ^ m_Passenger.Index) * 397 ^ m_Passenger.Version;
+            }
+        }
+    }
+
     [BurstCompile]
     internal struct DiffJob : IJob
     {
         [ReadOnly] public NativeArray<VehicleSampleRequest> Requests;
         [ReadOnly] public NativeParallelMultiHashMap<int, Entity> PreviousPassengers;
         [ReadOnly] public NativeParallelMultiHashMap<int, Entity> CurrentPassengers;
+        [ReadOnly] public NativeParallelHashSet<PassengerMemberKey> PreviousMembers;
+        public NativeParallelHashSet<PassengerMemberKey> CurrentMembers;
         public NativeList<BoardEvent> BoardEvents;
         public NativeList<AlightEvent> AlightEvents;
         public NativeList<DepartureLoadEvent> DepartureLoadEvents;
@@ -45,9 +74,10 @@ namespace RapidTransitMod.PassengerFlow.Jobs
                 {
                     do
                     {
+                        CurrentMembers.Add(new PassengerMemberKey(i, passenger));
                         currentCount++;
                         NextBaseline.Add(i, passenger);
-                        if (!Contains(PreviousPassengers, i, passenger))
+                        if (!PreviousMembers.Contains(new PassengerMemberKey(i, passenger)))
                         {
                             BoardEvents.Add(new BoardEvent
                             {
@@ -63,7 +93,7 @@ namespace RapidTransitMod.PassengerFlow.Jobs
                 {
                     do
                     {
-                        if (!Contains(CurrentPassengers, i, passenger))
+                        if (!CurrentMembers.Contains(new PassengerMemberKey(i, passenger)))
                         {
                             AlightEvents.Add(new AlightEvent
                             {
@@ -83,21 +113,5 @@ namespace RapidTransitMod.PassengerFlow.Jobs
             }
         }
 
-        private static bool Contains(NativeParallelMultiHashMap<int, Entity> map, int key, Entity value)
-        {
-            NativeParallelMultiHashMapIterator<int> iterator;
-            Entity candidate;
-            if (!map.TryGetFirstValue(key, out candidate, out iterator))
-                return false;
-
-            do
-            {
-                if (candidate == value)
-                    return true;
-            }
-            while (map.TryGetNextValue(out candidate, ref iterator));
-
-            return false;
-        }
     }
 }

@@ -7,13 +7,15 @@ import ManualDraftSection from "./components/ManualDraftSection";
 import ScheduleTopbar from "./components/ScheduleTopbar";
 import SummarySection from "./components/SummarySection";
 
-function SchedulePage({ registerHostActions, activeTransportMode = "train", isActive = false, onSnapshot }) {
+function SchedulePage({ registerHostActions, activeTransportMode = "train", isActive = false, onSnapshot, readServicePeriods, writeServicePeriods }) {
   const { t } = useNativeScheduleI18n();
   const { topbar, summary, auto, manual, copy, refs, actions } = useScheduleController({
     registerHostActions,
     activeTransportMode,
     isActive,
-    onSnapshot
+    onSnapshot,
+    readServicePeriods,
+    writeServicePeriods
   });
 
   return (

@@ -240,6 +240,19 @@ namespace RapidTransitMod
             return m_Names.Get(stopEntity);
         }
 
+        internal bool TryStationCustomName(Entity stopEntity, out string name)
+        {
+            name = null;
+            if (!Live(stopEntity))
+                return false;
+            Entity anchor = Anchor(stopEntity);
+            // 与展示名称使用同一站房优先来源；默认站房名不会回退成站台自定义名。
+            if (anchor != Entity.Null && anchor != stopEntity
+                && !string.IsNullOrEmpty(m_Names.Get(anchor)))
+                return m_Names.TryCustom(anchor, out name);
+            return m_Names.TryCustom(stopEntity, out name);
+        }
+
         internal string StationRenderedName(Entity stopEntity)
         {
             if (!Live(stopEntity))

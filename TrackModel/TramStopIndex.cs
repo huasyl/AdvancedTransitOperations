@@ -23,6 +23,18 @@ namespace RapidTransitMod.TrackModel
         }
     }
 
+    internal sealed class TramStationGroup
+    {
+        internal readonly string GroupId;
+        internal readonly string Name;
+        internal readonly string[] Members;
+
+        internal TramStationGroup(string groupId, string name, string[] members)
+        {
+            GroupId = groupId; Name = name; Members = members;
+        }
+    }
+
     internal sealed class TramStopIndex
     {
         private const int AuditItemsPerTick = 4;
@@ -31,6 +43,9 @@ namespace RapidTransitMod.TrackModel
         private readonly Dictionary<EntryKey, Entry> m_Entries = new Dictionary<EntryKey, Entry>();
         private readonly Dictionary<Entity, List<Entry>> m_ByLane = new Dictionary<Entity, List<Entry>>();
         private readonly Dictionary<Entity, List<Entry>> m_ByLine = new Dictionary<Entity, List<Entry>>();
+        private readonly Dictionary<Entity, List<Entry>> m_ByStop = new Dictionary<Entity, List<Entry>>();
+        private readonly Dictionary<string, List<Entry>> m_ByStopKey = new Dictionary<string, List<Entry>>(StringComparer.Ordinal);
+        private readonly Dictionary<string, List<Entry>> m_ByGroup = new Dictionary<string, List<Entry>>(StringComparer.Ordinal);
         private readonly Dictionary<string, List<Entry>> m_ByName =
             new Dictionary<string, List<Entry>>(StringComparer.Ordinal);
         private readonly Dictionary<SpatialKey, List<Entry>> m_ByCell =
@@ -56,6 +71,9 @@ namespace RapidTransitMod.TrackModel
             m_Entries.Clear();
             m_ByLane.Clear();
             m_ByLine.Clear();
+            m_ByStop.Clear();
+            m_ByStopKey.Clear();
+            m_ByGroup.Clear();
             m_ByName.Clear();
             m_ByCell.Clear();
             m_LinesByLane.Clear();
@@ -150,11 +168,119 @@ namespace RapidTransitMod.TrackModel
                 }
                 if (changed)
                 {
+                    if (current != null && (oldEntry.Custom != current.Custom
+                        || !string.Equals(oldEntry.Name, current.Name, StringComparison.Ordinal)))
+                    {
+                        RefreshNames(new List<Entry> { oldEntry });
+                        if (SameFingerprint(oldEntry, current)) continue;
+                    }
                     RemoveEntry(oldEntry);
                     if (current != null)
                         AddEntry(current);
                 }
             }
+        }
+
+        internal string[] RefreshNames(Entity line)
+        {
+            return m_ByLine.TryGetValue(line, out List<Entry> entries)
+                ? RefreshNames(entries) : Array.Empty<string>();
+        }
+
+        private string[] RefreshNames(List<Entry> seeds)
+        {
+            var read = new Dictionary<Entity, (string Name, bool Custom)>();
+            var changes = new Dictionary<Entity, (string Name, bool Custom)>();
+            var pending = new Queue<Entry>(seeds);
+            while (pending.Count > 0)
+            {
+                Entry entry = pending.Dequeue();
+                if (changes.ContainsKey(entry.Stop)) continue;
+                var fact = ReadName(entry.Stop, read);
+                bool custom = fact.Custom;
+                string name = fact.Name;
+                if (entry.Custom == custom && string.Equals(entry.Name, name, StringComparison.Ordinal)) continue;
+                changes[entry.Stop] = (name, custom);
+                // 候选先按空间取得，再读取名称，避免缓存旧名漏掉另一条线同时改名的站。
+                foreach (Entry candidate in SpatialEntries(entry))
+                {
+                    if (changes.ContainsKey(candidate.Stop)) continue;
+                    var candidateFact = ReadName(candidate.Stop, read);
+                    bool oldScope = entry.Custom && candidate.Custom
+                        && string.Equals(candidate.Name, entry.Name, StringComparison.Ordinal);
+                    bool newScope = candidateFact.Custom && custom
+                        && string.Equals(candidateFact.Name, name, StringComparison.Ordinal);
+                    if (!oldScope && !newScope) continue;
+                    pending.Enqueue(candidate);
+                }
+            }
+            if (changes.Count == 0) return Array.Empty<string>();
+            var affected = new List<Entry>();
+            var visited = new HashSet<EntryKey>();
+            foreach (Entity stop in changes.Keys)
+                foreach (Entry entry in m_ByStop[stop])
+                    CollectComponent(entry, affected, visited);
+            var updated = new HashSet<EntryKey>();
+            foreach (var pair in changes)
+                foreach (Entry source in m_ByStop[pair.Key])
+                    foreach (Entry entry in m_ByStopKey[source.StopKey])
+                    {
+                        if (!updated.Add(entry.Key)) continue;
+                        RemoveIndexed(m_ByName, entry.Name, entry);
+                        entry.Name = pair.Value.Name;
+                        entry.Custom = pair.Value.Custom;
+                        AddIndexed(m_ByName, entry.Name, entry);
+                        MarkDirty(entry.Line);
+                        MarkLinesForLane(entry.Lane);
+                    }
+            visited.Clear();
+            foreach (Entity stop in changes.Keys)
+                foreach (Entry entry in m_ByStop[stop])
+                    CollectComponent(entry, affected, visited);
+            RebuildComponent(affected);
+            var keys = new HashSet<string>(StringComparer.Ordinal);
+            foreach (Entry entry in affected) keys.Add(entry.StopKey);
+            var result = new string[keys.Count];
+            keys.CopyTo(result);
+            return result;
+        }
+
+        private (string Name, bool Custom) ReadName(Entity stop, Dictionary<Entity, (string Name, bool Custom)> read)
+        {
+            if (!read.TryGetValue(stop, out var fact))
+            {
+                bool custom = m_Support.TryStopCustomName(stop, out string name);
+                fact = (custom ? name : m_Support.StopName(stop), custom);
+                read[stop] = fact;
+            }
+            return fact;
+        }
+
+        internal TramStationGroup[] ReadGroups(Entity line, string stationId, string[] affected = null)
+        {
+            var ids = new HashSet<string>(StringComparer.Ordinal);
+            if (line == Entity.Null)
+                foreach (string id in m_ByGroup.Keys) ids.Add(id);
+            else if (m_ByLine.TryGetValue(line, out List<Entry> lineEntries))
+                foreach (Entry entry in lineEntries) ids.Add(entry.GroupId);
+            if (!string.IsNullOrEmpty(stationId) && m_ByStopKey.TryGetValue(stationId, out List<Entry> selected))
+                foreach (Entry entry in selected) ids.Add(entry.GroupId);
+            if (affected != null)
+                foreach (string key in affected)
+                    if (m_ByStopKey.TryGetValue(key, out List<Entry> changed))
+                        foreach (Entry entry in changed) ids.Add(entry.GroupId);
+            var result = new List<TramStationGroup>();
+            foreach (string id in ids)
+            {
+                if (!m_ByGroup.TryGetValue(id, out List<Entry> entries)) continue;
+                var members = new HashSet<string>(StringComparer.Ordinal);
+                foreach (Entry entry in entries) members.Add(entry.StopKey);
+                var ordered = new List<string>(members);
+                ordered.Sort(StringComparer.Ordinal);
+                result.Add(new TramStationGroup(id, entries[0].Name, ordered.ToArray()));
+            }
+            result.Sort((left, right) => StringComparer.Ordinal.Compare(left.GroupId, right.GroupId));
+            return result.ToArray();
         }
 
         internal void DrainDirtyLines(int budget, List<Entity> output)
@@ -234,7 +360,8 @@ namespace RapidTransitMod.TrackModel
             if (lane == Entity.Null || !entities.Exists(lane) || !TryPosition(waypoint, stop, out Entity positionEntity, out float3 position))
                 return false;
 
-            string name = m_Support.StopName(stop);
+            bool custom = m_Support.TryStopCustomName(stop, out string customName);
+            string name = custom ? customName : m_Support.StopName(stop);
             string key = m_Support.StopKey(stop);
             if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(key))
                 return false;
@@ -249,6 +376,8 @@ namespace RapidTransitMod.TrackModel
                 Lane = lane,
                 CurvePosition = curvePosition,
                 Name = name,
+                Custom = custom,
+                GroupId = key,
                 StopKey = key,
                 PositionEntity = positionEntity,
                 Position = position
@@ -310,10 +439,14 @@ namespace RapidTransitMod.TrackModel
             m_Entries[entry.Key] = entry;
             m_AuditOrder.Add(entry.Key);
             AddIndexed(m_ByLine, entry.Line, entry);
+            AddIndexed(m_ByStop, entry.Stop, entry);
+            AddIndexed(m_ByStopKey, entry.StopKey, entry);
+            AddIndexed(m_ByGroup, entry.GroupId, entry);
             AddIndexed(m_ByLane, entry.Lane, entry);
             AddIndexed(m_ByName, entry.Name, entry);
             AddIndexed(m_ByCell, Cell(entry.Position), entry);
             RebuildComponent(CollectComponent(entry));
+            MarkDirty(entry.Line);
             MarkLinesForLane(entry.Lane);
         }
 
@@ -326,21 +459,29 @@ namespace RapidTransitMod.TrackModel
             m_Entries.Remove(current.Key);
             m_AuditOrder.Remove(current.Key);
             RemoveIndexed(m_ByLine, current.Line, current);
+            RemoveIndexed(m_ByStop, current.Stop, current);
+            RemoveIndexed(m_ByStopKey, current.StopKey, current);
+            RemoveIndexed(m_ByGroup, current.GroupId, current);
             RemoveIndexed(m_ByLane, current.Lane, current);
             RemoveIndexed(m_ByName, current.Name, current);
             RemoveIndexed(m_ByCell, Cell(current.Position), current);
             RebuildComponent(component);
+            MarkDirty(current.Line);
             MarkLinesForLane(current.Lane);
         }
 
         private List<Entry> CollectComponent(Entry seed)
         {
             var result = new List<Entry>();
-            if (seed == null || !m_Entries.TryGetValue(seed.Key, out Entry current))
-                return result;
+            CollectComponent(seed, result, new HashSet<EntryKey>());
+            return result;
+        }
 
+        private void CollectComponent(Entry seed, List<Entry> result, HashSet<EntryKey> visited)
+        {
+            if (seed == null || visited.Contains(seed.Key) || !m_Entries.TryGetValue(seed.Key, out Entry current))
+                return;
             var pending = new Stack<Entry>();
-            var visited = new HashSet<EntryKey>();
             pending.Push(current);
             while (pending.Count > 0)
             {
@@ -357,15 +498,24 @@ namespace RapidTransitMod.TrackModel
                 for (int i = 0; i < neighbors.Count; i++)
                     pending.Push(neighbors[i]);
             }
-            return result;
         }
 
         private List<Entry> NearbyEntries(Entry entry)
         {
             var result = new List<Entry>();
-            if (entry == null)
-                return result;
+            if (entry == null) return result;
+            if (m_ByStopKey.TryGetValue(entry.StopKey, out List<Entry> sameStation))
+                result.AddRange(sameStation);
+            if (!entry.Custom) return result;
+            foreach (Entry candidate in SpatialEntries(entry))
+                if (candidate.Custom && string.Equals(candidate.Name, entry.Name, StringComparison.Ordinal))
+                    result.Add(candidate);
+            return result;
+        }
 
+        private List<Entry> SpatialEntries(Entry entry)
+        {
+            var result = new List<Entry>();
             SpatialKey cell = Cell(entry.Position);
             for (int x = cell.X - 1; x <= cell.X + 1; x++)
             for (int y = cell.Y - 1; y <= cell.Y + 1; y++)
@@ -377,8 +527,7 @@ namespace RapidTransitMod.TrackModel
                 {
                     Entry candidate = candidates[i];
                     if (candidate.Key.Equals(entry.Key)
-                        || !string.Equals(candidate.Name, entry.Name, StringComparison.Ordinal)
-                        || math.distancesq(candidate.Position, entry.Position) > 10000f)
+                        || math.distancesq(candidate.Position, entry.Position) > 40000f)
                     {
                         continue;
                     }
@@ -394,13 +543,14 @@ namespace RapidTransitMod.TrackModel
                 return;
 
             var entries = new List<Entry>();
+            var seen = new HashSet<EntryKey>();
             for (int i = 0; i < component.Count; i++)
             {
                 Entry entry = component[i];
                 if (entry != null
                     && m_Entries.TryGetValue(entry.Key, out Entry current)
                     && ReferenceEquals(entry, current)
-                    && !entries.Contains(entry))
+                    && seen.Add(entry.Key))
                 {
                     entries.Add(entry);
                 }
@@ -438,7 +588,10 @@ namespace RapidTransitMod.TrackModel
                     Entry entry = group[entryIndex];
                     if (string.Equals(entry.GroupId, groupId, StringComparison.Ordinal))
                         continue;
+                    RemoveIndexed(m_ByGroup, entry.GroupId, entry);
                     entry.GroupId = groupId;
+                    AddIndexed(m_ByGroup, entry.GroupId, entry);
+                    MarkDirty(entry.Line);
                     MarkLinesForLane(entry.Lane);
                 }
             }
@@ -447,8 +600,14 @@ namespace RapidTransitMod.TrackModel
         private static bool Fits(List<Entry> group, Entry entry)
         {
             for (int i = 0; i < group.Count; i++)
-                if (math.distancesq(group[i].Position, entry.Position) > 10000f)
+            {
+                Entry member = group[i];
+                if (string.Equals(member.StopKey, entry.StopKey, StringComparison.Ordinal)) continue;
+                if (!member.Custom || !entry.Custom
+                    || !string.Equals(member.Name, entry.Name, StringComparison.Ordinal)
+                    || math.distancesq(member.Position, entry.Position) > 40000f)
                     return false;
+            }
             return true;
         }
 
@@ -467,9 +626,9 @@ namespace RapidTransitMod.TrackModel
         }
 
         private static SpatialKey Cell(float3 position) => new SpatialKey(
-            (int)math.floor(position.x / 100f),
-            (int)math.floor(position.y / 100f),
-            (int)math.floor(position.z / 100f));
+            (int)math.floor(position.x / 200f),
+            (int)math.floor(position.y / 200f),
+            (int)math.floor(position.z / 200f));
 
         private static void AddIndexed<TKey>(Dictionary<TKey, List<Entry>> index, TKey key, Entry entry)
         {
@@ -500,6 +659,7 @@ namespace RapidTransitMod.TrackModel
                 && math.abs(left.CurvePosition - right.CurvePosition) <= 0.0001f
                 && left.PositionEntity == right.PositionEntity
                 && math.distancesq(left.Position, right.Position) <= 0.0001f
+                && left.Custom == right.Custom
                 && string.Equals(left.Name, right.Name, StringComparison.Ordinal)
                 && string.Equals(left.StopKey, right.StopKey, StringComparison.Ordinal);
         }
@@ -568,6 +728,7 @@ namespace RapidTransitMod.TrackModel
             internal Entity Lane;
             internal float CurvePosition;
             internal string Name;
+            internal bool Custom;
             internal string StopKey;
             internal Entity PositionEntity;
             internal float3 Position;
