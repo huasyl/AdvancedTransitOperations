@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Publish>
   <!--Id must be set in order to update existed mod. it is not required for publishing mod for the first time-->
   <ModId Value="149883" />
@@ -12,9 +12,11 @@ Advanced Transit Operations (ATO) is a public transit dispatch mod for Cities: S
 
 The current version supports Train, Subway, Tram, and Bus. Supported languages: English, Simplified Chinese, and Japanese.
 
-## What's New in 0.4.2
+## What's New in v0.5.0
 
-This update brings several completed new features and improvements, while also prioritizing fixes for a few issues that had a noticeable impact on gameplay. Some previously planned and announced features are not included in this version yet, but they are still in development and will be added in an upcoming update soon.
+Recently, I’ve been thinking about how statistics can better inform player decisions and provide more meaningful gameplay feedback. What data is collected and how it is presented are both important. With this in mind, v0.5.0 brings major improvements to passenger statistics and their presentation. You can now choose the time period to analyze, with new data such as load factors, waiting passengers, and station passenger flows by time period, making it easier to adjust operations based on actual conditions. Signal Priority has also received new visual feedback, making its behavior much easier to see in action. Further improvements to feature access and usability are planned throughout the v0.5 series, so stay tuned.
+
+This update also improves broadcast audio deletion, allowing imported audio files to be properly removed from disk, and introduces a 1-minute minimum scheduling interval for players who prefer more realistic operations.
 
 ## Core Gameplay
 
@@ -81,9 +83,11 @@ Advanced Transit Operations（ATO）是面向《城市：天际线 2》公共交
 
 当前支持火车、地铁、有轨电车和公交。支持语言：英语、简体中文、日语。
 
-## v0.4.2 更新内容
+## v0.5.0 更新内容
 
-本次更新先带来了几项已经完成的新功能和改进，并优先修复了一些较为影响游戏体验的问题。部分此前计划并向社区提到的功能尚未包含在本版本中，目前仍在开发，将会很快在后续更新中推出。
+最近我一直在思考，如何让数据真正作用于玩家的决策，并形成更直观的游戏反馈。数据统计什么、又以什么方式呈现，都非常重要。基于这一思路，v0.5.0 对客流统计和展示进行了较大改进：现在可以自由选择统计时段，并新增载客率、等待人数、站点分时客流等数据，帮助玩家更有针对性地调整线路运营。同时，信号优先功能也加入了可视化展示，让其实际运行状态更加直观。v0.5 后续版本还计划继续改进许多功能的入口和操作方式，敬请期待。
+
+本次更新还改进了广播音频的删除机制，解决了音频文件不会直接从磁盘删除的问题；同时，为注重真实模拟的玩家提供了最低 1 分钟的调度时间设置。
 
 ## 核心玩法
 
@@ -151,18 +155,18 @@ ATO 只向存档写入自身的配置和运行数据，不会永久修改原版�
   <Screenshot Value="Properties/Screenshots/Screenshot13.png" />
   <Screenshot Value="Properties/Screenshots/Screenshot02.pub.jpg" />
   <Screenshot Value="Properties/Screenshots/Screenshot03.pub.jpg" />
-  <Screenshot Value="Properties/Screenshots/Screenshot05.pub.jpg" />
+  <Screenshot Value="Properties/Screenshots/Screenshot-v0.5.0-passenger-flow.png" />
+  <Screenshot Value="Properties/Screenshots/Screenshot-v0.5.0-signal-feedback.png" />
   <Screenshot Value="Properties/Screenshots/Screenshot08.jpg" />
   <Screenshot Value="Properties/Screenshots/Screenshot09.jpg" />
   <Screenshot Value="Properties/Screenshots/Screenshot10.jpg" />
-  <Screenshot Value="Properties/Screenshots/Screenshot11.jpg" />
   <!--Tag, can be set multiple times-->
   <Tag Value="Code Mod" />
   <Tag Value="PublicTransport" />
   <!--Link to the forum post where the mod can be discussed-->
   <ForumLink Value="https://forum.paradoxplaza.com/forum/threads/advanced-transit-operations.1932870/" />
   <!--Version of the mod-->
-  <ModVersion Value="0.4.2.1" />
+  <ModVersion Value="0.5.0" />
   <!--Recommended version of the base game to use the mod-->
   <GameVersion Value="1.6.*" />
   <!--Dependency for the mod, can be set multiple times-->
@@ -173,16 +177,19 @@ ATO 只向存档写入自身的配置和运行数据，不会永久修改原版�
   <ChangeLog>
 ## New Features
 
-- Added support for scheduling bus and train lines that start at an outside connection.
-
-## Bug Fixes
-
-- Lines with newly configured departure times now correctly prevent unnecessary vehicle dispatches. Also fixed an issue where vehicles leaving the depot for these lines could be incorrectly marked as “En Route.”
-- Fixed an issue where bus lines without historical depot travel time data could dispatch too many vehicles in quick succession.
+- Overhauled the passenger statistics system with a redesigned interface. You can now view statistics by time period and trip purpose, including segment load factors, waiting passengers, station boardings and alightings, and transfer flows.
+- Tram stops within 200 meters of each other will now be grouped together for passenger statistics if they share the same custom station name.
+- Added future signal status display for vehicles with Signal Priority enabled.
+- The minimum time value for scheduling-related settings can now be reduced to 1 minute. This option can be enabled in Settings.
 
 ## Improvements
 
-- Adjusted how parts of the UI are rendered to resolve unwanted border lines caused by the Cohtml update.
+- Improved broadcast audio deletion. Unused audio files imported in previous versions can now be deleted from disk through Settings.
+
+## Bug Fixes
+
+- Fixed an issue where trams could still request signal priority ahead for a short period after arriving at a stop.
+- Fixed an issue where broadcast data could retain references to invalid stations, preventing associated audio files from being deleted.
   </ChangeLog>
   <!--External link, can be set multiple times. supported types are "discord", "github", "youtube", "twitch", "x", "paypal", "patreon", "buymeacoffee", "kofi", "crowdin", "gitlab", "gofundme"-->
   <ExternalLink Type="github" Url="https://github.com/huasyl/AdvancedTransitOperations" />
