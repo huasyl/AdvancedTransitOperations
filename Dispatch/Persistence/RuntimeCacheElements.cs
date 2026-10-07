@@ -73,6 +73,7 @@ namespace RapidTransitMod
         public byte m_CanBypass;
         public double m_ArrivalWaitMinutes;
         public int m_ClockTicksPerDay;
+        public int m_MinimumStopMinutes;
 
         public void Serialize<TWriter>(TWriter writer) where TWriter : IWriter
         {
@@ -89,6 +90,8 @@ namespace RapidTransitMod
             writer.Write(m_CanBypass);
             writer.Write(m_ArrivalWaitMinutes);
             writer.Write(m_ClockTicksPerDay);
+            if (m_Version >= 3)
+                writer.Write(m_MinimumStopMinutes);
         }
 
         public void Deserialize<TReader>(TReader reader) where TReader : IReader
@@ -114,6 +117,10 @@ namespace RapidTransitMod
                 reader.Read(out m_ArrivalWaitMinutes);
                 reader.Read(out m_ClockTicksPerDay);
             }
+            if (m_Version >= 3)
+                reader.Read(out m_MinimumStopMinutes);
+            else
+                m_MinimumStopMinutes = ScheduleLimitPolicy.DefaultMinimum;
             m_RowId = rowId ?? string.Empty;
             m_StopSig = stopSig ?? string.Empty;
         }

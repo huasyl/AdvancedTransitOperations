@@ -782,22 +782,14 @@ namespace RapidTransitMod.Dispatch
                 }
 
                 // LineConfigStore has migrated to stable keys; read hold/dwell under stableKey.
-                AppliedLine target = new AppliedLine
-                {
-                    LineEntity = runtime.Entity,
-                    OriginHoldLimitMinutes = m_Host.Hold(stableKey),
-                    MaxStationDwellMinutes = m_Host.Dwell(stableKey),
-                    StagedRows = rows
-                };
+                AppliedLine target = BuildDraftTarget(stableKey, rows, runtime.Entity,
+                    m_Host.Hold(stableKey), m_Host.Dwell(stableKey), key);
                 m_Lines.TryGetValue(stableKey, out AppliedLine existing);
                 if (existing == null
                     && !string.Equals(key, stableKey, StringComparison.Ordinal))
                 {
                     m_Lines.TryGetValue(key, out existing);
                 }
-
-                ReconcileRows(existing, target);
-                target.DepartureMinutesCache = m_Host.BuildMinutes(target.StagedRows, stableKey);
 
                 bool movedToStableKey = !string.Equals(key, stableKey, StringComparison.Ordinal)
                     && m_Lines.Remove(key);
@@ -1209,6 +1201,24 @@ namespace RapidTransitMod.Dispatch
                     .Select(m_Host.CopyRow)
                     .ToList()
             };
+        }
+
+        internal AppliedLine BuildDraftTarget(string lineId, List<DispatchWorkbenchStagedRowDto> rows,
+            Entity entity, int hold, int dwell, string fallbackKey = null)
+        {
+            AppliedLine target = new AppliedLine
+            {
+                LineEntity = entity,
+                OriginHoldLimitMinutes = hold,
+                MaxStationDwellMinutes = dwell,
+                StagedRows = rows
+            };
+            m_Lines.TryGetValue(lineId, out AppliedLine existing);
+            if (existing == null && !string.IsNullOrEmpty(fallbackKey))
+                m_Lines.TryGetValue(fallbackKey, out existing);
+            ReconcileRows(existing, target);
+            target.DepartureMinutesCache = m_Host.BuildMinutes(target.StagedRows, lineId);
+            return target;
         }
 
         private void ReconcileRows(AppliedLine existing, AppliedLine target)

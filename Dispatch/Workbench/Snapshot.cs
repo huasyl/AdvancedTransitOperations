@@ -138,6 +138,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             DispatchWorkbenchSnapshot snapshot = new DispatchWorkbenchSnapshot
             {
                 mode = TransitModeCodec.Format(mode),
+                minimumScheduleMinutes = ScheduleLimitPolicy.EditMinimum,
                 selectedLineId = draft.SelectedLineId,
                 selectedEditLine = draft.SelectedEditLine,
                 mergedView = draft.MergedView,
@@ -181,6 +182,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             DispatchWorkbenchSnapshot snapshot = new DispatchWorkbenchSnapshot
             {
                 mode = TransitModeCodec.Format(mode),
+                minimumScheduleMinutes = ScheduleLimitPolicy.EditMinimum,
                 selectedLineId = preferredLineId ?? string.Empty,
                 selectedEditLine = preferredLineId ?? string.Empty,
                 mergedView = new DispatchWorkbenchMergedView(),

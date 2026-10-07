@@ -218,6 +218,14 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
   const [chartEnd, setChartEnd] = useState("");
   const [arrivalSource, setArrivalSource] = useState("theory");
   const [timeDrafts, setTimeDrafts] = useState({});
+  useEffect(() => {
+    Object.entries(timeDrafts).forEach(([key, draft]) => {
+      if (String(draft.value || "").length < 5) return;
+      const [lineId, trainId, occurrence] = key.split("\u001f");
+      const result = controller.validateDeparture(lineId, trainId, Number(occurrence), draft.value);
+      controller.setInputError(key, result.error);
+    });
+  }, [controller.minimumScheduleMinutes]);
   const pendingLocateRef = useRef(null);
   const clearLineTimersRef = useRef([]);
   const [lineClearStage, setLineClearStage] = useState("idle");
@@ -1071,6 +1079,7 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
                   onInvalidTime={handleInvalidTime}
                   timeDrafts={timeDrafts}
                   inputErrors={controller.inputErrors}
+                  minimumScheduleMinutes={controller.minimumScheduleMinutes}
                   t={t}
                 />
               </section>
@@ -1174,7 +1183,7 @@ function ChartSourceDropdown({ value, options, onSelect, portalHostRef, emptyLab
   />;
 }
 
-function TimetableEditor({ line, historicalRuntime, theoryRuntime, showHistoricalOnly, editingTrainId, onEdit, onTimeChange, onTimeDraft, onInvalidTime, timeDrafts, inputErrors, t }) {
+function TimetableEditor({ line, historicalRuntime, theoryRuntime, showHistoricalOnly, editingTrainId, onEdit, onTimeChange, onTimeDraft, onInvalidTime, timeDrafts, inputErrors, minimumScheduleMinutes, t }) {
   const timeInputRefs = useRef(new Map());
   const train = line.trains.find((item) => item.id === editingTrainId);
   if (train) {
@@ -1229,7 +1238,7 @@ function TimetableEditor({ line, historicalRuntime, theoryRuntime, showHistorica
             const previousInputRef = previousOccurrence != null ? getTimeInputRef(previousOccurrence) : null;
             const nextInputRef = nextOccurrence != null ? getTimeInputRef(nextOccurrence) : null;
             const hint = error
-              ? t(`timetable.validation.${error}`)
+              ? t(`timetable.validation.${error}`, { minutes: minimumScheduleMinutes })
               : formatDayHint(Number.isFinite(draftMinute) ? draftMinute : stop.departureMinute, t);
             return (
               <div key={stop.occurrence} className="rtw-timetable-table-row rtw-timetable-stop-row rtw-timetable-stagger-row" style={{ animationDelay: `${Math.min(index, 5) * 70}ms` }}>

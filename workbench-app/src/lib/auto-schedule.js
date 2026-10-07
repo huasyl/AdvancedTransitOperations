@@ -9,7 +9,7 @@ export const QUICK_ADD_STEP_MINUTES = SERVICE_PERIOD_STEP;
 export const QUICK_ADD_DEFAULT_SEGMENTS = DEFAULT_SERVICE_PERIODS.map((period, index) =>
   ({ ...period, count: [5, 6, 7, 8, 3][index] }));
 
-function analyzeAutoRuleGeneration(rule) {
+function analyzeAutoRuleGeneration(rule, minimumScheduleMinutes) {
   const start = timeToMinutes(rule.start);
   const end = timeToMinutes(rule.end);
   const departuresPerHour = Number(rule.departuresPerHour) || 0;
@@ -17,12 +17,12 @@ function analyzeAutoRuleGeneration(rule) {
     return { ok: false, reason: "invalid" };
   }
 
-  if (departuresPerHour > MAX_AUTO_RULE_TRIPS_PER_HOUR) {
+  if (departuresPerHour > 60 / minimumScheduleMinutes) {
     return { ok: false, reason: "frequencyLimit" };
   }
 
   const estimatedCount = Math.ceil(((end - start) * departuresPerHour) / 60);
-  if (!Number.isFinite(estimatedCount) || estimatedCount > MAX_AUTO_RULE_GENERATED_TRIPS) {
+  if (!Number.isFinite(estimatedCount) || estimatedCount > 1440 / minimumScheduleMinutes) {
     return { ok: false, reason: "tripLimit" };
   }
 
@@ -43,8 +43,8 @@ function enumerateRuleMinutesFromAnalysis(analysis) {
   return result;
 }
 
-export function enumerateRuleMinutes(rule) {
-  const analysis = analyzeAutoRuleGeneration(rule);
+export function enumerateRuleMinutes(rule, minimumScheduleMinutes = MIN_DEPARTURE_INTERVAL_MINUTES) {
+  const analysis = analyzeAutoRuleGeneration(rule, minimumScheduleMinutes);
   if (!analysis.ok) {
     return [];
   }
@@ -75,7 +75,7 @@ export function hasMinimumDepartureGap(candidateMinute, existingMinutes) {
   return existingMinutes.every((minute) => Math.abs(minute - candidateMinute) >= MIN_DEPARTURE_INTERVAL_MINUTES);
 }
 
-export function hasMinimumDepartureGapForOrigin(candidateMinute, candidateOriginStationId, existingRows) {
+export function hasMinimumDepartureGapForOrigin(candidateMinute, candidateOriginStationId, existingRows, minimumScheduleMinutes = MIN_DEPARTURE_INTERVAL_MINUTES) {
   if (!candidateOriginStationId) {
     return false;
   }
@@ -87,7 +87,7 @@ export function hasMinimumDepartureGapForOrigin(candidateMinute, candidateOrigin
 
     const directGap = Math.abs(row.minute - candidateMinute);
     const circularGap = Math.min(directGap, (24 * 60) - directGap);
-    return circularGap >= MIN_DEPARTURE_INTERVAL_MINUTES;
+    return circularGap >= minimumScheduleMinutes;
   });
 }
 
@@ -245,10 +245,10 @@ function hasMinimumGapBetweenMinutes(minutes, minGapMinutes) {
   return true;
 }
 
-function canUseBaseDepartureMinutes(baseMinutes, originStationId, occupiedRows) {
+function canUseBaseDepartureMinutes(baseMinutes, originStationId, occupiedRows, minimumScheduleMinutes) {
   const validationRows = [...occupiedRows];
   return baseMinutes.every((minute) => {
-    if (!hasMinimumDepartureGapForOrigin(minute, originStationId, validationRows)) {
+    if (!hasMinimumDepartureGapForOrigin(minute, originStationId, validationRows, minimumScheduleMinutes)) {
       return false;
     }
 
@@ -310,12 +310,13 @@ function getAnchorSlot(baseMinutes, index, windowStart, windowEnd) {
   return { start, end };
 }
 
-function pickAnchoredAvailableMinute(anchor, slot, originStationId, occupiedRows) {
+function pickAnchoredAvailableMinute(anchor, slot, originStationId, occupiedRows, minimumScheduleMinutes) {
   if (!originStationId || slot.end < slot.start) {
     return null;
   }
 
   const segments = buildOriginAvailableDepartureSegments({
+    minGapMinutes: minimumScheduleMinutes,
     windowStart: slot.start,
     windowEnd: slot.end + 1,
     originStationId,
@@ -355,7 +356,7 @@ function pickAnchoredAvailableMinute(anchor, slot, originStationId, occupiedRows
     return anchor;
   }
 
-  return distributeMinutesInSegment(selected, 1, MIN_DEPARTURE_INTERVAL_MINUTES)[0] ?? null;
+  return distributeMinutesInSegment(selected, 1, minimumScheduleMinutes)[0] ?? null;
 }
 
 function buildAutoDepartureSlots(baseMinutes, resolveMinute) {
@@ -371,25 +372,26 @@ function distributeAutoDepartureMinutes({
   windowStart,
   windowEnd,
   originStationId,
-  occupiedRows
+  occupiedRows,
+  minimumScheduleMinutes
 }) {
   if (!originStationId || !Array.isArray(baseMinutes) || baseMinutes.length === 0) {
     return buildAutoDepartureSlots(baseMinutes);
   }
 
-  if (canUseBaseDepartureMinutes(baseMinutes, originStationId, occupiedRows)) {
+  if (canUseBaseDepartureMinutes(baseMinutes, originStationId, occupiedRows, minimumScheduleMinutes)) {
     return buildAutoDepartureSlots(baseMinutes, (anchorMinute) => anchorMinute);
   }
 
   const validationRows = [...occupiedRows];
   return buildAutoDepartureSlots(baseMinutes, (anchor, index) => {
     const slot = getAnchorSlot(baseMinutes, index, windowStart, windowEnd);
-    const minute = pickAnchoredAvailableMinute(anchor, slot, originStationId, validationRows);
+    const minute = pickAnchoredAvailableMinute(anchor, slot, originStationId, validationRows, minimumScheduleMinutes);
     if (minute === null) {
       return null;
     }
 
-    if (!hasMinimumDepartureGapForOrigin(minute, originStationId, validationRows)) {
+    if (!hasMinimumDepartureGapForOrigin(minute, originStationId, validationRows, minimumScheduleMinutes)) {
       return null;
     }
 
@@ -428,6 +430,7 @@ function isRowForLine(row, lineId) {
 }
 
 export function buildQuickAddPlan({
+  minimumScheduleMinutes = MIN_DEPARTURE_INTERVAL_MINUTES,
   segments = QUICK_ADD_DEFAULT_SEGMENTS,
   currentRows = [],
   selectedLineId = "",
@@ -461,6 +464,7 @@ export function buildQuickAddPlan({
 
     const distributedSlots = distributeAutoDepartureMinutes({
       baseMinutes,
+      minimumScheduleMinutes,
       windowStart: start,
       windowEnd: end,
       originStationId,
@@ -472,7 +476,7 @@ export function buildQuickAddPlan({
         ? minutesToTime(candidateMinute)
         : minutesToTime(slot?.anchorMinute);
       if (!Number.isFinite(candidateMinute)
-        || !hasMinimumDepartureGapForOrigin(candidateMinute, originStationId, occupiedRows)) {
+        || !hasMinimumDepartureGapForOrigin(candidateMinute, originStationId, occupiedRows, minimumScheduleMinutes)) {
         preview.entries.push({ time, skipped: true, reason: "gap" });
         preview.skippedCount += 1;
         skippedCount += 1;
@@ -516,6 +520,7 @@ export function getOccupiedDepartureMinutes(rows) {
 }
 
 export function buildAutoStagedPlan({
+  minimumScheduleMinutes = MIN_DEPARTURE_INTERVAL_MINUTES,
   currentRows = [],
   rowsForLine = [],
   selectedEditLine,
@@ -561,7 +566,7 @@ export function buildAutoStagedPlan({
   rowsForLine
     .filter((rule) => rule.enabled)
     .forEach((rule) => {
-      const generation = analyzeAutoRuleGeneration(rule);
+      const generation = analyzeAutoRuleGeneration(rule, minimumScheduleMinutes);
       const preview = { times: [], entries: [], skippedCount: 0, skipReasons: [], reason: "" };
       const pushPreviewEntry = (minute, { skipped = false, reason = "" } = {}) => {
         const time = Number.isFinite(minute) ? minutesToTime(minute) : "--";
@@ -630,7 +635,7 @@ export function buildAutoStagedPlan({
             continue;
           }
 
-          if (!hasMinimumDepartureGapForOrigin(candidate.candidateMinute, selectedOriginStationId, occupiedRows)) {
+          if (!hasMinimumDepartureGapForOrigin(candidate.candidateMinute, selectedOriginStationId, occupiedRows, minimumScheduleMinutes)) {
             pushPreviewEntry(candidate.candidateMinute, { skipped: true, reason: "gap" });
             continue;
           }
@@ -657,6 +662,7 @@ export function buildAutoStagedPlan({
 
       const distributedSlots = distributeAutoDepartureMinutes({
         baseMinutes,
+        minimumScheduleMinutes,
         windowStart: generation.start,
         windowEnd: generation.end,
         originStationId: selectedOriginStationId,
@@ -671,7 +677,7 @@ export function buildAutoStagedPlan({
           return;
         }
 
-        if (!hasMinimumDepartureGapForOrigin(candidateMinute, selectedOriginStationId, occupiedRows)) {
+        if (!hasMinimumDepartureGapForOrigin(candidateMinute, selectedOriginStationId, occupiedRows, minimumScheduleMinutes)) {
           pushPreviewEntry(candidateMinute, { skipped: true, reason: "gap" });
           return;
         }

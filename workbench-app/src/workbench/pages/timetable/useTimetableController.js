@@ -59,7 +59,7 @@ function normalizeSnapshot(snapshot) {
       });
     }
   });
-  return { ...next, lineDraftRowsByLineId: blocks };
+  return { ...next, minimumScheduleMinutes: Number(next.minimumScheduleMinutes) === 1 ? 1 : 5, lineDraftRowsByLineId: blocks };
 }
 
 function isSnapshotForMode(snapshot, mode) {
@@ -195,7 +195,7 @@ function buildTrain(row, layout, runtime, stationNames, previousRow = null) {
   };
 }
 
-function buildBatchTimedStops(row, layout, runtime, intervalMinutes) {
+function buildBatchTimedStops(row, layout, runtime, intervalMinutes, minimum) {
   const stopKeys = buildStopKeys(layout);
   if (!hasClosingSegment(runtime, stopKeys.length)) {
     return { error: "runtime", timedStops: [] };
@@ -227,14 +227,15 @@ function buildBatchTimedStops(row, layout, runtime, intervalMinutes) {
       timedStops.push({ stopKey: stop.stopKey, arrive: arrival, depart: null });
       continue;
     }
-    const departure = Math.ceil((arrival + 5) / intervalMinutes) * intervalMinutes;
+    const departure = Math.ceil((arrival + minimum) / intervalMinutes) * intervalMinutes;
     const validation = validateDepartureValue(
       workingTrain,
       null,
       null,
       runtime,
       stop.occurrence,
-      minutesToTime(departure)
+      minutesToTime(departure),
+      minimum
     );
     if (validation.error || !Number.isFinite(validation.minute)) {
       return { error: validation.error || "format", timedStops: [] };
@@ -475,7 +476,7 @@ function lineRuntime(runtimes, sources, lineId) {
   return runtimes[lineId]?.[sources[lineId] || "theory"] || null;
 }
 
-function validateDepartureValue(train, row, previousRow, runtime, occurrence, value) {
+function validateDepartureValue(train, row, previousRow, runtime, occurrence, value, minimum) {
   if (!isValidTimeValue(value)) {
     return { error: "format", minute: null };
   }
@@ -491,7 +492,7 @@ function validateDepartureValue(train, row, previousRow, runtime, occurrence, va
   if (Number.isFinite(stop.arrivalMinute) && stop.arrivalMinute - minute > 720) {
     minute += 1440;
   }
-  if (!Number.isFinite(stop.arrivalMinute) || minute - stop.arrivalMinute < 5) {
+  if (!Number.isFinite(stop.arrivalMinute) || minute - stop.arrivalMinute < minimum) {
     return { error: "dwell", minute };
   }
 
@@ -518,7 +519,7 @@ function validateDepartureValue(train, row, previousRow, runtime, occurrence, va
     if (!Number.isFinite(departure)) {
       break;
     }
-    if (departure - arrival < 5) {
+    if (departure - arrival < minimum) {
       return { error: "dwell", minute };
     }
     reachesThirdDay = reachesThirdDay || departure >= 2880;
@@ -547,7 +548,8 @@ function collectLineDwellErrors(snapshot, lineId, layout, runtime, directory) {
         previousRow,
         runtime,
         stop.occurrence,
-        minutesToTime(stop.departureMinute)
+        minutesToTime(stop.departureMinute),
+        snapshot.minimumScheduleMinutes
       );
       if (result.error === "dwell") {
         errors[inputErrorKey(lineId, train.id, stop.occurrence)] = "dwell";
@@ -673,6 +675,15 @@ export default function useTimetableController({ activeTransportMode, isActive, 
   const [saveState, setSaveState] = useState("clean");
   const [saveError, setSaveError] = useState("");
   const [inputErrors, setInputErrors] = useState({});
+  const minimumScheduleMinutes = Number(snapshot.minimumScheduleMinutes) === 1 ? 1 : 5;
+  useEffect(() => {
+    setInputErrors((current) => {
+      const next = Object.fromEntries(Object.entries(current).filter(([, error]) => error !== "dwell"));
+      dirtyLineIds.forEach((lineId) => Object.assign(next, collectLineDwellErrors(snapshot, lineId,
+        layouts[lineId]?.value, lineRuntime(runtimes, runtimeSources, lineId), directory)));
+      return next;
+    });
+  }, [minimumScheduleMinutes]);
   const snapshotReady = isSnapshotForMode(snapshot, activeTransportMode);
   const canSave = snapshotReady
     && dirtyLineIds.length > 0
@@ -790,7 +801,8 @@ export default function useTimetableController({ activeTransportMode, isActive, 
       previousRow,
       runtime,
       occurrence,
-      value
+      value,
+      minimumScheduleMinutes
     );
   }, [directory, layouts, runtimeSources, runtimes, snapshot]);
 
@@ -1786,6 +1798,11 @@ export default function useTimetableController({ activeTransportMode, isActive, 
   }), [api, reloadBase]);
 
   useEffect(() => api.onCatalogChanged((event) => {
+    if (event?.rulesOnly) {
+      setSnapshot((current) => ({ ...current,
+        minimumScheduleMinutes: Number(event.minimumScheduleMinutes) === 1 ? 1 : 5 }));
+      return;
+    }
     const mode = event?.mode || activeTransportMode;
     if (mode !== activeTransportMode) {
       return;
@@ -1796,7 +1813,7 @@ export default function useTimetableController({ activeTransportMode, isActive, 
         loadedModeRef.current = activeTransportMode;
       });
     }
-  }), [activeTransportMode, api, isActive, reloadBase]);
+  }, true), [activeTransportMode, api, isActive, reloadBase]);
 
   useEffect(() => api.onSnapshotChanged((nextSnapshot) => {
     if (!isSnapshotForMode(nextSnapshot, activeTransportMode)) {
@@ -2022,7 +2039,7 @@ export default function useTimetableController({ activeTransportMode, isActive, 
     }
     const replacements = new Map();
     for (const row of targets) {
-      const result = buildBatchTimedStops(row, layout, runtime, intervalMinutes);
+      const result = buildBatchTimedStops(row, layout, runtime, intervalMinutes, minimumScheduleMinutes);
       if (result.error) {
         setLoadError(`timetable-batch-${result.error}`);
         return false;
@@ -2130,6 +2147,7 @@ export default function useTimetableController({ activeTransportMode, isActive, 
     clearLineDetails,
     validateDeparture,
     inputErrors,
+    minimumScheduleMinutes,
     setInputError,
     clearInputErrors,
     markLineCustom,

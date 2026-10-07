@@ -18,10 +18,10 @@ namespace RapidTransitMod.Dispatch.Workbench
             Func<string, string> normalizeWorkbenchAllowedDepotId,
             Func<string, string> normalizeWorkbenchAllowedDepotIdFromSnapshot,
             int minOriginHoldLimitMinutes,
-            int maxOriginHoldLimitMinutes,
             Func<DispatchWorkbenchSaveRequest, string, Dictionary<string, List<DispatchWorkbenchStagedRowDto>>> buildRequestLineDraftRowsByDraftKey,
             Func<string, string> getDraftKey,
-            Func<int, string> slotStr)
+            Func<int, string> slotStr,
+            IReadOnlyDictionary<string, LineConfigState> originals)
         {
             List<string> errors = new List<string>();
             if (request == null)
@@ -138,18 +138,6 @@ namespace RapidTransitMod.Dispatch.Workbench
                         errors.Add("Line setting " + setting.lineId + " references a line that no longer exists.");
                     }
 
-                    if (setting.originHoldLimitMinutes < minOriginHoldLimitMinutes
-                        || setting.originHoldLimitMinutes > maxOriginHoldLimitMinutes)
-                    {
-                        errors.Add("Line setting " + setting.lineId + " has invalid origin hold limit.");
-                    }
-
-                    if (setting.maxStationDwellMinutes < minOriginHoldLimitMinutes
-                        || setting.maxStationDwellMinutes > maxOriginHoldLimitMinutes)
-                    {
-                        errors.Add("Line setting " + setting.lineId + " has invalid max station dwell limit.");
-                    }
-
                     if (!string.IsNullOrEmpty(setting.allowedDepotId))
                     {
                         string normalizedDepotId = depots != null
@@ -186,7 +174,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 || request.lineDraftRows != null
                 || request.lineDraftRowsByLineId != null)
             {
-                const int minOriginDepartureGapMinutes = 5;
+                int minOriginDepartureGapMinutes = minOriginHoldLimitMinutes;
                 HashSet<string> stagedKeys = new HashSet<string>();
                 Dictionary<string, string> stagedLineKinds = new Dictionary<string, string>();
                 List<(string RowId, string LineId, string OriginId, string OriginName, int Minutes)> stagedOriginDepartures =
@@ -272,7 +260,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                                     + slotStr(ordered[i - 1].Minutes)
                                     + " and "
                                     + slotStr(ordered[i].Minutes)
-                                    + ".");
+                                    + " (minimum " + minOriginDepartureGapMinutes + " minutes).");
                             }
                         }
                         if (ordered.Length > 1 && ordered[0].Minutes != ordered[ordered.Length - 1].Minutes)
@@ -290,13 +278,61 @@ namespace RapidTransitMod.Dispatch.Workbench
                                     + slotStr(ordered[ordered.Length - 1].Minutes)
                                     + " and "
                                     + slotStr(ordered[0].Minutes)
-                                    + ".");
+                                    + " (minimum " + minOriginDepartureGapMinutes + " minutes).");
                             }
                         }
                     }
                 }
             }
 
+            errors.AddRange(LineMinutes(request.lineSettings, minOriginHoldLimitMinutes, originals));
+            return errors;
+        }
+
+        internal static List<string> LineMinutes(IEnumerable<DispatchWorkbenchLineSettingDto> settings,
+            int minimum, IReadOnlyDictionary<string, LineConfigState> originals)
+        {
+            List<string> errors = new List<string>();
+            foreach (DispatchWorkbenchLineSettingDto setting in settings ?? Array.Empty<DispatchWorkbenchLineSettingDto>())
+            {
+                if (setting == null || string.IsNullOrEmpty(setting.lineId))
+                    continue;
+                LineConfigState original = null;
+                originals?.TryGetValue(setting.lineId, out original);
+                if (!AllowedMinutes(setting.originHoldLimitMinutes, original?.OriginHoldLimitMinutes, minimum))
+                    errors.Add("Line setting " + setting.lineId + " has invalid origin hold limit; minimum " + minimum + " minutes.");
+                if (!AllowedMinutes(setting.maxStationDwellMinutes, original?.MaxStationDwellMinutes, minimum))
+                    errors.Add("Line setting " + setting.lineId + " has invalid max station dwell limit; minimum " + minimum + " minutes.");
+            }
+            return errors;
+        }
+
+        private static bool AllowedMinutes(int value, int? original, int minimum)
+        {
+            return value >= ScheduleLimitPolicy.StoredMinimum && value <= RuntimeConfigStoreDefaults.MaxConfiguredMinutes
+                && (value >= minimum || value == original);
+        }
+
+        internal static List<string> AppliedTargets(IReadOnlyDictionary<string, AppliedLine> targets,
+            List<WorkbenchLineRuntime> runtimeLines, IReadOnlyDictionary<string, AppliedLine> appliedLines,
+            int minimum, IEnumerable<string> targetIds = null)
+        {
+            List<string> errors = AppliedRows(targetIds ?? targets.Keys,
+                targets.Values.SelectMany(line => line.StagedRows).ToList(), runtimeLines, appliedLines,
+                Time.Parse, Time.Slot, minimum);
+            foreach (KeyValuePair<string, AppliedLine> entry in targets)
+            {
+                AppliedLine line = entry.Value;
+                if (line.OriginHoldLimitMinutes < minimum || line.MaxStationDwellMinutes < minimum)
+                    errors.Add("Line " + entry.Key + " requires limits of at least " + minimum + " minutes.");
+                foreach (DispatchWorkbenchStagedRowDto row in line.StagedRows)
+                {
+                    if ((row?.timedStops ?? Array.Empty<DispatchWorkbenchTimedStopDto>()).Any(stop =>
+                        stop != null && stop.arrive.HasValue && stop.depart.HasValue
+                        && stop.depart.Value - stop.arrive.Value < minimum))
+                        errors.Add("timed-stop-minimum|" + minimum + "|" + entry.Key + "|" + row.time);
+                }
+            }
             return errors;
         }
 
@@ -583,9 +619,9 @@ namespace RapidTransitMod.Dispatch.Workbench
             List<WorkbenchLineRuntime> runtimeLines,
             IReadOnlyDictionary<string, AppliedLine> appliedLines,
             Func<string, int> parseTimeMinutes,
-            Func<int, string> slotStr)
+            Func<int, string> slotStr,
+            int minOriginDepartureGapMinutes)
         {
-            const int minOriginDepartureGapMinutes = 5;
             List<string> errors = new List<string>();
             Dictionary<string, WorkbenchLineRuntime> runtimeLineById = runtimeLines?
                 .Where(line => line != null && !string.IsNullOrEmpty(line.Id))
@@ -631,7 +667,8 @@ namespace RapidTransitMod.Dispatch.Workbench
                 for (int i = 1; i < ordered.Length; i++)
                 {
                     int gap = Gap(ordered[i - 1].Minutes, ordered[i].Minutes);
-                    if (gap >= minOriginDepartureGapMinutes)
+                    if (gap >= minOriginDepartureGapMinutes
+                        || (!replacedLineIds.Contains(ordered[i - 1].LineId) && !replacedLineIds.Contains(ordered[i].LineId)))
                         continue;
 
                     string originLabel = !string.IsNullOrEmpty(ordered[i].OriginName)
@@ -648,12 +685,13 @@ namespace RapidTransitMod.Dispatch.Workbench
                         + slotStr(ordered[i].Minutes)
                         + " "
                         + ordered[i].LineId
-                        + ".");
+                        + " (minimum " + minOriginDepartureGapMinutes + " minutes).");
                 }
                 if (ordered.Length > 1 && ordered[0].Minutes != ordered[ordered.Length - 1].Minutes)
                 {
                     int wrapGap = Gap(ordered[ordered.Length - 1].Minutes, ordered[0].Minutes);
-                    if (wrapGap >= minOriginDepartureGapMinutes)
+                    if (wrapGap >= minOriginDepartureGapMinutes
+                        || (!replacedLineIds.Contains(ordered[ordered.Length - 1].LineId) && !replacedLineIds.Contains(ordered[0].LineId)))
                         continue;
 
                     string originLabel = !string.IsNullOrEmpty(ordered[0].OriginName)
@@ -670,7 +708,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                         + slotStr(ordered[0].Minutes)
                         + " "
                         + ordered[0].LineId
-                        + ".");
+                        + " (minimum " + minOriginDepartureGapMinutes + " minutes).");
                 }
             }
 

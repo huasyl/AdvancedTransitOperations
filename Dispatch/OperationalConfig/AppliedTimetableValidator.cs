@@ -172,7 +172,7 @@ namespace RapidTransitMod
                     errors.Add("timed-stop-arrival-before-departure:" + rowIndex + ":" + i);
                 }
                 if (stop.Depart >= 0 && stop.Arrive >= 0
-                    && stop.Depart - stop.Arrive < 5)
+                    && stop.Depart - stop.Arrive < ScheduleLimitPolicy.StoredMinimum)
                 {
                     errors.Add("timed-stop-minimum-dwell:" + rowIndex + ":" + i);
                 }

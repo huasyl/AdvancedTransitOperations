@@ -209,6 +209,11 @@ export default function WorkbenchApp({ registerHostActions }) {
     if (!mode) {
       return;
     }
+    if (snapshot?.rulesOnly) {
+      setSnapshotsByMode((current) => Object.fromEntries(Object.entries(current)
+        .map(([key, value]) => [key, { ...value, minimumScheduleMinutes: snapshot.minimumScheduleMinutes }])));
+      return;
+    }
     if (!snapshot) {
       setSnapshotsByMode((current) => {
         if (!current[mode]) {

@@ -1,4 +1,7 @@
 {
+  "Options.GROUP[RapidTransitMod.RapidTransitMod.Mod.ScheduleAdvanced]": "调度高级选项",
+  "Options.OPTION[RapidTransitMod.RapidTransitMod.Mod.AtoGameOptions.AllowOneMinuteLimits]": "允许 1 分钟调度下限",
+  "Options.OPTION_DESCRIPTION[RapidTransitMod.RapidTransitMod.Mod.AtoGameOptions.AllowOneMinuteLimits]": "将始发等候上限、最长停站、同始发站发车间隔和详细停站的编辑下限降至 1 分钟。",
   "RapidTransit.SignalCooldown": "冷却中",
   "RapidTransit.SignalSubmitted": "已提交",
   "RapidTransit.SignalActive": "放行中",

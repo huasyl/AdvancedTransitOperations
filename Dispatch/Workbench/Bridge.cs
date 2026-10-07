@@ -747,6 +747,8 @@ namespace RapidTransitMod.Dispatch.Workbench
                 Persist(),
                 Config().BuildAppliedState,
                 m_Validator,
+                m_LineStore,
+                Applied(),
                 () => Applied().ConsumeCleanupInfo());
             return m_Commands;
         }
@@ -864,6 +866,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
             Dictionary<string, AppliedLine> replacements = new Dictionary<string, AppliedLine>(StringComparer.Ordinal);
             HashSet<string> lineIds = new HashSet<string>(StringComparer.Ordinal);
+            int minimum = ScheduleLimitPolicy.EditMinimum;
             foreach (DispatchWorkbenchScheduleLineDto block in request.lines ?? Array.Empty<DispatchWorkbenchScheduleLineDto>())
             {
                 if (block == null || string.IsNullOrEmpty(block.lineId) || !lineIds.Add(block.lineId))
@@ -876,13 +879,15 @@ namespace RapidTransitMod.Dispatch.Workbench
                     errors.Add("schedule-batch-line-missing:" + (block.lineId ?? string.Empty));
                     continue;
                 }
-                if (!TryBuildScheduleLine(request.editorSessionId, block, runtimeLine, out AppliedLine applied, errors))
+                if (!TryBuildScheduleLine(request.editorSessionId, block, runtimeLine, minimum, out AppliedLine applied, errors))
                     continue;
                 replacements[block.lineId] = applied;
             }
 
             if (request.lines == null || request.lines.Length == 0)
                 errors.Add("schedule-batch-lines-required");
+            if (errors.Count == 0)
+                errors.AddRange(Check.AppliedTargets(replacements, runtimeLines.Values.ToList(), Applied().Lines, minimum));
             if (errors.Count == 0
                 && !Applied().TryApplyScheduleLines(replacements, out string applyError))
                 errors.Add("schedule-batch-apply-failed:" + applyError);
@@ -902,6 +907,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             string editorSessionId,
             DispatchWorkbenchScheduleLineDto block,
             WorkbenchLineRuntime runtimeLine,
+            int minimum,
             out AppliedLine applied,
             List<string> errors)
         {
@@ -983,6 +989,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                         timedStops,
                         block.lineId,
                         row.rowId,
+                        minimum,
                         errors))
                     continue;
                 rows.Add(new DispatchWorkbenchStagedRowDto
@@ -1062,6 +1069,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             DispatchWorkbenchTimedStopDto[] stops,
             string lineId,
             string rowId,
+            int minimum,
             List<string> errors)
         {
             if (stops.Length < 2
@@ -1134,7 +1142,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 }
                 if (stops[i].depart.HasValue)
                 {
-                    if (i == stops.Length - 1 || stops[i].depart.Value - stops[i].arrive.Value < 5)
+                    if (i == stops.Length - 1 || stops[i].depart.Value - stops[i].arrive.Value < minimum)
                     {
                         errors.Add("schedule-batch-depart-chain-invalid:" + lineId + ":" + rowId);
                         return false;

@@ -58,7 +58,7 @@ function sortCopySourceRows(rows) {
     .map(({ row }) => row);
 }
 
-function buildCandidateOptions(sourceRow, shiftCandidates, targetOriginStationId, occupiedRows) {
+function buildCandidateOptions(sourceRow, shiftCandidates, targetOriginStationId, occupiedRows, minimumScheduleMinutes) {
   const baseMinute = timeToMinutes(sourceRow?.time);
   if (baseMinute === null) {
     return { baseMinute: null, options: [] };
@@ -70,7 +70,8 @@ function buildCandidateOptions(sourceRow, shiftCandidates, targetOriginStationId
       const isAvailable = hasMinimumDepartureGapForOrigin(
         minute,
         targetOriginStationId,
-        occupiedRows
+        occupiedRows,
+        minimumScheduleMinutes
       );
       return isAvailable
         ? { minute, unwrappedMinute: baseMinute + shiftMinutes, shiftMinutes, choiceRank }
@@ -81,7 +82,7 @@ function buildCandidateOptions(sourceRow, shiftCandidates, targetOriginStationId
   return { baseMinute, options };
 }
 
-function tryBuildUnchangedPlan(sortedRows, occupiedRows, targetOriginStationId, targetKind) {
+function tryBuildUnchangedPlan(sortedRows, occupiedRows, targetOriginStationId, targetKind, minimumScheduleMinutes) {
   const verifiedRows = [...occupiedRows];
   const rows = [];
   let copiedCount = 0;
@@ -105,7 +106,7 @@ function tryBuildUnchangedPlan(sortedRows, occupiedRows, targetOriginStationId, 
       continue;
     }
 
-    if (!hasMinimumDepartureGapForOrigin(baseMinute, targetOriginStationId, verifiedRows)) {
+    if (!hasMinimumDepartureGapForOrigin(baseMinute, targetOriginStationId, verifiedRows, minimumScheduleMinutes)) {
       return null;
     }
 
@@ -132,8 +133,8 @@ function tryBuildUnchangedPlan(sortedRows, occupiedRows, targetOriginStationId, 
   };
 }
 
-function buildBoundaryMasks() {
-  const boundaryWindow = MIN_DEPARTURE_INTERVAL_MINUTES - 1;
+function buildBoundaryMasks(minimumScheduleMinutes) {
+  const boundaryWindow = minimumScheduleMinutes - 1;
   const boundaryValues = Array.from(
     { length: (boundaryWindow * 2) + 1 },
     (_, index) => index - boundaryWindow
@@ -144,7 +145,7 @@ function buildBoundaryMasks() {
     const values = boundaryValues.filter((_, index) => (mask & (1 << index)) !== 0);
     let valid = true;
     for (let index = 1; index < values.length; index += 1) {
-      if (values[index] - values[index - 1] < MIN_DEPARTURE_INTERVAL_MINUTES) {
+      if (values[index] - values[index - 1] < minimumScheduleMinutes) {
         valid = false;
         break;
       }
@@ -162,7 +163,7 @@ function getBoundaryBit(unwrappedMinute, boundaryValues) {
   return index < 0 ? 0 : 1 << index;
 }
 
-function hasBoundaryGap(candidate, boundaryMask, boundaryValues, targetOriginStationId) {
+function hasBoundaryGap(candidate, boundaryMask, boundaryValues, targetOriginStationId, minimumScheduleMinutes) {
   for (let index = 0; index < boundaryValues.length; index += 1) {
     if ((boundaryMask & (1 << index)) === 0) {
       continue;
@@ -171,7 +172,8 @@ function hasBoundaryGap(candidate, boundaryMask, boundaryValues, targetOriginSta
     if (!hasMinimumDepartureGapForOrigin(
       candidate.minute,
       targetOriginStationId,
-      [{ minute: wrapMinute(boundaryValues[index]), originStationId: targetOriginStationId }]
+      [{ minute: wrapMinute(boundaryValues[index]), originStationId: targetOriginStationId }],
+      minimumScheduleMinutes
     )) {
       return false;
     }
@@ -212,6 +214,7 @@ function reconstructChoices(finalState, rowCount) {
 // are kept unwrapped for source-order constraints and wrapped for all rule
 // validation, so midnight remains circular.
 export function buildCopyPlan({
+  minimumScheduleMinutes = MIN_DEPARTURE_INTERVAL_MINUTES,
   sourceRows = [],
   occupiedRows = [],
   targetOriginStationId = "",
@@ -225,19 +228,21 @@ export function buildCopyPlan({
     sourceRow,
     shiftCandidates,
     targetOriginStationId,
-    occupied
+    occupied,
+    minimumScheduleMinutes
   ));
   const unchangedPlan = tryBuildUnchangedPlan(
     sortedRows,
     occupied,
     targetOriginStationId,
-    targetKind
+    targetKind,
+    minimumScheduleMinutes
   );
   if (unchangedPlan) {
     return unchangedPlan;
   }
 
-  const { boundaryValues, masks } = buildBoundaryMasks();
+  const { boundaryValues, masks } = buildBoundaryMasks(minimumScheduleMinutes);
   const maskIndexes = new Map(masks.map((mask, index) => [mask, index]));
   const domainMin = -MAX_COPY_SHIFT_MINUTES;
   const domainMax = (MINUTES_PER_DAY - 1) + MAX_COPY_SHIFT_MINUTES;
@@ -341,13 +346,13 @@ export function buildCopyPlan({
 
     (baseMinute === null ? [] : options).forEach((option) => {
       const optionIndex = option.unwrappedMinute - domainMin;
-      const prefixLimit = optionIndex - MIN_DEPARTURE_INTERVAL_MINUTES;
+      const prefixLimit = optionIndex - minimumScheduleMinutes;
       const emptyBoundaryBit = getBoundaryBit(option.unwrappedMinute, boundaryValues);
       addPending(maskIndexes.get(emptyBoundaryBit), optionIndex, emptyState, option);
 
       stateTrees.forEach((tree, groupIndex) => {
         const previousState = queryTree(tree, prefixLimit);
-        if (!previousState || !hasBoundaryGap(option, previousState.boundaryMask, boundaryValues, targetOriginStationId)) {
+        if (!previousState || !hasBoundaryGap(option, previousState.boundaryMask, boundaryValues, targetOriginStationId, minimumScheduleMinutes)) {
           return;
         }
 
@@ -397,7 +402,8 @@ export function buildCopyPlan({
     const isValid = hasMinimumDepartureGapForOrigin(
       resolvedMinute,
       targetOriginStationId,
-      verifiedRows
+      verifiedRows,
+      minimumScheduleMinutes
     );
     if (!isValid) {
       // The optimized state already passed this helper. Keep the solved

@@ -7,8 +7,8 @@ namespace RapidTransitMod.Dispatch.Workbench
 {
     internal sealed class Commands
     {
-        private const int MinHold = 5;
-        private const int MaxHold = 120;
+        private readonly LineConfigStore m_LineSettings;
+        private readonly AppliedTimetable m_Applied;
         private readonly Host m_Host;
         private readonly RunPort m_Run;
         private readonly Drafts m_Drafts;
@@ -28,6 +28,8 @@ namespace RapidTransitMod.Dispatch.Workbench
             Persist persist,
             Func<string, AppliedLine, AppliedTimetableState> buildAppliedState,
             AppliedTimetableValidator validator,
+            LineConfigStore lineSettings,
+            AppliedTimetable applied,
             Func<DispatchWorkbenchCleanupInfoDto> consumeCleanupInfo)
         {
             m_Host = host ?? throw new ArgumentNullException(nameof(host));
@@ -38,6 +40,8 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_Persist = persist ?? throw new ArgumentNullException(nameof(persist));
             m_BuildAppliedState = buildAppliedState ?? throw new ArgumentNullException(nameof(buildAppliedState));
             m_Validator = validator ?? throw new ArgumentNullException(nameof(validator));
+            m_LineSettings = lineSettings;
+            m_Applied = applied;
             m_CopyRow = Rows.CopyRow;
             m_LastById = Rows.LastById;
             m_ConsumeCleanupInfo = consumeCleanupInfo ?? throw new ArgumentNullException(nameof(consumeCleanupInfo));
@@ -46,12 +50,16 @@ namespace RapidTransitMod.Dispatch.Workbench
         internal WorkbenchSavePrepareContext Capture(string requestJson)
         {
             ModeScope scope = Workbenches.ModeRequest.ReadScheduleScope(requestJson, "saveNativeWorkbenchDraft");
+            List<WorkbenchLineRuntime> runtimeLines = m_Query.GetLines(scope.Mode);
             return new WorkbenchSavePrepareContext
             {
                 RequestJson = requestJson ?? string.Empty,
                 Scope = scope,
                 SnapshotVersion = m_Host.Version(),
-                RuntimeLines = m_Query.GetLines(scope.Mode),
+                MinimumScheduleMinutes = ScheduleLimitPolicy.EditMinimum,
+                LineSettings = runtimeLines.ToDictionary(line => line.Id,
+                    line => m_LineSettings.Get(line.Id, scope.Mode), StringComparer.Ordinal),
+                RuntimeLines = runtimeLines,
                 Depots = m_Host.Depots(),
                 ServiceKinds = m_Run.Keys()
                     .ToDictionary(
@@ -109,13 +117,13 @@ namespace RapidTransitMod.Dispatch.Workbench
                     prepared.Scope.Mode,
                     runtimeLines,
                     request?.applyDraft == true,
-                    depots));
+                    depots,
+                    context.MinimumScheduleMinutes,
+                    context.LineSettings));
                 prepared.Request = request;
                 prepared.RuntimeLines = runtimeLines;
                 prepared.Errors = errors;
                 prepared.ShouldReturnSnapshot = ReturnSnapshot(request);
-                prepared.LineSettingsChanged = request?.lineSettings != null
-                    && !m_Run.SameLineCfg(prepared.Scope, request.lineSettings);
                 return prepared;
             }
             catch (Exception ex)
@@ -147,7 +155,19 @@ namespace RapidTransitMod.Dispatch.Workbench
             DispatchWorkbenchSaveRequest request = prepared.Request;
             int clientRequestSequence = Math.Max(0, request?.clientRequestSequence ?? 0);
             List<WorkbenchLineRuntime> runtimeLines = prepared.RuntimeLines ?? m_Host.Lines();
-            bool autoCleanupChanged = m_Run.CleanupInvalidApplied();
+            int minimum = ScheduleLimitPolicy.EditMinimum;
+            List<string> permissionErrors = Check.LineMinutes(request.lineSettings, minimum,
+                runtimeLines.ToDictionary(line => line.Id,
+                    line => m_LineSettings.Get(line.Id, prepared.Scope.Mode), StringComparer.Ordinal));
+            if (permissionErrors.Count > 0)
+            {
+                result.success = false;
+                result.errors = permissionErrors.ToArray();
+                result.snapshot = BuildSnapshot(prepared.Scope, request.selectedLineId, clientRequestSequence);
+                return result;
+            }
+            prepared.LineSettingsChanged = request.lineSettings != null
+                && !m_Run.SameLineCfg(prepared.Scope, request.lineSettings);
             string lineKey = DraftStore.GetKey(request?.selectedLineId);
             Dictionary<string, List<DispatchWorkbenchStagedRowDto>> nextLineDraftRowsByKey =
                 RowsByDraft(request, lineKey);
@@ -162,7 +182,9 @@ namespace RapidTransitMod.Dispatch.Workbench
                     nextLineDraftRowsByKey.Keys,
                     nextLineDraftRowsByKey.Values.SelectMany(rows => rows).ToList(),
                     runtimeLines,
-                    prepared.Scope.Mode);
+                    prepared.Scope.Mode,
+                    request.lineSettings,
+                    minimum);
                 if (appliedErrors.Count > 0)
                 {
                     result.success = false;
@@ -176,6 +198,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 }
             }
 
+            bool autoCleanupChanged = m_Run.CleanupInvalidApplied();
             bool requestedCleanupChanged = requestedCleanupReasons.Count > 0
                 && m_Run.CleanupRequestedLines(requestedCleanupReasons);
             HashSet<string> invalidatedLineIds = new HashSet<string>(requestedCleanupReasons.Keys, StringComparer.Ordinal);
@@ -574,7 +597,9 @@ namespace RapidTransitMod.Dispatch.Workbench
             TransitMode mode,
             List<WorkbenchLineRuntime> runtimeLines,
             bool validateApplyOnlyConstraints,
-            List<DispatchWorkbenchDepotDto> depots)
+            List<DispatchWorkbenchDepotDto> depots,
+            int minimum,
+            IReadOnlyDictionary<string, LineConfigState> originals)
         {
             return Check.Request(
                 request,
@@ -587,42 +612,44 @@ namespace RapidTransitMod.Dispatch.Workbench
                 Time.Parse,
                 NormalizeDepotId,
                 NormalizeDepotId,
-                MinHold,
-                MaxHold,
+                minimum,
                 RowsByDraft,
                 DraftStore.GetKey,
-                Time.Slot);
+                Time.Slot,
+                originals);
         }
 
         private List<string> ValidateApplied(
             IEnumerable<string> targetLineIds,
             List<DispatchWorkbenchStagedRowDto> rows,
             List<WorkbenchLineRuntime> runtimeLines,
-            TransitMode mode)
+            TransitMode mode,
+            DispatchWorkbenchLineSettingDto[] settings,
+            int minimum)
         {
-            List<string> errors = Check.AppliedRows(
-                targetLineIds,
-                rows,
-                runtimeLines,
-                BuildAppliedState(mode),
-                Time.Parse,
-                Time.Slot);
+            Dictionary<string, AppliedLine> targets = new Dictionary<string, AppliedLine>(StringComparer.Ordinal);
             foreach (IGrouping<string, DispatchWorkbenchStagedRowDto> group in (rows ?? new List<DispatchWorkbenchStagedRowDto>())
                 .Where(row => row != null && !string.IsNullOrEmpty(row.lineId))
                 .GroupBy(row => row.lineId, StringComparer.Ordinal))
             {
-                AppliedLine applied = new AppliedLine
-                {
-                    StagedRows = group.Select(m_CopyRow).ToList()
-                };
+                LineConfigState config = settings == null
+                    ? m_LineSettings.Get(group.Key, mode)
+                    : LineConfigState.Default(m_LineSettings.Version);
+                DispatchWorkbenchLineSettingDto requested = settings?.FirstOrDefault(setting => setting?.lineId == group.Key);
+                AppliedLine applied = m_Applied.BuildDraftTarget(group.Key, group.Select(m_CopyRow).ToList(),
+                    runtimeLines.FirstOrDefault(line => line.Id == group.Key)?.Entity ?? Unity.Entities.Entity.Null,
+                    requested?.originHoldLimitMinutes ?? config.OriginHoldLimitMinutes,
+                    requested?.maxStationDwellMinutes ?? config.MaxStationDwellMinutes);
+                targets[group.Key] = applied;
                 AppliedTimetableState state = m_BuildAppliedState(group.Key, applied);
                 AppliedTimetableValidationResult validation = m_Validator.Validate(
                     LineIdentityService.GetKey(group.Key, mode),
                     state);
-                errors.AddRange(validation.Errors);
+                if (!validation.IsValid)
+                    return validation.Errors.ToList();
             }
-
-            return errors;
+            return Check.AppliedTargets(targets, runtimeLines, BuildAppliedState(mode), minimum,
+                targetLineIds);
         }
 
         private static List<string> RejectDetailedScheduleFields(DispatchWorkbenchSaveRequest request)

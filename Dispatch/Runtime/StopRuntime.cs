@@ -190,6 +190,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         internal readonly int[] WaypointIndices;
         internal readonly int NextStopOrder;
         internal readonly int ActiveStopOrder;
+        internal readonly int MinimumStopMinutes;
         internal readonly bool CanBypass;
         internal readonly double ArrivalWaitMinutes;
         internal readonly int ClockTicksPerDay;
@@ -210,6 +211,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             WaypointIndices = plan.WaypointIndices;
             NextStopOrder = plan.NextStopOrder;
             ActiveStopOrder = plan.ActiveStopOrder;
+            MinimumStopMinutes = plan.MinimumStopMinutes;
             CanBypass = plan.CanBypass;
             ArrivalWaitMinutes = arrivalWaitMinutes;
             ClockTicksPerDay = clockTicksPerDay;
@@ -850,7 +852,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 {
                     arrivalWaitMinutes = Math.Max(
                         0d,
-                        5d - clock.ToMinutes(nowFrame - arrivalFrame));
+                        plan.MinimumStopMinutes - clock.ToMinutes(nowFrame - arrivalFrame));
                 }
                 else if (plan.ActiveStopOrder >= 0 && plan.RestorePending)
                 {
@@ -887,12 +889,14 @@ namespace RapidTransitMod.Dispatch.Runtime
                 || snapshot.NextStopOrder > snapshot.Stops.Length
                 || snapshot.ActiveStopOrder < -1
                 || snapshot.ActiveStopOrder >= snapshot.Stops.Length
+                || (snapshot.MinimumStopMinutes != ScheduleLimitPolicy.StoredMinimum
+                    && snapshot.MinimumStopMinutes != ScheduleLimitPolicy.DefaultMinimum)
                 || snapshot.ClockTicksPerDay <= 0
                 || (snapshot.ActiveStopOrder >= 0
                     && (double.IsNaN(snapshot.ArrivalWaitMinutes)
                         || double.IsInfinity(snapshot.ArrivalWaitMinutes)
                         || snapshot.ArrivalWaitMinutes < 0d
-                        || snapshot.ArrivalWaitMinutes > 5d)))
+                        || snapshot.ArrivalWaitMinutes > snapshot.MinimumStopMinutes)))
             {
                 return false;
             }
@@ -919,6 +923,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 WaypointIndices = projected,
                 NextStopOrder = snapshot.NextStopOrder,
                 ActiveStopOrder = snapshot.ActiveStopOrder,
+                MinimumStopMinutes = snapshot.MinimumStopMinutes,
                 ClockEpoch = m_Clock().ClockEpoch,
                 CanBypass = snapshot.CanBypass,
                 RestorePending = snapshot.ActiveStopOrder >= 0,
@@ -1535,6 +1540,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 }
 
                 plan.ActiveStopOrder = i;
+                plan.MinimumStopMinutes = ScheduleLimitPolicy.EditMinimum;
                 SetTimedDeadline(vehicle, plan, nowFrame, m_Clock());
                 if (nowFrame >= plan.EarliestReleaseFrame)
                 {
@@ -1583,7 +1589,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 || double.IsNaN(plan.RestoredWaitMinutes)
                 || double.IsInfinity(plan.RestoredWaitMinutes)
                 || plan.RestoredWaitMinutes < 0d
-                || plan.RestoredWaitMinutes > 5d)
+                || plan.RestoredWaitMinutes > plan.MinimumStopMinutes)
             {
                 ClearTimedPlan(vehicle);
                 return;
@@ -1593,7 +1599,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             uint arrivalDeadline = AddFrames(
                 nowFrame,
                 clock.ToFramesCeil(plan.RestoredWaitMinutes));
-            uint elapsedFrames = clock.ToFramesRound(5d - plan.RestoredWaitMinutes);
+            uint elapsedFrames = clock.ToFramesRound(plan.MinimumStopMinutes - plan.RestoredWaitMinutes);
             m_State.StopSessionArrivalFrame[vehicle] = nowFrame >= elapsedFrames
                 ? nowFrame - elapsedFrames
                 : 0u;
@@ -1692,7 +1698,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 uint arrivalFrame = m_State.StopSessionArrivalFrame.TryGetValue(vehicle, out uint arrived)
                     ? arrived
                     : nowFrame;
-                arrivalDeadline = AddFrames(arrivalFrame, clock.ToFramesCeil(5d));
+                arrivalDeadline = AddFrames(arrivalFrame, clock.ToFramesCeil(plan.MinimumStopMinutes));
             }
 
             plan.EarliestReleaseFrame = Math.Max(scheduled, arrivalDeadline.Value);
@@ -1724,7 +1730,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 }
                 if (plan.RestorePending
                     && plan.RestoredWaitMinutes >= 0d
-                    && plan.RestoredWaitMinutes <= 5d)
+                    && plan.RestoredWaitMinutes <= plan.MinimumStopMinutes)
                 {
                     plan.ClockEpoch = newClock.ClockEpoch;
                     plan.SavedTicksPerDay = newClock.TicksPerDay;
@@ -1739,8 +1745,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                 double elapsedMinutes = nowFrame >= arrivalFrame
                     ? oldClock.ToMinutes(nowFrame - arrivalFrame)
                     : 0d;
-                double remainingMinutes = Math.Max(0d, Math.Min(5d, 5d - elapsedMinutes));
-                uint newElapsedFrames = newClock.ToFramesRound(5d - remainingMinutes);
+                double remainingMinutes = Math.Max(0d, Math.Min(plan.MinimumStopMinutes, plan.MinimumStopMinutes - elapsedMinutes));
+                uint newElapsedFrames = newClock.ToFramesRound(plan.MinimumStopMinutes - remainingMinutes);
                 if (nowFrame < newElapsedFrames)
                 {
                     m_TimedStopResolved.Add(vehicle);
