@@ -1,4 +1,7 @@
 {
+  "Options.GROUP[RapidTransitMod.RapidTransitMod.Mod.ScheduleAdvanced]": "高度なダイヤ設定",
+  "Options.OPTION[RapidTransitMod.RapidTransitMod.Mod.AtoGameOptions.AllowOneMinuteLimits]": "ダイヤ設定の下限を1分にする",
+  "Options.OPTION_DESCRIPTION[RapidTransitMod.RapidTransitMod.Mod.AtoGameOptions.AllowOneMinuteLimits]": "始発待機上限、最大停車時間、同じ始発駅の発車間隔と詳細停車時間の編集下限を1分にします。",
   "RapidTransit.SignalCooldown": "クールダウン中",
   "RapidTransit.SignalSubmitted": "申請済み",
   "RapidTransit.SignalActive": "優先通行中",

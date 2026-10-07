@@ -1,4 +1,7 @@
 {
+  "Options.GROUP[RapidTransitMod.RapidTransitMod.Mod.ScheduleAdvanced]": "Advanced scheduling",
+  "Options.OPTION[RapidTransitMod.RapidTransitMod.Mod.AtoGameOptions.AllowOneMinuteLimits]": "Allow a 1-minute scheduling minimum",
+  "Options.OPTION_DESCRIPTION[RapidTransitMod.RapidTransitMod.Mod.AtoGameOptions.AllowOneMinuteLimits]": "Lower the editing minimum for origin hold limit, maximum station dwell, same-origin departure gap and detailed dwell to 1 minute.",
   "RapidTransit.SignalCooldown": "Cooldown",
   "RapidTransit.SignalSubmitted": "Submitted",
   "RapidTransit.SignalActive": "Priority active",

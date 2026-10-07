@@ -17,6 +17,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         internal int[] WaypointIndices = Array.Empty<int>();
         internal int NextStopOrder;
         internal int ActiveStopOrder = -1;
+        internal int MinimumStopMinutes = ScheduleLimitPolicy.DefaultMinimum;
         internal uint EarliestReleaseFrame;
         internal long ClockEpoch;
         internal bool HoldApplied;

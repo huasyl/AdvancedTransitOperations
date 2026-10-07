@@ -1,5 +1,7 @@
 using Colossal.IO.AssetDatabase;
+using Game;
 using Game.Modding;
+using Game.SceneFlow;
 using Game.Settings;
 using Game.UI.Localization;
 using RapidTransitMod.Broadcasting;
@@ -12,7 +14,7 @@ namespace RapidTransitMod.Settings
     /// </summary>
     [FileLocation("ModsSettings\\AdvancedTransitOperations\\AtoGameOptions")]
     [SettingsUITabOrder("General", "BroadcastAudio")]
-    [SettingsUIGroupOrder("SelectionPanel", "BroadcastHint", "BroadcastAction", "BroadcastFiles")]
+    [SettingsUIGroupOrder("SelectionPanel", "ScheduleAdvanced", "BroadcastHint", "BroadcastAction", "BroadcastFiles")]
     public sealed class AtoGameOptions : ModSetting
     {
         public AtoGameOptions(IMod mod)
@@ -22,6 +24,30 @@ namespace RapidTransitMod.Settings
 
         [SettingsUISection("General", "SelectionPanel")]
         public bool AutoOpenSelectionPanel { get; set; } = true;
+
+        private bool m_AllowOneMinuteLimits = false;
+
+        [SettingsUISection("General", "ScheduleAdvanced")]
+        public bool AllowOneMinuteLimits
+        {
+            get => m_AllowOneMinuteLimits;
+            set
+            {
+                if (m_AllowOneMinuteLimits == value)
+                    return;
+                m_AllowOneMinuteLimits = value;
+                Colossal.Core.MainThreadDispatcher.RunOnMainThread(() =>
+                {
+                    if (GameManager.instance?.gameMode != GameMode.Game)
+                        return;
+                    Workbenches.UiEvents.Push(new DispatchWorkbenchCatalogEvent
+                    {
+                        rulesOnly = true,
+                        minimumScheduleMinutes = ScheduleLimitPolicy.EditMinimum
+                    });
+                });
+            }
+        }
 
         [SettingsUISection("BroadcastAudio", "BroadcastHint")]
         [SettingsUIMultilineText]
@@ -62,6 +88,7 @@ namespace RapidTransitMod.Settings
         public override void SetDefaults()
         {
             AutoOpenSelectionPanel = true;
+            AllowOneMinuteLimits = false;
         }
     }
 }

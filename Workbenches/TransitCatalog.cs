@@ -240,6 +240,7 @@ namespace RapidTransitMod.Workbenches
     [DataContract]
     internal sealed class TransitCatalogSnapshot
     {
+        [DataMember] public int minimumScheduleMinutes = ScheduleLimitPolicy.EditMinimum;
         [DataMember] public string mode = string.Empty;
         [DataMember] public string selectedLineId = string.Empty;
         [DataMember] public string selectedEditLine = string.Empty;

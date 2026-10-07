@@ -26,7 +26,7 @@ export function getCircularMinuteGap(leftMinute, rightMinute) {
   const directGap = Math.abs(right - left);
   return Math.min(directGap, dayMinutes - directGap);
 }
-export function buildSummaryRowsWithConflicts(rows, t, appliedRowKeySet = null) {
+export function buildSummaryRowsWithConflicts(rows, t, appliedRowKeySet = null, minimumScheduleMinutes = MIN_DEPARTURE_INTERVAL_MINUTES) {
   const duplicateCounts = new Map();
   const lineKinds = new Map();
   const rowsWithMinutes = (Array.isArray(rows) ? rows : [])
@@ -60,7 +60,7 @@ export function buildSummaryRowsWithConflicts(rows, t, appliedRowKeySet = null) 
     for (let index = 1; index < originRows.length; index += 1) {
       const current = originRows[index];
       const previous = originRows[index - 1];
-      if (current.minute - previous.minute < MIN_DEPARTURE_INTERVAL_MINUTES) {
+      if (current.minute - previous.minute < minimumScheduleMinutes) {
         tooCloseIds.add(current.row?.id);
         tooCloseIds.add(previous.row?.id);
       }
@@ -69,7 +69,7 @@ export function buildSummaryRowsWithConflicts(rows, t, appliedRowKeySet = null) 
     if (originRows.length > 1 && originRows[0].minute !== originRows[originRows.length - 1].minute) {
       const first = originRows[0];
       const last = originRows[originRows.length - 1];
-      if (getCircularMinuteGap(first.minute, last.minute) < MIN_DEPARTURE_INTERVAL_MINUTES) {
+      if (getCircularMinuteGap(first.minute, last.minute) < minimumScheduleMinutes) {
         tooCloseIds.add(first.row?.id);
         tooCloseIds.add(last.row?.id);
       }
@@ -102,7 +102,7 @@ export function buildSummaryRowsWithConflicts(rows, t, appliedRowKeySet = null) 
       }
 
       if (isTooClose) {
-        conflictReasons.push(formatConflictReason("gap", t, "compact", { minutes: MIN_DEPARTURE_INTERVAL_MINUTES }));
+        conflictReasons.push(formatConflictReason("gap", t, "compact", { minutes: minimumScheduleMinutes }));
       }
 
       const lineOption = findLineOptionById(row.lineId || row.serviceId || "");

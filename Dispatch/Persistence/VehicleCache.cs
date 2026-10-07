@@ -95,14 +95,14 @@ namespace RapidTransitMod.Dispatch.Persistence
                     && (double.IsNaN(snapshot.ArrivalWaitMinutes)
                         || double.IsInfinity(snapshot.ArrivalWaitMinutes)
                         || snapshot.ArrivalWaitMinutes < 0d
-                        || snapshot.ArrivalWaitMinutes > 5d))
+                        || snapshot.ArrivalWaitMinutes > snapshot.MinimumStopMinutes))
                 {
                     continue;
                 }
 
                 planBuffer.Add(new TimedPlanCacheElement
                 {
-                    m_Version = 2,
+                    m_Version = 3,
                     m_VehicleEntity = snapshot.Vehicle,
                     m_LineEntity = snapshot.Line,
                     m_RowId = snapshot.RowId,
@@ -114,7 +114,8 @@ namespace RapidTransitMod.Dispatch.Persistence
                     m_StopCount = snapshot.Stops.Length,
                     m_CanBypass = snapshot.CanBypass ? (byte)1 : (byte)0,
                     m_ArrivalWaitMinutes = snapshot.ArrivalWaitMinutes,
-                    m_ClockTicksPerDay = snapshot.ClockTicksPerDay
+                    m_ClockTicksPerDay = snapshot.ClockTicksPerDay,
+                    m_MinimumStopMinutes = snapshot.MinimumStopMinutes
                 });
                 for (int stopIndex = 0; stopIndex < snapshot.Stops.Length; stopIndex++)
                 {
@@ -248,7 +249,7 @@ namespace RapidTransitMod.Dispatch.Persistence
             }
 
             if (headerCount != 1
-                || header.m_Version != 2
+                || (header.m_Version != 2 && header.m_Version != 3)
                 || header.m_LineEntity != line
                 || header.m_StopCount <= 0
                 || header.m_StopCount > 512
@@ -317,6 +318,7 @@ namespace RapidTransitMod.Dispatch.Persistence
                     WaypointIndices = waypoints,
                     NextStopOrder = header.m_NextStopOrder,
                     ActiveStopOrder = header.m_ActiveStopOrder,
+                    MinimumStopMinutes = header.m_MinimumStopMinutes,
                     CanBypass = header.m_CanBypass != 0
                 };
             TimedPlanSnapshot snapshot = new TimedPlanSnapshot(

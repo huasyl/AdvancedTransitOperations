@@ -452,11 +452,18 @@ namespace RapidTransitMod
         }
     }
 
+    internal static class ScheduleLimitPolicy
+    {
+        internal const int StoredMinimum = 1;
+        internal const int DefaultMinimum = 5;
+        internal static int EditMinimum => Mod.Options?.AllowOneMinuteLimits == true ? StoredMinimum : DefaultMinimum;
+    }
+
     internal static class RuntimeConfigStoreDefaults
     {
         public const int DefaultOriginHoldLimitMinutes = 20;
         public const int DefaultMaxStationDwellMinutes = 10;
-        public const int MinConfiguredMinutes = 5;
+        public const int MinConfiguredMinutes = ScheduleLimitPolicy.StoredMinimum;
         public const int MaxConfiguredMinutes = 120;
         public const string LocalServiceKind = "local";
         public const string ExpressServiceKind = "express";

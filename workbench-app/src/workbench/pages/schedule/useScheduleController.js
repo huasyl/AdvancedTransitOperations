@@ -19,7 +19,6 @@ import {
   DEPOT_OPTIONS,
   LINE_OPTIONS,
   ORIGIN_OPTIONS,
-  MIN_LINE_SETTING_MINUTES,
   buildPlanLineOptions,
   buildCatalog,
   buildRuntimeCatalog,
@@ -157,6 +156,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
   const [quickPeriods, setQuickPeriods] = useState(DEFAULT_SERVICE_PERIODS);
   const [quickImportRecordsByLine, setQuickImportRecordsByLine] = useState({});
   const [catalogRevision, setCatalogRevision] = useState(0);
+  const [minimumScheduleMinutes, setMinimumScheduleMinutes] = useState(5);
   const dropdownPortalHostRef = useRef(null);
   const [selectedLineId, setSelectedLineId] = useState(LINE_OPTIONS[0]?.id || "");
   const [selectedLineType, setSelectedLineType] = useState(LINE_OPTIONS[0]?.kind || "local");
@@ -167,9 +167,9 @@ export default function useScheduleController({ registerHostActions, activeTrans
   const holdMinutesValue = Number(holdMinutes);
   const dwellMinutesValue = Number(dwellMinutes);
   const holdMinutesTooSmall =
-    !Number.isFinite(holdMinutesValue) || holdMinutesValue < MIN_LINE_SETTING_MINUTES;
+    !Number.isFinite(holdMinutesValue) || holdMinutesValue < minimumScheduleMinutes;
   const dwellMinutesTooSmall =
-    !Number.isFinite(dwellMinutesValue) || dwellMinutesValue < MIN_LINE_SETTING_MINUTES;
+    !Number.isFinite(dwellMinutesValue) || dwellMinutesValue < minimumScheduleMinutes;
   const [summaryEntries, setSummaryEntries] = useState(() => normalizeSummaryEntries([], t));
   const [autoRules, setAutoRules] = useState([]);
   const [manualDrafts, setManualDrafts] = useState([]);
@@ -246,14 +246,14 @@ export default function useScheduleController({ registerHostActions, activeTrans
     setQuickCountsByLine((current) => {
       const counts = periods.map((period, index) => Math.min(
         current[quickLineKey]?.[index] ?? QUICK_ADD_DEFAULT_SEGMENTS[index].count,
-        getQuickAddSegmentCapacity(period.start, period.end)));
+        getQuickAddSegmentCapacity(period.start, period.end, minimumScheduleMinutes)));
       return { ...current, [quickLineKey]: counts };
     });
   }, [isActive, scheduleMode, selectedLine.id, quickLineKey, readServicePeriods]);
   const currentQuickSegments = useMemo(() => quickPeriods.map((period, index) => ({ ...period,
     count: Math.min(quickCountsByLine[quickLineKey]?.[index] ?? QUICK_ADD_DEFAULT_SEGMENTS[index].count,
-      getQuickAddSegmentCapacity(period.start, period.end)) })),
-    [quickPeriods, quickCountsByLine, quickLineKey]);
+      getQuickAddSegmentCapacity(period.start, period.end, minimumScheduleMinutes)) })),
+    [quickPeriods, quickCountsByLine, quickLineKey, minimumScheduleMinutes]);
   const normalizedManualInput = useMemo(
     () => normalizeTimeInput(String(manualInput || "").trim()),
     [manualInput]
@@ -294,6 +294,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
     }
 
     return buildAutoStagedPlan({
+      minimumScheduleMinutes,
       currentRows: summaryEntries,
       rowsForLine: currentAutoRules,
       selectedEditLine: selectedLine.id,
@@ -301,16 +302,17 @@ export default function useScheduleController({ registerHostActions, activeTrans
       lineOptions: planLineOptions,
       replaceExistingAutoRows: false
     });
-  }, [currentAutoRules, currentKind, planLineOptions, selectedLine, summaryEntries]);
+  }, [currentAutoRules, currentKind, planLineOptions, selectedLine, summaryEntries, minimumScheduleMinutes]);
   const currentQuickPlan = useMemo(
     () => buildQuickAddPlan({
+      minimumScheduleMinutes,
       segments: currentQuickSegments,
       currentRows: summaryEntries,
       selectedLineId: selectedLine.id,
       originStationId: selectedLine.originStationId || "",
       kind: currentKind
     }),
-    [currentKind, currentQuickSegments, selectedLine.id, selectedLine.originStationId, summaryEntries]
+    [currentKind, currentQuickSegments, selectedLine.id, selectedLine.originStationId, summaryEntries, minimumScheduleMinutes]
   );
   const quickInputSignature = useMemo(
     () => getQuickInputSignature(currentQuickSegments),
@@ -367,6 +369,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
       expressOffsetMinutes: currentKind === "express" ? Math.abs(autoOffsetMinutes) : 0
     };
     const plan = buildAutoStagedPlan({
+      minimumScheduleMinutes,
       currentRows: summaryEntries,
       rowsForLine: [previewRule],
       selectedEditLine: selectedLine.id,
@@ -391,6 +394,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
     selectedLine,
     summaryEntries,
     planLineOptions,
+    minimumScheduleMinutes,
     t
   ]);
   const currentSummarySignature = useMemo(
@@ -411,8 +415,8 @@ export default function useScheduleController({ registerHostActions, activeTrans
     && !dwellMinutesTooSmall
     && pendingRemovedLineIds.length === 0;
   const summaryRows = useMemo(
-    () => buildSummaryRowsWithConflicts(summaryEntries, t, appliedSummaryRowKeySet),
-    [appliedSummaryRowKeySet, summaryEntries, t]
+    () => buildSummaryRowsWithConflicts(summaryEntries, t, appliedSummaryRowKeySet, minimumScheduleMinutes),
+    [appliedSummaryRowKeySet, summaryEntries, t, minimumScheduleMinutes]
   );
   const visibleSummaryRows = useMemo(() => {
     if (summaryFilter === "current") {
@@ -469,12 +473,13 @@ export default function useScheduleController({ registerHostActions, activeTrans
   );
   const copyPlan = useMemo(
     () => buildCopyPlan({
+      minimumScheduleMinutes,
       sourceRows: copySourceRows,
       occupiedRows: copyPreviewSnapshot?.occupiedRows || [],
       targetOriginStationId: copyPreviewSnapshot?.targetOriginStationId || "",
       targetKind: copyPreviewSnapshot?.targetKind || "local"
     }),
-    [copyPreviewSnapshot, copySourceRows]
+    [copyPreviewSnapshot, copySourceRows, minimumScheduleMinutes]
   );
   const copyPreviewText = useMemo(() => {
     if (!copySourceLine) {
@@ -626,6 +631,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
       ? metadataSnapshot
       : null;
     lastHydratedSnapshotRef.current = snapshot ?? null;
+    setMinimumScheduleMinutes(Number(snapshot?.minimumScheduleMinutes) === 1 ? 1 : 5);
     const runtimeCatalog = buildRuntimeCatalog(
       snapshot,
       scopedMetadata,
@@ -712,6 +718,8 @@ export default function useScheduleController({ registerHostActions, activeTrans
     if (!isTrustedCatalogPayload(metadata, modeAtRequest)) {
       return;
     }
+
+    setMinimumScheduleMinutes(Number(metadata?.minimumScheduleMinutes) === 1 ? 1 : 5);
 
     const previousSelectedLine = LINE_OPTIONS.find((line) => line?.id === selectedLineId) ?? null;
     const runtimeCatalog = buildCatalog(metadata, t, { allowDefaultFallback: false });
@@ -949,6 +957,11 @@ export default function useScheduleController({ registerHostActions, activeTrans
 
   useEffect(() => {
     const unsubscribe = workbenchApi.onCatalogChanged?.((event) => {
+      if (event?.rulesOnly) {
+        setMinimumScheduleMinutes(Number(event.minimumScheduleMinutes) === 1 ? 1 : 5);
+        onSnapshot?.(scheduleMode, event);
+        return;
+      }
       const modeAtRequest = normalizeScheduleMode(event?.mode || scheduleMode);
       if (modeAtRequest !== scheduleMode) {
         return;
@@ -956,7 +969,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
 
       onSnapshot?.(modeAtRequest, null);
       refreshCatalog(modeAtRequest);
-    });
+    }, true);
 
     return () => {
       unsubscribe?.();
@@ -1292,7 +1305,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
 
   function handleHoldMinutesChange(value) {
     const numeric = Number(value);
-    if (!Number.isFinite(numeric) || numeric < MIN_LINE_SETTING_MINUTES) {
+    if (!Number.isFinite(numeric) || numeric < minimumScheduleMinutes) {
       setHoldMinutes(value);
       return;
     }
@@ -1303,7 +1316,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
 
   function handleDwellMinutesChange(value) {
     const numeric = Number(value);
-    if (!Number.isFinite(numeric) || numeric < MIN_LINE_SETTING_MINUTES) {
+    if (!Number.isFinite(numeric) || numeric < minimumScheduleMinutes) {
       setDwellMinutes(value);
       return;
     }
@@ -1408,7 +1421,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
     const next = updater(currentQuickSegments.map((segment) => ({ ...segment })));
     setQuickCountsByLine((current) => ({ ...current, [quickLineKey]: next.map((segment) => Math.min(
       Math.max(0, Math.trunc(Number(segment.count) || 0)),
-      getQuickAddSegmentCapacity(segment.start, segment.end))) }));
+      getQuickAddSegmentCapacity(segment.start, segment.end, minimumScheduleMinutes))) }));
     if (next.some((segment, index) => segment.start !== quickPeriods[index].start || segment.end !== quickPeriods[index].end)) {
       const periods = next.map(({ id, labelKey, start, end }) => ({ id, labelKey, start, end }));
       setQuickPeriods(periods);
@@ -1434,7 +1447,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
     const nextCount = Math.max(
       0,
       Math.min(
-        getQuickAddSegmentCapacity(segment.start, segment.end),
+        getQuickAddSegmentCapacity(segment.start, segment.end, minimumScheduleMinutes),
         Math.trunc(Number(segment.count) || 0) + delta
       )
     );
@@ -1606,7 +1619,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
         return;
       }
 
-      if (!hasMinimumDepartureGapForOrigin(candidateMinute, selectedOriginStationId, occupiedRows)) {
+      if (!hasMinimumDepartureGapForOrigin(candidateMinute, selectedOriginStationId, occupiedRows, minimumScheduleMinutes)) {
         blockedRows += 1;
         return;
       }
@@ -1783,6 +1796,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
     }
 
     const plan = buildAutoStagedPlan({
+      minimumScheduleMinutes,
       currentRows: summaryEntries,
       rowsForLine: currentAutoRules,
       selectedEditLine: selectedLine.id,
@@ -1842,8 +1856,19 @@ export default function useScheduleController({ registerHostActions, activeTrans
   }
 
   async function handleApplySchedule() {
-    if (holdMinutesTooSmall || dwellMinutesTooSmall) {
-      setPanelMessage({ scope: "summary", tone: "error", text: t("nativeSchedule.topbar.minimumFiveMinutes") });
+    const targetIds = new Set(summaryEntries.map((row) => row?.lineId || row?.serviceId));
+    const invalidLine = targetIds.has(selectedLine.id) && (holdMinutesTooSmall || dwellMinutesTooSmall)
+      ? selectedLine
+      : LINE_OPTIONS.find((line) => targetIds.has(line.id) && line.id !== selectedLine.id
+        && (Number(line.hold) < minimumScheduleMinutes || Number(line.dwell) < minimumScheduleMinutes));
+    if (invalidLine) {
+      const holdTooSmall = invalidLine.id === selectedLine.id ? holdMinutesTooSmall : Number(invalidLine.hold) < minimumScheduleMinutes;
+      const dwellTooSmall = invalidLine.id === selectedLine.id ? dwellMinutesTooSmall : Number(invalidLine.dwell) < minimumScheduleMinutes;
+      const issue = holdTooSmall && dwellTooSmall ? "limitsTooSmall" : holdTooSmall ? "holdTooSmall" : "dwellTooSmall";
+      setPanelMessage({ scope: "summary", tone: "error", text: t(`nativeSchedule.message.summary.${issue}`, {
+        line: getLocalizedLineName(invalidLine, t) || invalidLine.id,
+        minutes: minimumScheduleMinutes
+      }) });
       return;
     }
 
@@ -1872,12 +1897,35 @@ export default function useScheduleController({ registerHostActions, activeTrans
 
       if (!result?.success) {
         const errors = Array.isArray(result?.errors) && result.errors.length > 0 ? result.errors : [];
-        const mappedErrors = errors.map((err) => {
-          if (typeof err === "string" && err.startsWith("line-unsupported:")) {
-            return t("nativeSchedule.message.lineUnsupported");
+        const mappedErrors = [];
+        const dwellGroups = new Map();
+        let dwellMinimum;
+        errors.forEach((err) => {
+          if (typeof err === "string" && err.startsWith("timed-stop-minimum|")) {
+            const [, minimum, lineId, time] = err.split("|");
+            dwellMinimum = minimum;
+            const times = dwellGroups.get(lineId) || [];
+            times.push(time);
+            dwellGroups.set(lineId, times);
+            return;
           }
-          return err;
+          if (typeof err === "string" && err.startsWith("line-unsupported:")) {
+            mappedErrors.push(t("nativeSchedule.message.lineUnsupported"));
+          } else {
+            mappedErrors.push(err);
+          }
         });
+        if (dwellGroups.size > 0) {
+          const examples = (items) => {
+            const labels = items.slice(0, 2).join(t("nativeSchedule.message.summary.listSeparator"));
+            return items.length > 2 ? t("nativeSchedule.message.summary.examplesMore", { items: labels }) : labels;
+          };
+          const lines = Array.from(dwellGroups, ([lineId, times]) => t("nativeSchedule.message.summary.timedStopLine", {
+            line: getLocalizedLineName(LINE_OPTIONS.find((line) => line.id === lineId), t) || lineId,
+            times: examples(times)
+          }));
+          mappedErrors.push(t("nativeSchedule.message.summary.timedStopsTooShort", { lines: examples(lines), minutes: dwellMinimum }));
+        }
         const message = mappedErrors.length > 0 ? mappedErrors.join("; ") : t("nativeSchedule.message.summary.saveFailed", { message: "unknown" });
         setPanelMessage({ scope: "summary", tone: "error", text: t("nativeSchedule.message.summary.applyFailed", { message }) });
         return;
@@ -1937,6 +1985,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
       holdMinutes,
       dwellMinutes,
       holdMinutesTooSmall,
+      minimumScheduleMinutes,
       dwellMinutesTooSmall,
       availableDepots,
       lineOptions: LINE_OPTIONS,
@@ -1974,13 +2023,13 @@ export default function useScheduleController({ registerHostActions, activeTrans
       quickSegments: currentQuickPlan.segments.map((segment, index) => ({
         ...segment,
         count: currentQuickSegments[index]?.count || 0,
-        capacity: getQuickAddSegmentCapacity(segment.start, segment.end),
+        capacity: getQuickAddSegmentCapacity(segment.start, segment.end, minimumScheduleMinutes),
         startMinusDisabled: isQuickBoundaryDisabled(index, "start", -1),
         startPlusDisabled: isQuickBoundaryDisabled(index, "start", 1),
         endMinusDisabled: isQuickBoundaryDisabled(index, "end", -1),
         endPlusDisabled: isQuickBoundaryDisabled(index, "end", 1),
         countMinusDisabled: (currentQuickSegments[index]?.count || 0) <= 0,
-        countPlusDisabled: (currentQuickSegments[index]?.count || 0) >= getQuickAddSegmentCapacity(segment.start, segment.end)
+        countPlusDisabled: (currentQuickSegments[index]?.count || 0) >= getQuickAddSegmentCapacity(segment.start, segment.end, minimumScheduleMinutes)
       })),
       quickImportDisabled: isQuickImportDisabled,
       quickImported: isQuickImported

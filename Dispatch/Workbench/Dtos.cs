@@ -6,6 +6,8 @@ namespace RapidTransitMod
     public class DispatchWorkbenchSnapshot
     {
         [DataMember]
+        public int minimumScheduleMinutes;
+        [DataMember]
         public string mode;
         [DataMember]
         public string selectedLineId;
@@ -40,6 +42,10 @@ namespace RapidTransitMod
     [DataContract]
     public class DispatchWorkbenchCatalogEvent
     {
+        [DataMember]
+        public bool rulesOnly;
+        [DataMember]
+        public int minimumScheduleMinutes;
         [DataMember]
         public string mode;
         [DataMember]

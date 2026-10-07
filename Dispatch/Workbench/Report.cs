@@ -353,7 +353,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             Dictionary<string, List<string>> provenanceByKey,
             Func<string, int> parseTimeMinutes)
         {
-            const int minGapMinutes = 5;
+            int minGapMinutes = ScheduleLimitPolicy.EditMinimum;
             sb.AppendLine("== " + title + " conflicts ==");
             List<(DispatchWorkbenchStagedRowDto Row, int Minute, string OriginId, string OriginName)> entries =
                 (rows ?? Enumerable.Empty<DispatchWorkbenchStagedRowDto>())

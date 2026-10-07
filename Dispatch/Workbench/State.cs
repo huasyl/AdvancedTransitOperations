@@ -88,6 +88,8 @@ namespace RapidTransitMod.Dispatch.Workbench
         public string RequestJson = string.Empty;
         public ModeScope Scope = ModeScope.DefaultWorkbench;
         public ulong SnapshotVersion;
+        public int MinimumScheduleMinutes;
+        public Dictionary<string, LineConfigState> LineSettings = new Dictionary<string, LineConfigState>(StringComparer.Ordinal);
         public List<WorkbenchLineRuntime> RuntimeLines = new List<WorkbenchLineRuntime>();
         public List<DispatchWorkbenchDepotDto> Depots = new List<DispatchWorkbenchDepotDto>();
         public Dictionary<string, string> ServiceKinds =

@@ -751,14 +751,14 @@ function createLiveApi() {
         }
       };
     },
-    onCatalogChanged(callback) {
+    onCatalogChanged(callback, includeScheduleRules = false) {
       if (typeof window.engine.on !== "function") {
         return () => {};
       }
 
       const handler = (payload) => {
         const event = parsePayload(payload, null);
-        if (event) {
+        if (event && (!event.rulesOnly || includeScheduleRules)) {
           callback(event);
         }
       };
