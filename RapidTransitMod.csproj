@@ -59,7 +59,7 @@
     </None>
   </ItemGroup>
 
-  <ItemGroup Condition="'$(Configuration)'=='Debug'">
+  <ItemGroup>
     <Reference Include="Newtonsoft.Json">
       <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\Newtonsoft.Json.dll</HintPath>
       <Private>False</Private>
