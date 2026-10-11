@@ -85,6 +85,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_LineServiceState = new LineServiceState(runtime.EntityManager);
             runtime.m_ServiceWindowStore = new ServiceWindowStore(runtime);
             runtime.m_Resolve = new RuntimeResolve(runtime, stopService);
+            runtime.m_FollowContext = new ViewTracking.FollowContext(runtime.World, runtime.m_CameraUpdateSystem, runtime.m_Resolve.RuntimeVehicle);
             runtime.m_SharedCorridor = new SharedCorridorSupport(runtime.m_Resolve, runtime.IsBypassStationSetting);
             runtime.m_StationAnchorDiagnostics = new StationAnchorDiagnostics(runtime);
             runtime.m_WorkbenchBridge = new RapidTransitMod.Dispatch.Workbench.Bridge(
@@ -643,6 +644,9 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public static void Clear(ModRuntimeHostSystem runtime)
         {
+            runtime.m_FirstPersonQuery = null!;
+            runtime.m_FollowContext?.Dispose();
+            runtime.m_FollowContext = null!;
             runtime.m_LineServiceChangeSourceSystem?.Unbind();
             runtime.m_LineServiceState?.Reset();
             runtime.m_VanillaServiceControl = null!;

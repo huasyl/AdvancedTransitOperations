@@ -966,8 +966,7 @@ namespace RapidTransitMod.Broadcasting
         private bool ShouldPlayForTracked(Entity vehicle)
         {
             if (!m_Config.Enabled
-                || vehicle == Entity.Null
-                || m_Access.CameraUpdateSystem == null)
+                || vehicle == Entity.Null)
             {
                 return false;
             }
@@ -977,14 +976,7 @@ namespace RapidTransitMod.Broadcasting
                 return false;
             }
 
-            OrbitCameraController orbitCameraController = m_Access.CameraUpdateSystem.orbitCameraController;
-            if (orbitCameraController == null
-                || !ReferenceEquals(m_Access.CameraUpdateSystem.activeCameraController, orbitCameraController))
-            {
-                return false;
-            }
-
-            Entity followedVehicle = m_Access.Vehicle(orbitCameraController.followedEntity);
+            Entity followedVehicle = m_Access.ReadFollowedVehicle();
             Entity broadcastVehicle = m_Access.Vehicle(vehicle);
             return followedVehicle != Entity.Null
                 && broadcastVehicle != Entity.Null

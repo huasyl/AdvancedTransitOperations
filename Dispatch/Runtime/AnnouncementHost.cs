@@ -72,7 +72,7 @@ namespace RapidTransitMod
             internal override EntityManager EntityManager => m_Host.EntityManager;
             internal override TimedLogger Log => m_Host.log;
             internal override SimulationSystem SimulationSystem => m_Host.m_SimulationSystem;
-            internal override CameraUpdateSystem CameraUpdateSystem => m_Host.m_CameraUpdateSystem;
+            internal override Entity ReadFollowedVehicle() => m_Host.m_FollowContext.ReadFollowedVehicle();
             internal override VehicleView VehicleView => m_Host.m_VehicleView;
             internal override SelectPanel SelectionPanel => m_Host.m_SelectPanel;
             internal override NativeHashMap<Entity, int> CachedWaypointIndex => m_Host.m_CachedWpIdx;

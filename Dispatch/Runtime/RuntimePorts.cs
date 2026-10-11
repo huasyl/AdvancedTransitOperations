@@ -109,6 +109,18 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public static void Build(ModRuntimeHostSystem runtime)
         {
+            runtime.m_FirstPersonQuery = new FirstPerson.FirstPersonQuery(new FirstPerson.FirstPersonAccess
+            {
+                ReadContext = runtime.m_FollowContext.ReadContext,
+                TryVehicleState = runtime.m_VehicleView.TryGetState,
+                TryStopSession = runtime.m_StopRuntime.TryGetSession,
+                TryTargetMinute = runtime.m_VehicleView.TryGetTarget,
+                TryVehicleTimes = runtime.m_ObsRecorder.TryVehicleTimes,
+                ReadClock = () => runtime.m_SimClock.Snapshot,
+                ReadFrame = () => runtime.m_SimulationSystem.frameIndex,
+                TrySignalDisplay = runtime.m_TransitSignalRuntime.TryReadDisplay,
+                ReadName = entity => runtime.m_NameSystem.GetRenderedLabelName(entity)
+            });
             runtime.m_SelectPort = BuildSelect(runtime);
             runtime.m_SelectPanel = new SelectPanel(runtime.m_SelectPort);
             runtime.m_PlannerPort = new PlannerPort(runtime);

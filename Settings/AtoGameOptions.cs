@@ -13,8 +13,8 @@ namespace RapidTransitMod.Settings
     /// 这不是工作台设置，不是调度功能配置，也不写入存档运行时缓存。
     /// </summary>
     [FileLocation("ModsSettings\\AdvancedTransitOperations\\AtoGameOptions")]
-    [SettingsUITabOrder("General", "BroadcastAudio")]
-    [SettingsUIGroupOrder("SelectionPanel", "ScheduleAdvanced", "BroadcastHint", "BroadcastAction", "BroadcastFiles")]
+    [SettingsUITabOrder("General", "BroadcastAudio", "FirstPerson")]
+    [SettingsUIGroupOrder("SelectionPanel", "ScheduleAdvanced", "BroadcastHint", "BroadcastAction", "BroadcastFiles", "FirstPersonInfo")]
     public sealed class AtoGameOptions : ModSetting
     {
         public AtoGameOptions(IMod mod)
@@ -85,10 +85,27 @@ namespace RapidTransitMod.Settings
 
         public bool HideAudioDelete() => AssetLifecycle.Instance?.Unregistered.HideDelete ?? false;
 
+        [SettingsUISection("FirstPerson", "FirstPersonInfo")]
+        public bool ShowFirstPersonInfo { get; set; } = true;
+
+        [SettingsUISection("FirstPerson", "FirstPersonInfo")]
+        [SettingsUIDisableByCondition(typeof(AtoGameOptions), nameof(DisableFirstPersonPosition))]
+        public FirstPersonPlace FirstPersonPosition { get; set; } = FirstPersonPlace.Center;
+
+        public bool DisableFirstPersonPosition() => !ShowFirstPersonInfo;
+
         public override void SetDefaults()
         {
             AutoOpenSelectionPanel = true;
             AllowOneMinuteLimits = false;
+            ShowFirstPersonInfo = true;
+            FirstPersonPosition = FirstPersonPlace.Center;
         }
+    }
+
+    public enum FirstPersonPlace
+    {
+        Center,
+        Left
     }
 }

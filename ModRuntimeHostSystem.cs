@@ -242,6 +242,8 @@ namespace RapidTransitMod
         internal VehicleRegistrar m_VehicleRegistrar = null!;
         internal RuntimeVehicleLabels m_VehicleLabels = null!;
         internal RuntimeResolve m_Resolve = null!;
+        internal ViewTracking.FollowContext m_FollowContext = null!;
+        internal FirstPerson.FirstPersonQuery m_FirstPersonQuery = null!;
         internal SelectPort m_SelectPort = null!;
         internal SelectPanel m_SelectPanel = null!;
         internal VehicleStationContextQuery m_StationContextQuery = null!;

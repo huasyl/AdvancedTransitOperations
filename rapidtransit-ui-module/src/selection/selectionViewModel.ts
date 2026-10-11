@@ -1,3 +1,6 @@
+import { formatServiceMinute } from "../shared/time-format";
+export { formatServiceMinute } from "../shared/time-format";
+
 export interface DetailRowData {
   label?: string;
   value?: string | number;
@@ -221,20 +224,6 @@ export function buildDetailRows(panelData: PanelData | null, mode: string) {
   }
 
   return rows.filter((row) => row.label && !DETAIL_HIDE_KEYS[row.label]);
-}
-
-export function formatServiceMinute(value: number | undefined) {
-  if (typeof value !== "number" || value < 0) {
-    return "-";
-  }
-
-  const rounded = Math.round(value);
-  const normalized = ((rounded % 1440) + 1440) % 1440;
-  const hour = Math.floor(normalized / 60);
-  const minute = normalized % 60;
-  const time = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
-  const dayOffset = Math.floor(rounded / 1440);
-  return dayOffset > 0 ? `${time}（+${dayOffset}日）` : time;
 }
 
 export function formatValue(value: string | number | undefined, valueKind: string | undefined, t: (key: string) => string) {

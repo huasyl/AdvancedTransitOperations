@@ -295,6 +295,8 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public void ClearTracking()
         {
+            m_Runtime.m_FollowContext?.ResetConnection();
+            m_Runtime.m_FirstPersonQuery?.Clear();
             m_Runtime.m_TransitSignalRuntime?.Clear("tracking-cleared");
             m_Runtime.m_LineStructureInvalidator?.ResetRuntimeState();
             m_Runtime.m_LineChangeSource?.ResetPending();

@@ -29,7 +29,7 @@ namespace RapidTransitMod.Broadcasting
             internal abstract EntityManager EntityManager { get; }
             internal abstract TimedLogger Log { get; }
             internal abstract SimulationSystem SimulationSystem { get; }
-            internal abstract CameraUpdateSystem CameraUpdateSystem { get; }
+            internal abstract Entity ReadFollowedVehicle();
             internal abstract VehicleView VehicleView { get; }
             internal abstract SelectPanel SelectionPanel { get; }
             internal abstract NativeHashMap<Entity, int> CachedWaypointIndex { get; }
@@ -80,7 +80,7 @@ namespace RapidTransitMod.Broadcasting
         internal EntityManager EntityManager => m_Host.EntityManager;
         internal TimedLogger Log => m_Host.Log;
         internal SimulationSystem SimulationSystem => m_Host.SimulationSystem;
-        internal CameraUpdateSystem CameraUpdateSystem => m_Host.CameraUpdateSystem;
+        internal Entity ReadFollowedVehicle() => m_Host.ReadFollowedVehicle();
         internal VehicleView VehicleView => m_Host.VehicleView;
         internal SelectPanel SelectionPanel => m_Host.SelectionPanel;
         internal NativeHashMap<Entity, int> CachedWaypointIndex => m_Host.CachedWaypointIndex;

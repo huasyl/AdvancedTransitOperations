@@ -89,6 +89,7 @@ namespace RapidTransitMod
             updateSystem.UpdateAfter<DevSightRaycastCollectorSystem, ToolRaycastSystem>(SystemUpdatePhase.Raycast);
 #endif
             updateSystem.UpdateBefore<RapidTransitPanelUISystem>(SystemUpdatePhase.Rendering);
+            updateSystem.UpdateAt<FirstPerson.FirstPersonUISystem>(SystemUpdatePhase.Rendering);
 #if RT_DEBUG_TOOLS
             updateSystem.UpdateAt<DevSightTooltipSystem>(SystemUpdatePhase.UITooltip);
 #endif

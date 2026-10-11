@@ -3,6 +3,7 @@ import { RapidTransitPanelRoot } from "./selection/RapidTransitPanelRoot";
 import { RapidTransitTopButton } from "./top-buttons/RapidTransitTopButton";
 import { registerRapidTransitWorkbenchPanel, registerRapidTransitWorkbenchPanelType, prewarmNativeWorkbenchScheduleLoader } from "./workbench-host/workbenchHost";
 import { RapidTransitNativeLocaleSync } from "./workbench-host/RapidTransitNativeLocaleSync";
+import { FirstPersonRoot } from "./first-person/FirstPersonRoot";
 
 prewarmNativeWorkbenchScheduleLoader();
 
@@ -12,6 +13,7 @@ export default function register(mod: ModRegistrar) {
   mod.append("GameTopRight", RapidTransitTopButton);
   mod.append("Game", RapidTransitNativeLocaleSync);
   mod.append("Game", RapidTransitPanelRoot);
+  mod.append("Game", FirstPersonRoot);
 }
 
 export const hasCSS = false;
