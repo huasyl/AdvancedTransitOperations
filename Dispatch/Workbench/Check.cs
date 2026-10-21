@@ -239,10 +239,12 @@ namespace RapidTransitMod.Dispatch.Workbench
                         }
                     }
 
-                    foreach (IGrouping<string, (string RowId, string LineId, string OriginId, string OriginName, int Minutes)> group in stagedOriginDepartures
-                        .GroupBy(row => row.OriginId, StringComparer.Ordinal))
+                    var originGroups = stagedOriginDepartures.GroupBy(row => (
+                        Mode: ModeOf(row.LineId),
+                        OriginId: row.OriginId));
+                    foreach (var group in originGroups)
                     {
-                        (string RowId, string LineId, string OriginId, string OriginName, int Minutes)[] ordered = group
+                        var ordered = group
                             .OrderBy(row => row.Minutes)
                             .ToArray();
                         for (int i = 1; i < ordered.Length; i++)
@@ -658,10 +660,12 @@ namespace RapidTransitMod.Dispatch.Workbench
                 }
             }
 
-            foreach (IGrouping<string, (string RowId, string LineId, string OriginId, string OriginName, int Minutes)> group in departures
-                .GroupBy(row => row.OriginId, StringComparer.Ordinal))
+            var originGroups = departures.GroupBy(row => (
+                Mode: ModeOf(row.LineId),
+                OriginId: row.OriginId));
+            foreach (var group in originGroups)
             {
-                (string RowId, string LineId, string OriginId, string OriginName, int Minutes)[] ordered = group
+                var ordered = group
                     .OrderBy(row => row.Minutes)
                     .ToArray();
                 for (int i = 1; i < ordered.Length; i++)
@@ -723,6 +727,11 @@ namespace RapidTransitMod.Dispatch.Workbench
             return next >= previous
                 ? next - previous
                 : dayMinutes - previous + next;
+        }
+
+        private static TransitMode ModeOf(string lineId)
+        {
+            return LineIdentityService.GetKey(lineId).Mode;
         }
 
         internal static void AddOrigin(
