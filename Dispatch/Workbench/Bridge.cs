@@ -920,7 +920,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             Applied().Lines.TryGetValue(appliedKey, out AppliedLine previous);
             Dictionary<string, DispatchWorkbenchStagedRowDto> previousRows = previous?.StagedRows
                 ?.Where(row => row != null && !string.IsNullOrEmpty(row.id))
-                .GroupBy(row => row.id, StringComparer.Ordinal)
+                .GroupBy(row => RowIds.ForApply(row.id), StringComparer.Ordinal)
                 .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal)
                 ?? new Dictionary<string, DispatchWorkbenchStagedRowDto>(StringComparer.Ordinal);
             string stopSig = block.stopSig ?? string.Empty;
@@ -981,7 +981,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                     }
                     timedStops = timedStops.Take(row.truncateFromStopIndex).ToArray();
                 }
-                previousRows.TryGetValue(row.rowId, out DispatchWorkbenchStagedRowDto previousRow);
+                previousRows.TryGetValue(RowIds.ForApply(row.rowId), out DispatchWorkbenchStagedRowDto previousRow);
                 if (timedStops.Length > 0
                     && !ValidateBatchTimedStops(
                         runtimeResult,

@@ -6,6 +6,21 @@ import {
   normalizeKind
 } from "./schedule-catalog";
 
+export function createShortRowId(source, ...parts) {
+  const value = parts.map(String).join("\u0000");
+  let first = 0xdeadbeef;
+  let second = 0x41c6ce57;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value.charCodeAt(index);
+    first = Math.imul(first ^ char, 2654435761);
+    second = Math.imul(second ^ char, 1597334677);
+  }
+  first = Math.imul(first ^ (first >>> 16), 2246822507) ^ Math.imul(second ^ (second >>> 13), 3266489909);
+  second = Math.imul(second ^ (second >>> 16), 2246822507) ^ Math.imul(first ^ (first >>> 13), 3266489909);
+  const hash = 4294967296 * (second & 0x1fffff) + (first >>> 0);
+  return source + hash.toString(36).padStart(11, "0");
+}
+
 export function normalizeTimeInput(rawValue) {
   const rawText = String(rawValue || "");
   const digitsOnly = rawText.replace(/\D/g, "").slice(0, 4);

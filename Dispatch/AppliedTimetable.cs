@@ -1151,13 +1151,20 @@ namespace RapidTransitMod.Dispatch
                 backup[entry.Key] = m_Lines.TryGetValue(entry.Key, out AppliedLine existing)
                     ? CloneAppliedLine(existing)
                     : null;
-                m_Lines[entry.Key] = CloneAppliedLine(entry.Value);
             }
 
             try
             {
-                SyncOperationalLines(replacements.Keys);
-                Save();
+                foreach (KeyValuePair<string, AppliedLine> entry in replacements)
+                    m_Lines[entry.Key] = CloneAppliedLine(entry.Value);
+                WithShortRowIds(replacements.Keys, shortened =>
+                {
+                    if (!shortened)
+                        SyncOperationalLines(replacements.Keys);
+                    Save();
+                    if (shortened)
+                        m_Host.SaveDrafts();
+                });
                 return true;
             }
             catch (Exception ex)
@@ -1181,6 +1188,58 @@ namespace RapidTransitMod.Dispatch
 
                 error = ex.GetType().Name + ":" + ex.Message;
                 return false;
+            }
+        }
+
+        // Run after matching and validation, so an old ID still identifies its existing plan.
+        // The callback includes persistence; failures restore every changed in-memory ID.
+        internal void WithShortRowIds(IEnumerable<string> lineIds, Action<bool> commit)
+        {
+            HashSet<string> keys = new HashSet<string>(lineIds ?? Array.Empty<string>(), StringComparer.Ordinal);
+            Dictionary<DispatchWorkbenchStagedRowDto, string> originalIds =
+                new Dictionary<DispatchWorkbenchStagedRowDto, string>();
+            IEnumerable<DispatchWorkbenchStagedRowDto> appliedRows = keys
+                .Where(key => m_Lines.ContainsKey(key))
+                .SelectMany(key => m_Lines[key].StagedRows ?? new List<DispatchWorkbenchStagedRowDto>());
+            IEnumerable<DispatchWorkbenchStagedRowDto> draftRows = m_Drafts.Values
+                .Where(draft => draft?.StagedRows != null)
+                .SelectMany(draft => draft.StagedRows)
+                .Where(row => row != null && keys.Contains(m_Host.DraftKey(row.lineId)));
+            foreach (DispatchWorkbenchStagedRowDto row in appliedRows.Concat(draftRows))
+            {
+                if (row == null || originalIds.ContainsKey(row))
+                    continue;
+                string id = RowIds.ForApply(row.id);
+                if (string.Equals(id, row.id, StringComparison.Ordinal))
+                    continue;
+                originalIds[row] = row.id;
+                row.id = id;
+            }
+
+            try
+            {
+                if (originalIds.Count > 0)
+                    SyncOperationalLines(keys);
+                commit(originalIds.Count > 0);
+            }
+            catch
+            {
+                foreach (KeyValuePair<DispatchWorkbenchStagedRowDto, string> entry in originalIds)
+                    entry.Key.id = entry.Value;
+                if (originalIds.Count > 0)
+                {
+                    try
+                    {
+                        SyncOperationalLines(keys);
+                        Save();
+                        m_Host.SaveDrafts();
+                    }
+                    catch
+                    {
+                        // Keep the original exception; in-memory IDs have already been restored.
+                    }
+                }
+                throw;
             }
         }
 
@@ -1237,7 +1296,7 @@ namespace RapidTransitMod.Dispatch
                     DispatchWorkbenchStagedRowDto row = existing.StagedRows[i];
                     if (row != null && !string.IsNullOrEmpty(row.id))
                     {
-                        existingById[row.id] = row;
+                        existingById[RowIds.ForApply(row.id)] = row;
                     }
                 }
             }
@@ -1256,7 +1315,7 @@ namespace RapidTransitMod.Dispatch
                 if (existing == null
                     || string.IsNullOrEmpty(existing.StopSig)
                     || string.IsNullOrEmpty(targetRow.id)
-                    || !existingById.TryGetValue(targetRow.id, out DispatchWorkbenchStagedRowDto existingRow)
+                    || !existingById.TryGetValue(RowIds.ForApply(targetRow.id), out DispatchWorkbenchStagedRowDto existingRow)
                     || m_Host.Minutes(existingRow.time) != m_Host.Minutes(targetRow.time)
                     || !HasTimedStops(existingRow))
                 {

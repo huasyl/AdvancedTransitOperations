@@ -107,6 +107,7 @@ namespace RapidTransitMod.Dispatch.Workbench
         public bool LineSettingsChanged;
 
         public bool HasErrors => Errors != null && Errors.Count > 0;
+        public bool RowIdsShortened;
 
         public DispatchWorkbenchSaveResult ToResult()
         {

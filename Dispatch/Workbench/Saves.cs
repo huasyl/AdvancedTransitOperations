@@ -205,7 +205,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 DispatchWorkbenchSaveResult result = m_CommandHandler.Commit(
                     prepared,
                     persistImmediately: false);
-                if (result?.success == true)
+                if (result?.success == true && !prepared.RowIdsShortened)
                 {
                     WorkbenchSavePersistencePayload payload = m_Persistence.Capture();
                     System.Threading.Tasks.Task.Run(() => PrepPersist(operation, result, payload));

@@ -33,6 +33,7 @@ import {
 import {
   buildCombinedNote,
   buildPreviewMetaText,
+  createShortRowId,
   createSummaryEntry,
   formatOffsetLabel,
   isValidTimeValue,
@@ -1629,7 +1630,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
         originStationId: selectedOriginStationId
       });
       importedRows.push(createSummaryEntry({
-        id: `summary-manual-${selectedLine.id}-${row.id}`,
+        id: createShortRowId("m", selectedLine.id, row.id),
         time: row.time,
         serviceId: row.serviceId,
         kind: row.kind,
@@ -1695,7 +1696,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
     const importedRows = copyPlan.rows
       .filter((row) => !row.skipped)
       .map((row) => createSummaryEntry({
-        id: `summary-copy-${selectedLine.id}-${copySourceLine.value}-${row.key}-${row.time.replace(":", "")}`,
+        id: createShortRowId("c", selectedLine.id, copySourceLine.value, row.key, row.time.replace(":", "")),
         time: row.time,
         serviceId: selectedLine.id,
         kind: importKind,
@@ -1746,7 +1747,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
     const importedRows = currentQuickPlan.plannedRows.map((row, index) => {
       const segment = currentQuickSegments.find((item) => item.id === row.segmentId);
       return createSummaryEntry({
-        id: `summary-quick-${selectedLine.id}-${row.segmentId}-${row.generatedIndex}-${index}`,
+        id: createShortRowId("q", selectedLine.id, row.segmentId, row.generatedIndex, index),
         time: minutesToTime(row.timeMinutes),
         serviceId: selectedLine.id,
         kind: row.kind,
@@ -1812,7 +1813,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
     const importedRows = plan.plannedRows.map((row) => {
       const sourceRule = currentAutoRules.find((rule) => rule.id === row.ruleId);
       return createSummaryEntry({
-        id: `summary-auto-${selectedLine.id}-${row.ruleId}-${row.generatedIndex}`,
+        id: createShortRowId("a", selectedLine.id, row.ruleId, row.generatedIndex),
         time: minutesToTime(row.timeMinutes),
         serviceId: sourceRule?.serviceId || selectedLine.id,
         kind: row.kind,

@@ -325,35 +325,44 @@ namespace RapidTransitMod.Dispatch.Workbench
             }
             if (changedDepotLines.Length > 0)
                 m_Run.InvalidateDispatchTiming(changedDepotLines);
-            if (persistImmediately)
+            void FinishCommit(bool shortened)
             {
-                m_Persist.Save();
-                m_Host.SaveApplied();
+                prepared.RowIdsShortened = shortened;
+                if (persistImmediately || shortened)
+                {
+                    m_Persist.Save();
+                    m_Host.SaveApplied();
+                }
+
+                result.success = true;
+                result.version = nextVersion.ToString();
+                result.appliedLineIds = request.applyDraft
+                    ? nextLineDraftRowsByKey.Keys
+                        .Where(key => !string.IsNullOrEmpty(key) && !string.Equals(key, "__default__", StringComparison.Ordinal))
+                        .Distinct(StringComparer.Ordinal)
+                        .OrderBy(key => key, StringComparer.Ordinal)
+                        .ToArray()
+                    : Array.Empty<string>();
+                if (prepared.ShouldReturnSnapshot || shortened)
+                {
+                    result.snapshot = BuildSnapshot(
+                        prepared.Scope,
+                        state.SelectedLineId,
+                        clientRequestSequence);
+                    result.cleanupInfo = result.snapshot?.cleanupInfo;
+                    m_Host.Ui.Push(result.snapshot);
+                }
+                else
+                {
+                    result.snapshot = null;
+                    result.cleanupInfo = m_ConsumeCleanupInfo();
+                }
             }
 
-            result.success = true;
-            result.version = nextVersion.ToString();
-            result.appliedLineIds = request.applyDraft
-                ? nextLineDraftRowsByKey.Keys
-                    .Where(key => !string.IsNullOrEmpty(key) && !string.Equals(key, "__default__", StringComparison.Ordinal))
-                    .Distinct(StringComparer.Ordinal)
-                    .OrderBy(key => key, StringComparer.Ordinal)
-                    .ToArray()
-                : Array.Empty<string>();
-            if (prepared.ShouldReturnSnapshot)
-            {
-                result.snapshot = BuildSnapshot(
-                    prepared.Scope,
-                    state.SelectedLineId,
-                    clientRequestSequence);
-                result.cleanupInfo = result.snapshot?.cleanupInfo;
-                m_Host.Ui.Push(result.snapshot);
-            }
+            if (request.applyDraft)
+                m_Applied.WithShortRowIds(nextLineDraftRowsByKey.Keys, FinishCommit);
             else
-            {
-                result.snapshot = null;
-                result.cleanupInfo = m_ConsumeCleanupInfo();
-            }
+                FinishCommit(false);
             return result;
         }
 
