@@ -695,7 +695,7 @@ namespace RapidTransitMod
                                     }
                                     break;
                                 }
-                                if (input.HoldingStopUnknown)
+                                if (input.HoldingStopUnknown || input.OriginDeparturePending)
                                     break;
                                 if (m_Runtime.m_Observation.IsWaitingOriginDwell(v, nowFrame))
                                 {
