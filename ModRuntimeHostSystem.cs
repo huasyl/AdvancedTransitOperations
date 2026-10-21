@@ -529,7 +529,10 @@ namespace RapidTransitMod
                 m_SimClock.Snapshot.ToFramesCeil(30d));
             using (s_RailEtaMarker.Auto())
             {
-                m_SimClock.RefreshIfDue(simulationFrame);
+                if (m_SystemReady)
+                    m_SimClock.RefreshIfDue(simulationFrame);
+                else
+                    m_SimClock.ForceRefresh(simulationFrame);
                 if (GameManager.instance.gameMode == GameMode.Game && m_SystemReady)
                     m_LineChangeSource?.ConfirmChanges();
                 Dependency = m_RailEtaService?.TickHot(simulationFrame, Dependency) ?? Dependency;
@@ -724,6 +727,7 @@ namespace RapidTransitMod
             m_RuntimeFramePlan.CollectDueDeadlines(simulationFrame);
             m_RuntimeHotPathProbe.CountDueDeadlines(m_RuntimeFramePlan.DueDeadlines.Count);
             RouteDueDeadlines();
+            m_StopRuntime.RouteInvalidatedTimedPlans(simulationFrame, CanVehicleBypass);
             m_RailEventSource.CompileSourceRows(m_RuntimeFramePlan, simulationFrame);
             m_RoadEventSource.CompileSourceRows(m_RuntimeFramePlan, simulationFrame);
             if (startupActivation)
@@ -1126,6 +1130,8 @@ namespace RapidTransitMod
             for (int i = 0; i < controls.Count; i++)
             {
                 StopControlResult control = controls[i];
+                if (control.ReleaseDeparture)
+                    m_CommandApplier.ReleaseDeparture(control.Vehicle, m_SimulationSystem.frameIndex, commandBuffer);
                 if (control.HoldUntilFrame > 0)
                     m_CommandApplier.HoldUntil(control.Vehicle, control.HoldUntilFrame, commandBuffer);
                 ApplyStopControl(control.Vehicle, control.WaypointIndex, control);
@@ -2814,7 +2820,7 @@ namespace RapidTransitMod
             m_RescueLocalVehicles.Clear();
         }
 
-        private void RestoreMonitorClaims(ClockSnapshot clock)
+        internal void RestoreMonitorClaims(ClockSnapshot clock)
         {
             if (m_Observation == null || m_Observation.MonitorClaimsRestored)
                 return;

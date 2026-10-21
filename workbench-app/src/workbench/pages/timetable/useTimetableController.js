@@ -1701,6 +1701,15 @@ export default function useTimetableController({ activeTransportMode, isActive, 
       return;
     }
     invalidateRuntimeSource(event.lineId, event.source);
+    if (event?.reason === "run-time-clock-changed") {
+      if (sourceTransactionsRef.current[event.lineId] === event.source) {
+        const nextTransactions = { ...sourceTransactionsRef.current };
+        delete nextTransactions[event.lineId];
+        sourceTransactionsRef.current = nextTransactions;
+        setSourceTransactions(nextTransactions);
+      }
+      return;
+    }
     if (event?.source !== "monitorAverage") {
       return;
     }

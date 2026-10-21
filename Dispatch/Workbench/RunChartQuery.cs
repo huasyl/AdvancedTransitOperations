@@ -968,6 +968,20 @@ namespace RapidTransitMod.Dispatch.Workbench
                 m_PushInvalidation(invalidation);
         }
 
+        internal void RefreshTheoryMinutes()
+        {
+            double framesPerMinute = m_FramesPerMinute();
+            foreach (FullRunTimeResult result in m_Results.Values)
+            {
+                if (result.Source != "theory") continue;
+                foreach (RunChartSegment segment in result.Segments)
+                { segment.Minutes = ToMinutes(segment.Frames, framesPerMinute); segment.ExactMinutes = ToExactMinutes(segment.Frames, framesPerMinute); }
+                foreach (RunChartDwell dwell in result.Dwells) dwell.Minutes = ToMinutes(dwell.Frames, framesPerMinute);
+            }
+            foreach (TheoryEntry entry in m_Theory.Values)
+                if (entry.State == "Completed") PushTheoryWaiters(entry);
+        }
+
         internal void InvalidateSources(
             IEnumerable<string> lineIds,
             IEnumerable<string> sources,

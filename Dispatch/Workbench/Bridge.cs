@@ -510,8 +510,9 @@ namespace RapidTransitMod.Dispatch.Workbench
         {
             m_RunTime?.InvalidateSources(
                 null,
-                new[] { "sliceHistoricalEstimate", "theory" },
+                new[] { "sliceHistoricalEstimate", "monitorAverage" },
                 "run-time-clock-changed");
+            m_RunTime?.RefreshTheoryMinutes();
         }
 
         private void InvalidateAuthoritativeLine(string stableLineId)

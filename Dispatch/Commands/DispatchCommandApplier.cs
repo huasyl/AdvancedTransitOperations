@@ -80,6 +80,12 @@ namespace RapidTransitMod
                 actions.HoldDeparture(vehicle, nowFrame, ecb);
         }
 
+        internal void ReleaseDeparture(Entity vehicle, uint nowFrame, EntityCommandBuffer ecb)
+        {
+            if (TryGetDispatchActions(vehicle, out DispatchActions actions, out _))
+                actions.ReleaseDeparture(vehicle, nowFrame, ecb);
+        }
+
         internal void HoldUntil(Entity vehicle, uint releaseFrame, EntityCommandBuffer ecb)
         {
             if (TryGetDispatchActions(vehicle, out DispatchActions actions, out _))

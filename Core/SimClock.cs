@@ -13,7 +13,8 @@ namespace RapidTransitMod.Core
             int dayIndex,
             int ticksPerDay,
             double framesPerMinute,
-            long clockEpoch)
+            long clockEpoch,
+            int daysPerYear)
         {
             NowMinute = nowMinute;
             NowMinuteExact = nowMinuteExact;
@@ -22,6 +23,7 @@ namespace RapidTransitMod.Core
             TicksPerDay = ticksPerDay;
             FramesPerMinute = framesPerMinute;
             ClockEpoch = clockEpoch;
+            DaysPerYear = daysPerYear;
         }
 
         public int NowMinute { get; }
@@ -31,6 +33,8 @@ namespace RapidTransitMod.Core
         public DateTime NowDate { get; }
 
         public int DayIndex { get; }
+
+        public int DaysPerYear { get; }
 
         public int TicksPerDay { get; }
 
@@ -90,16 +94,21 @@ namespace RapidTransitMod.Core
     public sealed class SimClock
     {
         private const int DEFAULT_TICKS_PER_DAY = 262144;
-        private const uint PROBE_CADENCE_FRAMES = 32u;
         private const string PROVIDER_TYPE_NAME = "Time2Work.Time2WorkTimeSystem";
         private const string PROVIDER_TICKS_PER_DAY_FIELD_NAME = "kTicksPerDay";
 
         private readonly TimeSystem m_GameClockSystem;
         private FieldInfo m_ProviderTicksPerDayField;
+        private Func<float> m_ProviderNormalizedTime;
+        private Func<float> m_ProviderNormalizedDate;
+        private Func<int> m_ProviderYear;
+        private Func<int> m_ProviderDaysPerYear;
         private bool m_ProviderReflectionResolved;
         private bool m_ProviderAssemblyRescanUsed;
-        private bool m_HasProbeFrame;
-        private uint m_LastProbeFrame;
+        private bool m_HasBaseline;
+        private ClockSnapshot m_LastSnapshot;
+        private bool m_ClockChangePending;
+        private uint m_ClockChangeFrame;
         private bool m_HasDate;
         private int m_DateYear;
         private int m_DateDaysPerYear;
@@ -128,7 +137,9 @@ namespace RapidTransitMod.Core
         {
             get
             {
-                float normalizedDay = m_GameClockSystem.normalizedTime;
+                if (m_ClockChangePending)
+                    return m_LastSnapshot.NowMinuteExact;
+                float normalizedDay = m_ProviderNormalizedTime?.Invoke() ?? m_GameClockSystem.normalizedTime;
                 if (float.IsNaN(normalizedDay) || float.IsInfinity(normalizedDay))
                     return 0d;
 
@@ -142,9 +153,11 @@ namespace RapidTransitMod.Core
         {
             get
             {
-                int year = m_GameClockSystem.year;
-                int daysPerYear = m_GameClockSystem.daysPerYear;
-                float normalizedDate = m_GameClockSystem.normalizedDate;
+                if (m_ClockChangePending)
+                    return m_LastSnapshot.NowDate;
+                int year = ClockYear;
+                int daysPerYear = ClockDaysPerYear;
+                float normalizedDate = ClockNormalizedDate;
                 int dayOfYear = 1 + (int)Math.Floor((float)daysPerYear * normalizedDate) % daysPerYear;
                 if (!m_HasDate || year != m_DateYear || daysPerYear != m_DateDaysPerYear
                     || dayOfYear != m_DateDayOfYear)
@@ -159,8 +172,15 @@ namespace RapidTransitMod.Core
             }
         }
 
-        public int DayIndex => (m_GameClockSystem.year - 1) * m_GameClockSystem.daysPerYear
-            + (int)Math.Floor(m_GameClockSystem.normalizedDate * m_GameClockSystem.daysPerYear);
+        public int DayIndex => m_ClockChangePending ? m_LastSnapshot.DayIndex
+            : (ClockYear - 1) * ClockDaysPerYear
+            + (int)Math.Floor(ClockNormalizedDate * ClockDaysPerYear);
+
+        private int ClockYear => m_ProviderYear?.Invoke() ?? m_GameClockSystem.year;
+
+        private int ClockDaysPerYear => m_ProviderDaysPerYear?.Invoke() ?? m_GameClockSystem.daysPerYear;
+
+        private float ClockNormalizedDate => m_ProviderNormalizedDate?.Invoke() ?? m_GameClockSystem.normalizedDate;
 
         public int TicksPerDay { get; private set; }
 
@@ -172,12 +192,6 @@ namespace RapidTransitMod.Core
 
         public void RefreshIfDue(uint simulationFrame)
         {
-            if (m_ProviderTicksPerDayField == null)
-                return;
-
-            if (m_HasProbeFrame && unchecked(simulationFrame - m_LastProbeFrame) < PROBE_CADENCE_FRAMES)
-                return;
-
             Refresh(simulationFrame);
         }
 
@@ -190,7 +204,8 @@ namespace RapidTransitMod.Core
                 m_ProviderAssemblyRescanUsed = true;
                 m_ProviderReflectionResolved = false;
             }
-
+            m_HasBaseline = false;
+            m_ClockChangePending = false;
             Refresh(simulationFrame);
         }
 
@@ -216,49 +231,52 @@ namespace RapidTransitMod.Core
 
         private void Refresh(uint simulationFrame)
         {
-            m_LastProbeFrame = simulationFrame;
-            m_HasProbeFrame = true;
-
             ResolveProviderReflection();
-            if (!TryReadProviderTicksPerDay(out int providerTicksPerDay) || providerTicksPerDay == TicksPerDay)
+            int ticksPerDay = TicksPerDay;
+            if (TryReadProviderTicksPerDay(out int providerTicksPerDay))
+                ticksPerDay = providerTicksPerDay;
+            int daysPerYear = ClockDaysPerYear;
+            if (!m_HasBaseline)
+            {
+                TicksPerDay = ticksPerDay;
+                FramesPerMinute = ticksPerDay / 1440d;
+                m_LastSnapshot = CreateSnapshot();
+                m_HasBaseline = true;
                 return;
-
-            double nowMinuteExact = NowMinuteExact;
-            int nowMinute = (int)Math.Floor(nowMinuteExact);
-            DateTime nowDate = NowDate;
-            int dayIndex = DayIndex;
-            ClockSnapshot oldSnapshot = new ClockSnapshot(
-                nowMinute,
-                nowMinuteExact,
-                nowDate,
-                dayIndex,
-                TicksPerDay,
-                FramesPerMinute,
-                ClockEpoch);
-
-            TicksPerDay = providerTicksPerDay;
-            FramesPerMinute = providerTicksPerDay / 1440d;
-            ClockEpoch++;
-
-            ClockSnapshot newSnapshot = new ClockSnapshot(
-                nowMinute,
-                nowMinuteExact,
-                nowDate,
-                dayIndex,
-                TicksPerDay,
-                FramesPerMinute,
-                ClockEpoch);
-
-            Mod.log.Info("[SimClock] day length changed oldTicksPerDay=" + oldSnapshot.TicksPerDay
-                + " newTicksPerDay=" + newSnapshot.TicksPerDay
-                + " oldFramesPerMinute=" + oldSnapshot.FramesPerMinute.ToString("0.########")
-                + " newFramesPerMinute=" + newSnapshot.FramesPerMinute.ToString("0.########")
-                + " clockEpoch=" + newSnapshot.ClockEpoch);
-            ClockChanged?.Invoke(oldSnapshot, newSnapshot);
+            }
+            bool changed = ticksPerDay != TicksPerDay || daysPerYear != m_LastSnapshot.DaysPerYear;
+            if (changed && !m_ClockChangePending)
+            {
+                m_ClockChangePending = true;
+                m_ClockChangeFrame = simulationFrame;
+                return;
+            }
+            if (m_ClockChangePending && simulationFrame == m_ClockChangeFrame)
+                return;
+            ClockSnapshot oldSnapshot = m_LastSnapshot;
+            m_ClockChangePending = false;
+            if (changed)
+            {
+                TicksPerDay = ticksPerDay;
+                FramesPerMinute = ticksPerDay / 1440d;
+                ClockEpoch++;
+            }
+            m_LastSnapshot = CreateSnapshot();
+            if (changed)
+            {
+                Mod.log.Info("[SimClock] settings changed oldTicksPerDay=" + oldSnapshot.TicksPerDay
+                    + " newTicksPerDay=" + m_LastSnapshot.TicksPerDay
+                    + " oldDaysPerYear=" + oldSnapshot.DaysPerYear
+                    + " newDaysPerYear=" + m_LastSnapshot.DaysPerYear
+                    + " clockEpoch=" + ClockEpoch);
+                ClockChanged?.Invoke(oldSnapshot, m_LastSnapshot);
+            }
         }
 
         private ClockSnapshot CreateSnapshot()
         {
+            if (m_ClockChangePending)
+                return m_LastSnapshot;
             double nowMinuteExact = NowMinuteExact;
             return new ClockSnapshot(
                 (int)Math.Floor(nowMinuteExact),
@@ -267,7 +285,8 @@ namespace RapidTransitMod.Core
                 DayIndex,
                 TicksPerDay,
                 FramesPerMinute,
-                ClockEpoch);
+                ClockEpoch,
+                ClockDaysPerYear);
         }
 
         private void ResolveProviderReflection()
@@ -275,7 +294,6 @@ namespace RapidTransitMod.Core
             if (m_ProviderReflectionResolved)
                 return;
 
-            m_ProviderReflectionResolved = true;
             Assembly[] loadedAssemblies = AppDomain.CurrentDomain.GetAssemblies();
             for (int assemblyIndex = 0; assemblyIndex < loadedAssemblies.Length; assemblyIndex++)
             {
@@ -292,13 +310,29 @@ namespace RapidTransitMod.Core
                 if (providerClockType == null)
                     continue;
 
-                m_ProviderTicksPerDayField = providerClockType.GetField(
+                FieldInfo ticksPerDayField = providerClockType.GetField(
                     PROVIDER_TICKS_PER_DAY_FIELD_NAME,
                     BindingFlags.Public | BindingFlags.Static);
-                if (m_ProviderTicksPerDayField?.FieldType != typeof(int))
-                    m_ProviderTicksPerDayField = null;
+                var providerClock = m_GameClockSystem.World.GetExistingSystemManaged(providerClockType);
+                if (providerClock == null)
+                    return;
+                if (ticksPerDayField?.FieldType != typeof(int))
+                    throw new MissingFieldException(providerClockType.FullName, PROVIDER_TICKS_PER_DAY_FIELD_NAME);
+
+                var normalizedTime = (Func<float>)Delegate.CreateDelegate(typeof(Func<float>), providerClock, "get_normalizedTime");
+                var normalizedDate = (Func<float>)Delegate.CreateDelegate(typeof(Func<float>), providerClock, "get_normalizedDate");
+                var year = (Func<int>)Delegate.CreateDelegate(typeof(Func<int>), providerClock, "get_year");
+                var daysPerYear = (Func<int>)Delegate.CreateDelegate(typeof(Func<int>), providerClock, "get_daysPerYear");
+
+                m_ProviderNormalizedTime = normalizedTime;
+                m_ProviderNormalizedDate = normalizedDate;
+                m_ProviderYear = year;
+                m_ProviderDaysPerYear = daysPerYear;
+                m_ProviderTicksPerDayField = ticksPerDayField;
+                m_ProviderReflectionResolved = true;
                 return;
             }
+            m_ProviderReflectionResolved = true;
         }
 
         private bool TryReadProviderTicksPerDay(out int providerTicksPerDay)

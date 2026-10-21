@@ -37,7 +37,7 @@ namespace RapidTransitMod.Dispatch.Observation
             int currentKey = ScheduleClock.DateKey(currentDate.Date);
             if (m_Store.MonitorCurrentDateKey == currentKey)
                 return false;
-            int previousKey = ScheduleClock.DateKey(currentDate.Date.AddDays(-1));
+            int previousKey = ScheduleClock.DateKey(ScheduleClock.OffsetDate(currentDate, -1, m_Port.ClockSnapshot().DaysPerYear));
             bool changed = false;
             int[] existing = m_Store.DateSlots.Keys.ToArray();
             for (int i = 0; i < existing.Length; i++)
@@ -614,7 +614,8 @@ namespace RapidTransitMod.Dispatch.Observation
 
         private static int EventMinute(ClockSnapshot clock, DateTime serviceDate)
         {
-            long days = (clock.NowDate.Date - serviceDate.Date).Days;
+            long days = ScheduleClock.GameDay(clock.NowDate, clock.DaysPerYear)
+                - ScheduleClock.GameDay(serviceDate, clock.DaysPerYear);
             long minute = days * 1440L + clock.NowMinute;
             if (minute < int.MinValue)
                 return int.MinValue;

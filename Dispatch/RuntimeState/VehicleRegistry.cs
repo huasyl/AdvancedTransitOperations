@@ -320,7 +320,7 @@ namespace RapidTransitMod
             }
         }
 
-        public void ReprojectIdle(ClockSnapshot clockSnapshot)
+        public void ReprojectIdle(uint nowFrame, ClockSnapshot oldClock, ClockSnapshot newClock)
         {
             NativeArray<Entity> vehicles = m_Store.IdleStartFrame.GetKeyArray(Allocator.Temp);
             try
@@ -329,7 +329,11 @@ namespace RapidTransitMod
                 {
                     Entity vehicle = vehicles[i];
                     if (!m_Store.IdleStartFrame.TryGetValue(vehicle, out uint startFrame)) continue;
-                    uint deadline = unchecked(startFrame + clockSnapshot.ToFramesCeil(ModRuntimeHostSystem.IDLE_TIMEOUT_MINUTES));
+                    double elapsed = Math.Min(ModRuntimeHostSystem.IDLE_TIMEOUT_MINUTES,
+                        oldClock.ToMinutes(unchecked(nowFrame - startFrame)));
+                    uint rebasedStart = unchecked(nowFrame - newClock.ToFramesRound(elapsed));
+                    m_Store.IdleStartFrame[vehicle] = rebasedStart;
+                    uint deadline = unchecked(rebasedStart + newClock.ToFramesCeil(ModRuntimeHostSystem.IDLE_TIMEOUT_MINUTES));
                     m_FramePlan?.SetDeadline(vehicle, DeadlineKind.Idle, deadline);
                 }
             }

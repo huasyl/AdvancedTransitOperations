@@ -92,7 +92,7 @@ namespace RapidTransitMod.Dispatch.Scheduling
             DateTime serviceDate = clock.NowDate.Date;
             if (clock.NowMinute < targetMinute
                 && Overdue(clock.NowMinute, targetMinute) <= MonitorFinalMinutes)
-                serviceDate = serviceDate.AddDays(-1);
+                serviceDate = OffsetDate(serviceDate, -1, clock.DaysPerYear);
             return serviceDate;
         }
 
@@ -115,9 +115,28 @@ namespace RapidTransitMod.Dispatch.Scheduling
 
             int overdue = Overdue(clock.NowMinute, targetMinute);
             if (overdue <= MonitorFinalMinutes)
-                return clock.NowMinute < targetMinute ? currentDate.AddDays(-1) : currentDate;
+                return clock.NowMinute < targetMinute ? OffsetDate(currentDate, -1, clock.DaysPerYear) : currentDate;
 
-            return targetMinute <= clock.NowMinute ? currentDate.AddDays(1) : currentDate;
+            return targetMinute <= clock.NowMinute ? OffsetDate(currentDate, 1, clock.DaysPerYear) : currentDate;
+        }
+
+        public static long GameDay(DateTime date, int daysPerYear)
+        {
+            return (date.Year - 1L) * daysPerYear + date.DayOfYear - 1;
+        }
+
+        public static DateTime OffsetDate(DateTime date, int offset, int daysPerYear)
+        {
+            long day = GameDay(date, daysPerYear) + offset;
+            int year = (int)(day / daysPerYear) + 1;
+            int dayOfYear = (int)(day % daysPerYear);
+            return new DateTime(year, 1, 1).AddDays(dayOfYear);
+        }
+
+        public static double RelativeMinutes(ClockSnapshot clock, DateTime date, double minute)
+        {
+            return (GameDay(date, clock.DaysPerYear) - GameDay(clock.NowDate, clock.DaysPerYear))
+                * 1440d + minute - clock.NowMinuteExact;
         }
 
         public static int DateKey(DateTime date)

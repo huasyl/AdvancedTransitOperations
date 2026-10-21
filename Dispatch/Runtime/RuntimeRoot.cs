@@ -70,7 +70,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                     runtime.m_SimulationSystem.frameIndex,
                     oldClockSnapshot,
                     newClockSnapshot);
-                runtime.m_VehicleRegistry.ReprojectIdle(newClockSnapshot);
+                runtime.m_VehicleRegistry.ReprojectIdle(
+                    runtime.m_SimulationSystem.frameIndex, oldClockSnapshot, newClockSnapshot);
                 runtime.m_RuntimeEngine?.QueueOriginHoldReproject();
             };
             runtime.m_RuntimeEngine = new DispatchEngine(runtime.m_VehicleRegistry, runtime, runtime.PublishStopFact);
@@ -546,8 +547,14 @@ namespace RapidTransitMod.Dispatch.Runtime
             });
             runtime.m_SimClock.ClockChanged += (oldClockSnapshot, newClockSnapshot) =>
             {
-                runtime.m_StopRuntime.ReprojectDwell();
+                runtime.m_StopRuntime.ReprojectDwell(oldClockSnapshot, newClockSnapshot);
                 runtime.m_StopRuntime.ReprojectTimedStops(oldClockSnapshot, newClockSnapshot);
+                runtime.m_ObsRecorder.ClearMonitor();
+                runtime.m_DispatchScheduler.ResetMonitorClock(newClockSnapshot);
+                runtime.m_LineServiceState.RefreshPeriod(newClockSnapshot.NowMinute);
+                runtime.m_DispatchScheduler.ResetServiceWindows(newClockSnapshot);
+                runtime.RestoreMonitorClaims(newClockSnapshot);
+                runtime.m_ObsBuffers.SaveSnapshot();
                 runtime.m_Announcements.RefreshLineRules();
             };
             runtime.m_BoardingFirstFrameGuardState = new NativeHashMap<Entity, byte>(1024, Allocator.Persistent);
@@ -618,7 +625,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             passengerFlowPort.BindServiceStatus(runtime.m_CommandApplier.ServiceActive);
             runtime.m_CommandApplier.BindServiceEnd(passengerFlowPort.EndService);
             passengerFlowPort.SubscribeClockChanged((oldClockSnapshot, newClockSnapshot) =>
-                PassengerFlow.SamplingSystem.ClockChanged(passengerFlowPort, oldClockSnapshot, newClockSnapshot));
+                PassengerFlow.SamplingSystem.ClockChanged());
         }
 
         /// <summary>

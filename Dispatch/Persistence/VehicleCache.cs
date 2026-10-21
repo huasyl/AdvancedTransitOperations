@@ -2,6 +2,7 @@ using System;
 using Game.Routes;
 using Game.Vehicles;
 using RapidTransitMod.Dispatch.Runtime;
+using RapidTransitMod.Dispatch.Scheduling;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
@@ -262,6 +263,17 @@ namespace RapidTransitMod.Dispatch.Persistence
                 || header.m_ServiceDateTicks <= DateTime.MinValue.Ticks
                 || header.m_ServiceDateTicks > DateTime.MaxValue.Ticks)
             {
+                return false;
+            }
+
+            var clock = m_Runtime.m_SimClock.Snapshot;
+            DateTime serviceDate = new DateTime(header.m_ServiceDateTicks).Date;
+            if (header.m_ClockTicksPerDay != clock.TicksPerDay
+                || ScheduleClock.GameDay(serviceDate, clock.DaysPerYear)
+                    > ScheduleClock.GameDay(clock.NowDate, clock.DaysPerYear))
+            {
+                m_Runtime.m_StopRuntime.InvalidateTimedPlan(
+                    vehicle, header.m_ActiveStopOrder >= 0);
                 return false;
             }
 

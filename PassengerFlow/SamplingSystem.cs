@@ -455,15 +455,13 @@ namespace RapidTransitMod.PassengerFlow
             return metadata;
         }
 
-        internal static void ClockChanged(Port port, ClockSnapshot oldClock, ClockSnapshot newClock)
+        internal static void ClockChanged()
         {
-            State state = CurrentState;
-            if (port == null || state == null)
-                return;
-
-            state.CloseAllLines(port.Frame(), oldClock);
-            FlushWaitingCoverage(state, oldClock, port.Frame(), s_Current.WaitingInterval());
-            UpdateBucketIfNeeded(state, port.Frame(), newClock);
+            ClearState();
+            ModRuntimeHostSystem runtime = ModRuntimeHostSystem.Instance;
+            Entity city = runtime.m_CitySystem.City;
+            if (city != Entity.Null)
+                Persistence.ClearCityBuffers(runtime.EntityManager, city);
         }
 
         private void RunWaitingSample(Port port, State state, uint frame, ClockSnapshot clock)

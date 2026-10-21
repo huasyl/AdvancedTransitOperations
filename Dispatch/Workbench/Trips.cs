@@ -127,7 +127,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 && request.limit > 0
                 && request.limit <= MaxMonitorHeaders;
             int serviceDateKey = validRequest
-                ? ScheduleClock.DateKey(clock.NowDate.Date.AddDays(request.dayOffset))
+                ? ScheduleClock.DateKey(ScheduleClock.OffsetDate(clock.NowDate, request.dayOffset, clock.DaysPerYear))
                 : 0;
             if (validRequest)
             {

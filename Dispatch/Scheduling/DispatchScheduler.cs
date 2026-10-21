@@ -68,6 +68,7 @@ namespace RapidTransitMod
             }
         }
 
+        private DateTime m_MonitorObservedSince;
         private readonly ModRuntimeHostSystem m_Runtime;
         private readonly Func<Entity, bool> m_Managed;
         private readonly Func<Entity, bool> m_IsOperational;
@@ -589,6 +590,17 @@ namespace RapidTransitMod
         internal void ResetMonitorClock(ClockSnapshot clock)
         {
             m_MissedCandidates.Clear();
+            m_MonitorObservedSince = clock.NowDate.Date.AddMinutes(clock.NowMinuteExact);
+        }
+
+        internal void ResetServiceWindows(ClockSnapshot clock)
+        {
+            m_Runtime.m_ServiceWindowStore.ClearTracking();
+            m_ServiceWindows.Clear();
+            using NativeArray<Entity> lines = m_Runtime.m_LineQuery.ToEntityArray(Allocator.Temp);
+            for (int i = 0; i < lines.Length; i++)
+                BaselineLine(lines[i], m_IsOperational(lines[i]), clock, null);
+            m_Runtime.m_ServiceWindowStore.MarkDirty();
         }
 
         private void CollectMissed(Entity line, ClockSnapshot clock)
@@ -620,6 +632,8 @@ namespace RapidTransitMod
 
             DateTime occurrenceDate = ScheduleClock.MonitorOccurrenceDate(clock, slotMinute);
             DateTime occurrence = occurrenceDate.Date.AddMinutes(slotMinute);
+            if (m_MonitorObservedSince != default && occurrence < m_MonitorObservedSince)
+                return;
             m_MissedCandidates.Add(new MissedCandidate(
                 line,
                 row,
@@ -784,12 +798,12 @@ namespace RapidTransitMod
         {
             if (!m_ServiceWindows.TryGetValue(line, out List<ServiceWindow> windows))
                 return;
-            DateTime now = ClockTime(clock);
             bool removed = false;
             for (int i = windows.Count - 1; i >= 0; i--)
             {
                 ServiceWindow window = windows[i];
-                if (!window.Open && window.End.AddMinutes(ScheduleClock.MonitorFinalMinutes) < now)
+                if (!window.Open && ScheduleClock.RelativeMinutes(clock, window.End.Date, window.End.TimeOfDay.TotalMinutes)
+                    < -ScheduleClock.MonitorFinalMinutes)
                 {
                     windows.RemoveAt(i);
                     removed = true;

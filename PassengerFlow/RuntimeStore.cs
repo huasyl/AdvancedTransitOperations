@@ -6,7 +6,7 @@ namespace RapidTransitMod.PassengerFlow
     // Persistence 的实体型运行态分支；只保存尚未提交的观测连续性，不另建保存入口。
     internal static partial class Persistence
     {
-        private static void ClearCityBuffers(EntityManager entityManager, Entity city)
+        internal static void ClearCityBuffers(EntityManager entityManager, Entity city)
         {
             ClearCityBuffer<PassengerFlowStateElement>(entityManager, city);
             ClearCityBuffer<PassengerFlowVehicleElement>(entityManager, city);
