@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using Game;
 using Game.Rendering;
@@ -34,8 +35,8 @@ namespace RapidTransitMod.ViewTracking
         private FieldInfo m_Activated;
         private MethodInfo m_FollowEntity;
         private ComponentSystemBase m_System;
+        private object m_Entry;
         private UnityEngine.Object m_Controller;
-        private float m_NextConnectTime;
         private int m_ReadFrame = -1;
         private FollowView m_View;
 
@@ -53,16 +54,42 @@ namespace RapidTransitMod.ViewTracking
 
         private void Discover(Assembly assembly)
         {
-            if (m_SystemType != null)
-                return;
-            Type system = assembly.GetType("FirstPersonCameraContinued.Systems.FirstPersonCameraSystem", false);
-            if (system == null)
-                return;
-            m_SystemType = system;
-            m_ControllerType = assembly.GetType("FirstPersonCameraContinued.MonoBehaviours.FirstPersonCameraController", false);
-            m_EntryInfo = system.GetProperty("EntryInfo", BindingFlags.Public | BindingFlags.Instance);
-            m_Activated = m_EntryInfo?.PropertyType.GetField("Activated", BindingFlags.Public | BindingFlags.Instance);
-            m_FollowEntity = m_ControllerType?.GetMethod("GetFollowEntity", BindingFlags.Public | BindingFlags.Instance, null, Type.EmptyTypes, null);
+            try
+            {
+                if (m_SystemType != null)
+                    return;
+                Type system = assembly.GetType("FirstPersonCameraContinued.Systems.FirstPersonCameraSystem", false);
+                if (system == null)
+                    return;
+                Type controller = assembly.GetType("FirstPersonCameraContinued.MonoBehaviours.FirstPersonCameraController", false);
+                PropertyInfo entryInfo = system.GetProperty("EntryInfo", BindingFlags.Public | BindingFlags.Instance);
+                FieldInfo activated = entryInfo?.PropertyType.GetField("Activated", BindingFlags.Public | BindingFlags.Instance);
+                MethodInfo followEntity = controller?.GetMethod("GetFollowEntity", BindingFlags.Public | BindingFlags.Instance, null, Type.EmptyTypes, null);
+                List<string> invalid = new List<string>();
+                if (controller == null)
+                    invalid.Add("FirstPersonCameraController");
+                if (entryInfo == null)
+                    invalid.Add("EntryInfo");
+                if (activated?.FieldType != typeof(bool))
+                    invalid.Add("EntryInfo.Activated");
+                if (followEntity?.ReturnType != typeof(Entity))
+                    invalid.Add("GetFollowEntity");
+                if (invalid.Count > 0)
+                {
+                    Mod.log.Info("[FirstPerson] First Person Camera Continued API mismatch: " + string.Join(", ", invalid) + "; first-person integration disabled");
+                    return;
+                }
+                m_ControllerType = controller;
+                m_EntryInfo = entryInfo;
+                m_Activated = activated;
+                m_FollowEntity = followEntity;
+                m_SystemType = system;
+                Mod.log.Info("[FirstPerson] Connected to First Person Camera Continued");
+            }
+            catch (Exception ex)
+            {
+                Mod.log.Info("[FirstPerson] Failed to inspect assembly " + assembly.GetName().Name + ": " + ex.GetType().Name + ": " + ex.Message);
+            }
         }
 
         internal FollowView ReadContext()
@@ -73,43 +100,59 @@ namespace RapidTransitMod.ViewTracking
             m_View = default;
             if (!m_World.IsCreated)
                 return m_View;
-            try
+            if (TryReadFirstPerson(out Entity firstPerson))
+                return m_View = new FollowView(FollowMode.FirstPerson, firstPerson, m_ResolveVehicle(firstPerson));
+            OrbitCameraController orbit = m_Camera?.orbitCameraController;
+            if (orbit != null && ReferenceEquals(m_Camera.activeCameraController, orbit))
             {
-                if (m_SystemType != null)
-                {
-                    if (m_EntryInfo == null || m_Activated == null || m_FollowEntity == null)
-                        return m_View;
-                    m_System = m_World.GetExistingSystemManaged(m_SystemType);
-                    if (m_System == null)
-                        return m_View;
-                    object entry = m_EntryInfo.GetValue(m_System);
-                    if (entry == null)
-                        return m_View;
-                    if ((bool)m_Activated.GetValue(entry))
-                    {
-                        if (m_Controller == null && Time.realtimeSinceStartup >= m_NextConnectTime)
-                        {
-                            m_NextConnectTime = Time.realtimeSinceStartup + 1f;
-                            m_Controller = UnityEngine.Object.FindObjectOfType(m_ControllerType);
-                        }
-                        if (m_Controller == null)
-                            return m_View;
-                        Entity followed = (Entity)m_FollowEntity.Invoke(m_Controller, null);
-                        return m_View = new FollowView(FollowMode.FirstPerson, followed, m_ResolveVehicle(followed));
-                    }
-                }
-                OrbitCameraController orbit = m_Camera?.orbitCameraController;
-                if (orbit != null && ReferenceEquals(m_Camera.activeCameraController, orbit))
-                {
-                    Entity followed = orbit.followedEntity;
-                    m_View = new FollowView(FollowMode.Standard, followed, m_ResolveVehicle(followed));
-                }
-            }
-            catch
-            {
-                m_View = default;
+                Entity followed = orbit.followedEntity;
+                m_View = new FollowView(FollowMode.Standard, followed, m_ResolveVehicle(followed));
             }
             return m_View;
+        }
+
+        private bool TryReadFirstPerson(out Entity followed)
+        {
+            followed = Entity.Null;
+            if (m_SystemType == null)
+                return false;
+            try
+            {
+                if (m_System == null)
+                    m_System = m_World.GetExistingSystemManaged(m_SystemType);
+                if (m_System == null)
+                    return false;
+                if (m_Entry == null)
+                    m_Entry = m_EntryInfo.GetValue(m_System);
+                if (m_Entry == null)
+                    return false;
+                if (!(bool)m_Activated.GetValue(m_Entry))
+                    return false;
+                if (m_Controller == null)
+                    m_Controller = UnityEngine.Object.FindObjectOfType(m_ControllerType);
+                if (m_Controller == null)
+                {
+                    DisableFirstPerson("First Person Camera Continued controller not found");
+                    return false;
+                }
+                followed = (Entity)m_FollowEntity.Invoke(m_Controller, null);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Exception cause = ex.GetBaseException();
+                DisableFirstPerson("Failed to read First Person Camera Continued state: " + cause.GetType().Name + ": " + cause.Message);
+                return false;
+            }
+        }
+
+        private void DisableFirstPerson(string reason)
+        {
+            Mod.log.Info("[FirstPerson] " + reason + "; first-person integration disabled");
+            m_SystemType = null;
+            m_System = null;
+            m_Entry = null;
+            m_Controller = null;
         }
 
         internal Entity ReadFollowedVehicle() => ReadContext().Vehicle;
@@ -117,8 +160,8 @@ namespace RapidTransitMod.ViewTracking
         internal void ResetConnection()
         {
             m_System = null;
+            m_Entry = null;
             m_Controller = null;
-            m_NextConnectTime = 0f;
             m_ReadFrame = -1;
             m_View = default;
         }
