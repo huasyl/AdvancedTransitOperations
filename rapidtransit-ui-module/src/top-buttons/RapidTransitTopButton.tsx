@@ -51,7 +51,6 @@ export function RapidTransitTopButton() {
           event.stopPropagation();
           setLocalPanelOpen(!open);
         }}
-        style={{ display: "inline-block" }}
       >
         <Button
           variant="floating"

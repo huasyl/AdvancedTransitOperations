@@ -383,7 +383,6 @@ export function DevSightBlock(props: { first?: boolean; source?: string; summary
             lineHeight: "18rem",
             color: COLORS.text,
             whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
             marginTop: "9rem"
           }}
         >
@@ -439,7 +438,6 @@ export function ActionButton(props: { action: string; label: string; marginLeft?
         letterSpacing: "0",
         cursor: props.disabled ? "default" : "pointer",
         opacity: props.disabled ? 0.55 : 1,
-        outline: "none",
         transform,
         transition: "background 0.12s ease, transform 0.08s ease"
       }}

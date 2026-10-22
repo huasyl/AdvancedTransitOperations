@@ -346,7 +346,7 @@
   text-align: center;
   white-space: normal;
   overflow: hidden;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 .dw-bc-import-foot {
@@ -2096,7 +2096,6 @@
 
 .dw-native-schedule-root[data-native-schedule-script="latin"] .dw-bc-map-button.is-conflict {
   width: auto;
-  max-width: none;
   flex: 0 0 auto;
 }
 

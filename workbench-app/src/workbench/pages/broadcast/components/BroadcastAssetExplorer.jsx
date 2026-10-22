@@ -33,8 +33,7 @@ function ImportCardName({ children }) {
       measureNode.style.lineHeight = style.lineHeight;
       measureNode.style.letterSpacing = style.letterSpacing;
       measureNode.style.whiteSpace = "normal";
-      measureNode.style.overflowWrap = "anywhere";
-      measureNode.style.wordBreak = "break-word";
+      measureNode.style.overflowWrap = "break-word";
       measureNode.textContent = text;
       document.body.appendChild(measureNode);
       const fits = measureNode.scrollHeight <= maxHeight + 1;

@@ -70,13 +70,6 @@
   color: #e18b8b;
 }
 
-.rtw-timetable-footer .rtw-timetable-primary-button:disabled {
-  border-color: rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.06);
-  color: #71808a;
-  cursor: default;
-}
-
 .rtw-timetable-footer .rtw-timetable-primary-button {
   flex-shrink: 0;
   height: 36rem;
@@ -549,8 +542,7 @@
   background: rgba(255, 255, 255, 0.10);
 }
 
-.rtw-timetable-secondary-button.is-danger,
-.rtw-timetable-secondary-button.is-danger:disabled {
+.rtw-timetable-secondary-button.is-danger {
   border-color: rgba(236, 111, 111, 0.72);
   background: rgba(236, 111, 111, 0.18);
   color: #ffd1d1;
@@ -568,7 +560,6 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px dashed rgba(255, 255, 255, 0.20);
   color: #758792;
   font-size: 14rem;
   line-height: 20rem;
@@ -1228,7 +1219,6 @@
   width: 120rem;
   flex: 0 0 120rem;
   color: #d8e3e9;
-  font-variant-numeric: tabular-nums;
 }
 
 .rtw-timetable-table .is-mode {
@@ -1262,7 +1252,6 @@
   width: 108rem;
   flex: 0 0 108rem;
   text-align: center;
-  font-variant-numeric: tabular-nums;
 }
 
 .rtw-timetable-table.is-monitor .is-trip-status {
@@ -1433,7 +1422,6 @@
   padding-left: 12rem;
   overflow: hidden;
   color: #9dacbe;
-  font-variant-numeric: tabular-nums;
   text-align: left;
   text-overflow: ellipsis;
 }

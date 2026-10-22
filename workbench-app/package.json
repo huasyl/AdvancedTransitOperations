@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev:planner-lab": "vite --config vite.planner-lab.config.js",
-    "build:workbench": "vite build --config vite.workbench.config.js",
+    "check:host-css": "node ../tools/check-host-css.mjs src",
+    "build:workbench": "npm run check:host-css && vite build --config vite.workbench.config.js",
     "dev:transit-diagram": "vite --config vite.transit-diagram.config.js",
     "build:transit-diagram": "vite build --config vite.transit-diagram.config.js",
     "build": "npm run build:workbench"

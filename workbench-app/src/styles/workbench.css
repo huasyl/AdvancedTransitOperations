@@ -1098,7 +1098,7 @@
 .dw-demo-copy-grid {
   display: flex;
   flex-wrap: wrap;
-  align-content: start;
+  align-content: flex-start;
   min-width: 0;
 }
 
@@ -1120,15 +1120,13 @@
   animation: dw-demo-copy-row-enter 520ms cubic-bezier(0.19, 1, 0.22, 1) both;
 }
 
-.dw-demo-copy-item:hover,
-.dw-demo-copy-item:focus-within {
+.dw-demo-copy-item:hover {
   border-bottom-color: rgba(116, 193, 193, 0.48);
   background-color: rgba(116, 193, 193, 0.08);
 }
 
 .dw-demo-copy-times {
   display: flex;
-  align-items: baseline;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1167,8 +1165,7 @@
   transition: color 180ms ease;
 }
 
-.dw-demo-copy-item:hover .dw-demo-copy-time.is-final,
-.dw-demo-copy-item:focus-within .dw-demo-copy-time.is-final {
+.dw-demo-copy-item:hover .dw-demo-copy-time.is-final {
   color: #81d4d4;
 }
 
@@ -1203,7 +1200,6 @@
   height: 24rem;
   padding: 0;
   border: 0;
-  outline: 0;
   background-color: transparent;
   box-shadow: none;
   cursor: pointer;
@@ -1223,7 +1219,6 @@
 }
 
 .dw-demo-copy-item:hover .dw-demo-copy-remove,
-.dw-demo-copy-item:focus-within .dw-demo-copy-remove,
 .dw-demo-copy-remove:focus {
   opacity: 1;
   pointer-events: auto;
