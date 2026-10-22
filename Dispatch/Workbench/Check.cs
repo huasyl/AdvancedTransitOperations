@@ -325,8 +325,11 @@ namespace RapidTransitMod.Dispatch.Workbench
             foreach (KeyValuePair<string, AppliedLine> entry in targets)
             {
                 AppliedLine line = entry.Value;
-                if (line.OriginHoldLimitMinutes < minimum || line.MaxStationDwellMinutes < minimum)
-                    errors.Add("Line " + entry.Key + " requires limits of at least " + minimum + " minutes.");
+                bool holdLow = line.OriginHoldLimitMinutes < minimum;
+                bool dwellLow = line.MaxStationDwellMinutes < minimum;
+                if (holdLow || dwellLow)
+                    errors.Add("line-limit-minimum|" + minimum + "|" + entry.Key + "|"
+                        + (holdLow && dwellLow ? "limits" : holdLow ? "hold" : "dwell"));
                 foreach (DispatchWorkbenchStagedRowDto row in line.StagedRows)
                 {
                     if ((row?.timedStops ?? Array.Empty<DispatchWorkbenchTimedStopDto>()).Any(stop =>

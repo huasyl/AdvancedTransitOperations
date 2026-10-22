@@ -1910,6 +1910,14 @@ export default function useScheduleController({ registerHostActions, activeTrans
             dwellGroups.set(lineId, times);
             return;
           }
+          if (typeof err === "string" && err.startsWith("line-limit-minimum|")) {
+            const [, minimum, lineId, issue] = err.split("|");
+            mappedErrors.push(t(`nativeSchedule.message.summary.${issue}TooSmall`, {
+              line: getLocalizedLineName(LINE_OPTIONS.find((line) => line.id === lineId), t) || lineId,
+              minutes: minimum
+            }));
+            return;
+          }
           if (typeof err === "string" && err.startsWith("line-unsupported:")) {
             mappedErrors.push(t("nativeSchedule.message.lineUnsupported"));
           } else {

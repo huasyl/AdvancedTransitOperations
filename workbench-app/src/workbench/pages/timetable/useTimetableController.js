@@ -1973,13 +1973,14 @@ export default function useTimetableController({ activeTransportMode, isActive, 
   }, [directory, layouts, runtimeSources, runtimes]);
 
   const clearTrainDetails = useCallback((lineId, trainId) => {
-    const row = buildRows(snapshot, lineId).find((item) => item?.id === trainId);
+    const currentSnapshot = snapshotRef.current;
+    const row = buildRows(currentSnapshot, lineId).find((item) => item?.id === trainId);
     if (asArray(row?.timedStops).length === 0) {
       return false;
     }
-    setSnapshot((current) => ({
-      ...current,
-      lineDraftRowsByLineId: asArray(current.lineDraftRowsByLineId).map((block) => ({
+    const nextSnapshot = {
+      ...currentSnapshot,
+      lineDraftRowsByLineId: asArray(currentSnapshot.lineDraftRowsByLineId).map((block) => ({
         ...block,
         lineDraftRows: block.lineId === lineId
           ? asArray(block.lineDraftRows).map((item) => item?.id === trainId
@@ -1987,15 +1988,24 @@ export default function useTimetableController({ activeTransportMode, isActive, 
             : item)
           : asArray(block.lineDraftRows)
       }))
-    }));
-    setInputErrors((current) => Object.fromEntries(
-      Object.entries(current).filter(([key, value]) => !(key.startsWith(`${lineId}\u001f${trainId}\u001f`) && value === "dwell"))
-    ));
+    };
+    snapshotRef.current = nextSnapshot;
+    setSnapshot(nextSnapshot);
+    const layout = layouts[lineId]?.value;
+    const runtime = lineRuntime(runtimes, runtimeSources, lineId);
+    const lineErrors = collectLineDwellErrors(nextSnapshot, lineId, layout, runtime, directory);
+    setInputErrors((current) => {
+      const prefix = `${lineId}\u001f`;
+      const retained = Object.fromEntries(
+        Object.entries(current).filter(([key, value]) => !(key.startsWith(prefix) && value === "dwell"))
+      );
+      return { ...retained, ...lineErrors };
+    });
     setDirtyLineIds((current) => current.includes(lineId) ? current : [...current, lineId]);
     setSaveError("");
     setSaveState("dirty");
     return true;
-  }, [snapshot]);
+  }, [directory, layouts, runtimeSources, runtimes]);
 
   const clearLineDetails = useCallback((lineId) => {
     const rows = buildRows(snapshot, lineId);
@@ -2040,7 +2050,8 @@ export default function useTimetableController({ activeTransportMode, isActive, 
       setLoadError("run-time-closing-segment-required");
       return false;
     }
-    const rows = buildRows(snapshot, lineId);
+    const currentSnapshot = snapshotRef.current;
+    const rows = buildRows(currentSnapshot, lineId);
     const targets = trainId ? rows.filter((row) => row?.id === trainId) : rows;
     if (targets.length === 0) {
       setLoadError("timetable-batch-train-required");
@@ -2059,21 +2070,29 @@ export default function useTimetableController({ activeTransportMode, isActive, 
         timedStops: result.timedStops
       });
     }
-    setSnapshot((current) => {
-      const blocks = asArray(current.lineDraftRowsByLineId).map((block) => ({
-        ...block,
-        lineDraftRows: block.lineId === lineId
-          ? asArray(block.lineDraftRows).map((row) => replacements.get(row.id) || row)
-          : asArray(block.lineDraftRows)
-      }));
-      return { ...current, lineDraftRowsByLineId: blocks };
+    const blocks = asArray(currentSnapshot.lineDraftRowsByLineId).map((block) => ({
+      ...block,
+      lineDraftRows: block.lineId === lineId
+        ? asArray(block.lineDraftRows).map((row) => replacements.get(row.id) || row)
+        : asArray(block.lineDraftRows)
+    }));
+    const nextSnapshot = { ...currentSnapshot, lineDraftRowsByLineId: blocks };
+    snapshotRef.current = nextSnapshot;
+    setSnapshot(nextSnapshot);
+    const lineErrors = collectLineDwellErrors(nextSnapshot, lineId, layout, runtime, directory);
+    setInputErrors((current) => {
+      const prefix = `${lineId}\u001f`;
+      const retained = Object.fromEntries(
+        Object.entries(current).filter(([key, value]) => !(key.startsWith(prefix) && value === "dwell"))
+      );
+      return { ...retained, ...lineErrors };
     });
     setDirtyLineIds((current) => current.includes(lineId) ? current : [...current, lineId]);
     setLoadError("");
     setSaveError("");
     setSaveState("dirty");
     return true;
-  }, [directory, layouts, runtimeSources, runtimes, snapshot]);
+  }, [directory, layouts, minimumScheduleMinutes, runtimeSources, runtimes]);
 
   const saveAll = useCallback(async () => {
     if (!canSave) {

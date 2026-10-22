@@ -282,6 +282,23 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
     && !controller.saveError
     && !controller.loadError
     && ["clean", "applied"].includes(controller.saveState);
+  const listSeparator = t("nativeSchedule.message.summary.listSeparator");
+  const lineLimitLines = controller.saveError
+    ? controller.saveError.split("；")
+      .filter((err) => err.startsWith("line-limit-minimum|"))
+      .map((err) => {
+        const [, minimum, lineId, issue] = err.split("|");
+        const hold = t("nativeSchedule.topbar.holdMinutes");
+        const dwell = t("nativeSchedule.topbar.dwellMinutes");
+        return t("timetable.footer.lineLimitLine", {
+          line: controller.lineDirectory.find((line) => line.id === lineId)?.name || lineId,
+          item: issue === "hold" ? hold : issue === "dwell" ? dwell : `${hold}${listSeparator}${dwell}`,
+          minutes: minimum
+        });
+      })
+      .join(listSeparator)
+    : "";
+  const lineLimitNote = lineLimitLines ? t("timetable.footer.lineLimit", { lines: lineLimitLines }) : "";
 
   useEffect(() => {
     clearLineTimersRef.current.forEach((timer) => window.clearTimeout(timer));
@@ -1101,9 +1118,11 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
               : showFooterControlNote
                 ? t("timetable.footer.controlNote")
             : controller.saveError
-              ? debugToolsEnabled
-                ? `${t("timetable.footer.error")}：${controller.saveError}`
-                : t("timetable.footer.error")
+              ? lineLimitNote
+                ? lineLimitNote
+                : debugToolsEnabled
+                  ? `${t("timetable.footer.error")}：${controller.saveError}`
+                  : t("timetable.footer.error")
               : controller.loadError
                 ? t("timetable.footer.dataError")
                 : controller.saveState === "saving"
