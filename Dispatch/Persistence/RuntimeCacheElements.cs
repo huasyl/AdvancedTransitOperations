@@ -88,8 +88,11 @@ namespace RapidTransitMod
             writer.Write(m_ActiveStopOrder);
             writer.Write(m_StopCount);
             writer.Write(m_CanBypass);
-            writer.Write(m_ArrivalWaitMinutes);
-            writer.Write(m_ClockTicksPerDay);
+            if (m_Version != 1)
+            {
+                writer.Write(m_ArrivalWaitMinutes);
+                writer.Write(m_ClockTicksPerDay);
+            }
             if (m_Version >= 3)
                 writer.Write(m_MinimumStopMinutes);
         }

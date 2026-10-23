@@ -1,12 +1,3 @@
-// fix: IsSlotExpired 无法覆盖大幅过期班次，Holding 车卡死；调度器未过滤过期槽；Running->Idle 未清 targetMinute；新线路不产车；UI 标签残留；关闭线路无效；始发站压队
-// - IsSlotExpired 上限由 SLOT_INTERVAL_MINUTES(30) 改为 SPAWN_LEAD_MINUTES + SLOT_GRACE_MINUTES(64)，覆盖所有真过期场景
-// - Holding 过期处理细分：overdue > SLOT_INTERVAL_MINUTES 直接回库，否则释放槽等重新分配
-// - 调度器槽扫描入口加 IsSlotExpired 检查，过期槽直接跳过不参与分配
-// - Running->Idle 时清理旧的 targetMinute，防止旧槽值残留导致下帧直接 Idle->Holding 绕过调度保护
-// - PuppetMaster：D=0 时改用 iDefault 兜底；每帧清理 m_SpawningLines 中已不存在的线路 Entity 记录
-// - 注册新车时清理 m_UICache，防止旧线路缓存导致 SetUILabel 去重跳过、UI 标签不刷新
-// - m_LineQuery 加 Disabled 过滤，关闭线路后调度器停止处理，现有车跑完当前圈自然 Idle 超时回库
-// - 新增末端入站标签：车进入最后一个 waypoint 时打标签，Idle->Holding 前检查本线路有无标签车距始发站 <= 350 米，有则回库疏解
 
 using System;
 using System.Collections.Generic;
@@ -2919,23 +2910,26 @@ namespace RapidTransitMod
         {
             if (context.purpose == Purpose.SaveGame)
                 Broadcasting.AssetLifecycle.Instance?.CaptureSave(m_AnnouncementWorkbench?.State);
-            try
+            if (m_SystemReady)
             {
-                m_VehicleCache?.Ensure();
-                m_VehicleCache?.Save();
-            }
-            catch (Exception ex)
-            {
-                log.Info("[VehicleCache] Save failed -> " + ex.GetType().Name + ": " + ex.Message);
-            }
-            try
-            {
-                if (m_ObsBuffers != null && !m_ObsBuffers.SaveSnapshot())
-                    log.Info("[ObservationPersistence] SaveSnapshot returned false");
-            }
-            catch (Exception ex)
-            {
-                log.Info("[ObservationPersistence] SaveSnapshot failed -> " + ex.GetType().Name + ": " + ex.Message);
+                try
+                {
+                    m_VehicleCache?.Ensure();
+                    m_VehicleCache?.Save();
+                }
+                catch (Exception ex)
+                {
+                    log.Info("[VehicleCache] Save failed -> " + ex.GetType().Name + ": " + ex.Message);
+                }
+                try
+                {
+                    if (m_ObsBuffers != null && !m_ObsBuffers.SaveSnapshot())
+                        log.Info("[ObservationPersistence] SaveSnapshot returned false");
+                }
+                catch (Exception ex)
+                {
+                    log.Info("[ObservationPersistence] SaveSnapshot failed -> " + ex.GetType().Name + ": " + ex.Message);
+                }
             }
             try
             {
