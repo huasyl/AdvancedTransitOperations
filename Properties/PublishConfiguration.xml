@@ -166,7 +166,7 @@ ATO 只向存档写入自身的配置和运行数据，不会永久修改原版�
   <!--Link to the forum post where the mod can be discussed-->
   <ForumLink Value="https://forum.paradoxplaza.com/forum/threads/advanced-transit-operations.1932870/" />
   <!--Version of the mod-->
-  <ModVersion Value="0.5.0" />
+  <ModVersion Value="0.5.1" />
   <!--Recommended version of the base game to use the mod-->
   <GameVersion Value="1.6.*" />
   <!--Dependency for the mod, can be set multiple times-->
@@ -177,19 +177,24 @@ ATO 只向存档写入自身的配置和运行数据，不会永久修改原版�
   <ChangeLog>
 ## New Features
 
-- Overhauled the passenger statistics system with a redesigned interface. You can now view statistics by time period and trip purpose, including segment load factors, waiting passengers, station boardings and alightings, and transfer flows.
-- Tram stops within 200 meters of each other will now be grouped together for passenger statistics if they share the same custom station name.
-- Added future signal status display for vehicles with Signal Priority enabled.
-- The minimum time value for scheduling-related settings can now be reduced to 1 minute. This option can be enabled in Settings.
+- Added compatibility with First Person Camera Continued. Signal priority status and other information can now be displayed in first-person view, and broadcasts now play based on the vehicle you are riding.
 
 ## Improvements
 
-- Improved broadcast audio deletion. Unused audio files imported in previous versions can now be deleted from disk through Settings.
+- Improved some UI features.
+- Improved mod stability.
 
 ## Bug Fixes
 
-- Fixed an issue where trams could still request signal priority ahead for a short period after arriving at a stop.
-- Fixed an issue where broadcast data could retain references to invalid stations, preventing associated audio files from being deleted.
+- Fixed an issue where buses finishing boarding at the origin stop could occasionally be misjudged as departing abnormally, causing the same trip to be assigned to another vehicle.
+- Fixed an issue where different transport modes sharing the same station, such as trains and subways, could cause false headway conflicts when applying per-stop schedules.
+- Fixed an issue where saving immediately after loading a save could clear vehicle dispatch progress and actual operation data.
+- Fixed an issue where some feature toggles were reset after loading a save.
+- Fixed an issue where bus segment travel time history was not restored when loading a save again in the same game session.
+- Fixed an issue where per-stop schedules could be lost after loading a save in certain cases.
+- Fixed some compatibility issues with Realistic Trips.
+- Fixed an issue where, in cities with an extremely large number of trips, actual data could fail to be saved and the Run Chart could show actual data as incomplete.
+- Fixed an issue where batch setting trips in the Run Chart could get stuck on Preparing.
   </ChangeLog>
   <!--External link, can be set multiple times. supported types are "discord", "github", "youtube", "twitch", "x", "paypal", "patreon", "buymeacoffee", "kofi", "crowdin", "gitlab", "gofundme"-->
   <ExternalLink Type="github" Url="https://github.com/huasyl/AdvancedTransitOperations" />
