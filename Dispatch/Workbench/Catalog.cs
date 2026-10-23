@@ -212,6 +212,11 @@ namespace RapidTransitMod.Dispatch.Workbench
         internal List<DispatchWorkbenchStationDto> Stations(Entity line)
         {
             List<DispatchWorkbenchStationDto> stations = new List<DispatchWorkbenchStationDto>();
+            if (!m_EntityManager.HasBuffer<RouteWaypoint>(line))
+            {
+                return stations;
+            }
+
             DynamicBuffer<RouteWaypoint> waypoints = m_EntityManager.GetBuffer<RouteWaypoint>(line, true);
             float cumulativeDistance = 0f;
             float3 previousPosition = float3.zero;

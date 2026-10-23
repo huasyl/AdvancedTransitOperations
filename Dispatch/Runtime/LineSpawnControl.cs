@@ -158,6 +158,7 @@ namespace RapidTransitMod
             if (!EntityManager.HasComponent<PrefabRef>(line)) return;
             Entity prefab = EntityManager.GetComponentData<PrefabRef>(line).m_Prefab;
             if (!EntityManager.HasComponent<TransportLineData>(prefab)) return;
+            EntityManager.CompleteDependencyBeforeRW<RouteModifier>();
             if (!modBuffers.TryGetBuffer(line, out DynamicBuffer<RouteModifier> mods)) return;
 
             TransportLineData lineData = EntityManager.GetComponentData<TransportLineData>(prefab);

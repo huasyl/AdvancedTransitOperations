@@ -1282,6 +1282,7 @@ namespace RapidTransitMod.PassengerFlow
             ComponentLookup<PrefabRef> prefabs = GetComponentLookup<PrefabRef>(true);
             ComponentLookup<PublicTransportVehicleData> publicTransportVehicles = GetComponentLookup<PublicTransportVehicleData>(true);
             ComponentLookup<Game.Creatures.Pet> pets = GetComponentLookup<Game.Creatures.Pet>(true);
+            Dependency.Complete();
             int currentCapacity = Math.Max(1, EstimateCurrentPassengerCapacity(requests, passengerBuffers, layoutBuffers));
             NativeParallelMultiHashMap<int, Entity> currentPassengers =
                 new NativeParallelMultiHashMap<int, Entity>(currentCapacity, Allocator.TempJob);

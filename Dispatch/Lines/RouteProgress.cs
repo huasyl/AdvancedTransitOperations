@@ -85,6 +85,8 @@ namespace RapidTransitMod.Dispatch.Lines
 
             PathInformation pathInfo = m_Runtime.EntityManager.GetComponentData<PathInformation>(vehicle);
             if (!m_Runtime.EntityManager.HasComponent<Waypoint>(pathInfo.m_Destination)
+                || !m_Runtime.EntityManager.HasComponent<Owner>(pathInfo.m_Destination)
+                || m_Runtime.EntityManager.GetComponentData<Owner>(pathInfo.m_Destination).m_Owner != currentRoute.m_Route
                 || !m_Runtime.EntityManager.HasBuffer<RouteSegment>(currentRoute.m_Route))
             {
                 return false;
@@ -96,7 +98,7 @@ namespace RapidTransitMod.Dispatch.Lines
                 return false;
 
             nextWaypointIndex = destinationWp.m_Index;
-            int index = math.select(nextWaypointIndex - 1, routeSegments.Length - 1, nextWaypointIndex == 0);
+            int index = nextWaypointIndex == 0 ? routeSegments.Length - 1 : nextWaypointIndex - 1;
             RouteSegment routeSegment = routeSegments[index];
             if (!m_Runtime.EntityManager.HasBuffer<PathElement>(routeSegment.m_Segment))
                 return false;
