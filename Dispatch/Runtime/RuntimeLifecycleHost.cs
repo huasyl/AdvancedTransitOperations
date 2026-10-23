@@ -76,9 +76,9 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_StableFrameCount = 0;
             m_Runtime.m_LastVehicleCount = -1;
             m_Runtime.m_AnnouncementWorkbench.Reset();
+            m_Runtime.m_WorkbenchBridge.Reset();
             m_Runtime.m_OverviewFeatureSettingsPersist.Reset();
             m_Runtime.m_OverviewFeatureSettingsPersist.Restore();
-            m_Runtime.m_WorkbenchBridge.Reset();
 
             // 阶段 C: Applied buffer 恢复 vs 字符串 draft，按 buffer 是否存在分流。
             Entity city = m_Runtime.m_CitySystem.City;
@@ -343,6 +343,8 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_Obs.Clear();
             m_Runtime.m_TraversalSliceObservationBufferReady = false;
             m_Runtime.m_TraversalSliceObservationCacheLoaded = false;
+            m_Runtime.m_BusSegObservationBufferReady = false;
+            m_Runtime.m_BusSegObservationCacheLoaded = false;
             m_Runtime.m_JustLaunched.Clear();
             m_Runtime.m_RuntimeEngine.ClearAssistLaunchPending();
             m_Runtime.m_Bypass.ClearAll();
