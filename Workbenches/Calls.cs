@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using cohtml.Net;
 using Game;
 using Game.SceneFlow;
@@ -8,52 +7,34 @@ namespace RapidTransitMod.Workbenches
 {
     internal static class Calls
     {
-        private static readonly List<BoundEventHandle> Handles = new List<BoundEventHandle>();
-
         internal static bool Bind()
         {
             try
             {
-                Unbind();
-                return BindDispatch()
-                    && BindHost()
-                    && BindBroadcast()
-                    && BindPassengerFlow()
-                    && BindOverview()
-                    && BindPlanner()
-                    && BindLocale();
+                var view = GameManager.instance.userInterface.view.View;
+                if (!view.IsReadyForBindings())
+                {
+                    return false;
+                }
+                BindDispatch(view);
+                BindHost(view);
+                BindBroadcast(view);
+                BindPassengerFlow(view);
+                BindOverview(view);
+                BindPlanner(view);
+                BindLocale(view);
+                return true;
             }
             catch (Exception ex)
             {
                 Mod.log.Info("DispatchWorkbench API binding failed: " + ex.GetType().Name + ": " + ex.Message);
-                Unbind();
                 return false;
             }
         }
 
-        internal static void Unbind()
-        {
-            var view = GameManager.instance?.userInterface?.view?.View;
-            if (view != null)
-            {
-                for (int i = 0; i < Handles.Count; i++)
-                {
-                    try
-                    {
-                        view.UnbindCall(Handles[i]);
-                    }
-                    catch
-                    {
-                    }
-                }
-            }
-
-            Handles.Clear();
-        }
-
         private static void Bind(View view, string name, Delegate handler)
         {
-            Handles.Add(view.BindCall(name, handler));
+            view.BindCall(name, handler);
         }
 
         internal static string Load(string requestJson)
@@ -95,14 +76,8 @@ namespace RapidTransitMod.Workbenches
                 + "}";
         }
 
-        private static bool BindDispatch()
+        private static void BindDispatch(View view)
         {
-            var view = GameManager.instance?.userInterface?.view?.View;
-            if (view == null)
-            {
-                return false;
-            }
-
             Bind(view, ApiHost.Prefix + "loadSnapshot", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.Load));
             Bind(view, ApiHost.Prefix + "refreshSnapshot", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.Refresh));
             Bind(view, ApiHost.Prefix + "refreshMetadata", new Func<string, string>(global::RapidTransitMod.Workbenches.TransitCatalog.RefreshMetadata));
@@ -126,29 +101,15 @@ namespace RapidTransitMod.Workbenches
             Bind(view, ApiHost.Prefix + "loadMonitorAverageState", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.MonitorAverageState));
             Bind(view, ApiHost.Prefix + "queryMonitorAverage", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.QueryMonitorAverage));
             Bind(view, ApiHost.Prefix + "setMonitorSubscription", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.SetMonitorSubscription));
-            return true;
         }
 
-        private static bool BindHost()
+        private static void BindHost(View view)
         {
-            var view = GameManager.instance?.userInterface?.view?.View;
-            if (view == null)
-            {
-                return false;
-            }
-
             Bind(view, ApiHost.Prefix + "getBuildFlavor", new Func<string>(BuildFlavorJson));
-            return true;
         }
 
-        private static bool BindBroadcast()
+        private static void BindBroadcast(View view)
         {
-            var view = GameManager.instance?.userInterface?.view?.View;
-            if (view == null)
-            {
-                return false;
-            }
-
             Bind(view, ApiHost.Prefix + "loadBroadcastSnapshot", new Func<string, string>(global::RapidTransitMod.Broadcasting.WorkbenchBackend.Api.Load));
             Bind(view, ApiHost.Prefix + "refreshBroadcastSnapshot", new Func<string, string>(global::RapidTransitMod.Broadcasting.WorkbenchBackend.Api.Refresh));
             Bind(view, ApiHost.Prefix + "loadBroadcastBindingSlotHints", new Func<string, string>(global::RapidTransitMod.Broadcasting.WorkbenchBackend.Api.Hints));
@@ -171,62 +132,33 @@ namespace RapidTransitMod.Workbenches
             Bind(view, ApiHost.Prefix + "setBroadcastPreviewVolume", new Func<string, string>(global::RapidTransitMod.Broadcasting.WorkbenchBackend.Api.Volume));
             Bind(view, ApiHost.Prefix + "startBroadcastApplyOperation", new Func<string, string>(global::RapidTransitMod.Broadcasting.WorkbenchBackend.Api.StartApply));
             Bind(view, ApiHost.Prefix + "getBroadcastApplyOperationStatus", new Func<string, string>(global::RapidTransitMod.Broadcasting.WorkbenchBackend.Api.ApplyStatus));
-            return true;
         }
 
-        private static bool BindPlanner()
+        private static void BindPlanner(View view)
         {
-            var view = GameManager.instance?.userInterface?.view?.View;
-            if (view == null)
-            {
-                return false;
-            }
-
             Bind(view, ApiHost.Prefix + "loadPlannerContext", new Func<string, string>(Load));
             Bind(view, ApiHost.Prefix + "exportPlannerInput", new Func<string, string>(Load));
             Bind(view, ApiHost.Prefix + "startPlannerJob", new Func<string, string>(Start));
             Bind(view, ApiHost.Prefix + "getPlannerJobStatus", new Func<string, string>(Status));
             Bind(view, ApiHost.Prefix + "runPlanner", new Func<string, string>(Run));
             Bind(view, ApiHost.Prefix + "getObservationSnapshot", new Func<string>(Observe));
-            return true;
         }
 
-        private static bool BindPassengerFlow()
+        private static void BindPassengerFlow(View view)
         {
-            var view = GameManager.instance?.userInterface?.view?.View;
-            if (view == null)
-            {
-                return false;
-            }
-
             Bind(view, ApiHost.Prefix + "loadPassengerFlowSnapshot", new Func<string, string>(global::RapidTransitMod.PassengerFlow.Api.Load));
-            return true;
         }
 
-        private static bool BindOverview()
+        private static void BindOverview(View view)
         {
-            var view = GameManager.instance?.userInterface?.view?.View;
-            if (view == null)
-            {
-                return false;
-            }
-
             Bind(view, ApiHost.Prefix + "loadOverviewSnapshot", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.Overview));
             Bind(view, ApiHost.Prefix + "startOverviewFeatureSettingsOperation", new Func<string, string>(global::RapidTransitMod.Overview.FeatureSettingsApi.Start));
             Bind(view, ApiHost.Prefix + "getOverviewFeatureSettingsOperationStatus", new Func<string, string>(global::RapidTransitMod.Overview.FeatureSettingsApi.Status));
-            return true;
         }
 
-        private static bool BindLocale()
+        private static void BindLocale(View view)
         {
-            var view = GameManager.instance?.userInterface?.view?.View;
-            if (view == null)
-            {
-                return false;
-            }
-
             Bind(view, ApiHost.Prefix + "getLocale", new Func<string>(Locale));
-            return true;
         }
     }
 }

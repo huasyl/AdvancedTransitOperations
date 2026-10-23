@@ -78,12 +78,7 @@ namespace RapidTransitMod.Workbenches
 
         private static void Push(string eventName, string payload, string errorPrefix)
         {
-            var view = GameManager.instance?.userInterface?.view?.View;
-            if (view == null)
-            {
-                return;
-            }
-
+            var view = GameManager.instance.userInterface.view.View;
             try
             {
                 if (view.IsReadyForBindings())

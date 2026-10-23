@@ -48,8 +48,6 @@ namespace RapidTransitMod.Workbenches
 
         internal static void Dispose()
         {
-            Calls.Unbind();
-
             if (ObservedView != null)
             {
                 ObservedView.Listener.ReadyForBindings -= OnReadyForBindings;
@@ -61,14 +59,6 @@ namespace RapidTransitMod.Workbenches
             CallsReady = false;
         }
 
-        internal static void RebindNow()
-        {
-            CallsReady = false;
-            Host();
-            ObserveView();
-            Bind();
-        }
-
         private static void Host()
         {
             if (HostReady || string.IsNullOrWhiteSpace(Root))
@@ -76,24 +66,19 @@ namespace RapidTransitMod.Workbenches
                 return;
             }
 
-            var uiSystem = GameManager.instance?.userInterface?.view?.uiSystem;
-            if (uiSystem == null)
-            {
-                return;
-            }
-
+            var uiSystem = GameManager.instance.userInterface.view.uiSystem;
             uiSystem.AddHostLocation(
                 HostKey,
                 new HashSet<(string, int)> { (Root, 0) },
-                true);
+                false);
             HostReady = true;
             Mod.log.Info("DispatchWorkbench host location registered.");
         }
 
         private static void ObserveView()
         {
-            var view = GameManager.instance?.userInterface?.view;
-            if (view == null || ReferenceEquals(view, ObservedView))
+            var view = GameManager.instance.userInterface.view;
+            if (ReferenceEquals(view, ObservedView))
             {
                 return;
             }

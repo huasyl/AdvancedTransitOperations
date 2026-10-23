@@ -881,22 +881,10 @@ const RapidTransitWorkbenchBundleHost = (props) => {
       ? "Reload Bundle"
       : action === "remount"
         ? "Remount"
-        : action === "rebind"
-          ? "Rebind API"
-          : "Refresh Data";
+        : "Refresh Data";
     setBusyAction(nextBusyLabel);
 
     try {
-      if (action === "rebind") {
-        trigger("RapidTransitPanel", "requestWorkbenchApiRebind");
-        setStatus({
-          tone: "success",
-          text: "Rebind API requested."
-        });
-        traceNativeWorkbench("bundle.action.done", { action });
-        return;
-      }
-
       if (action === "refresh") {
         const bundleState = await ensureNativeWorkbenchPersistentBundle({
           forceReload: false,
@@ -1004,21 +992,6 @@ const RapidTransitWorkbenchBundleHost = (props) => {
             "Dispatch Workbench"
         )
       ),
-        React.createElement(
-          "button",
-          {
-            type: "button",
-            onClick: () => runBundleAction("rebind"),
-            disabled: !!busyAction,
-            style: Object.assign({}, buttonBaseStyle, {
-              marginRight: "6px",
-              border: "1px solid rgba(238,204,134,0.34)",
-              background: "rgba(157,113,46,0.52)",
-              color: "#fff2cf"
-            })
-          },
-          busyAction === "Rebind API" ? "Rebinding..." : "Rebind API"
-        ),
         React.createElement(
           "button",
           {
