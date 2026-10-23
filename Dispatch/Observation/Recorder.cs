@@ -11,7 +11,7 @@ namespace RapidTransitMod.Dispatch.Observation
 {
     internal sealed class Recorder
     {
-        private const int MaxTripsPerDate = 4096;
+        private const int MaxTripsPerDate = 8192;
         private const int MaxActiveTrips = 1024;
         private const int MaxStopsPerTrip = 256;
         private readonly Port m_Port;
@@ -64,7 +64,7 @@ namespace RapidTransitMod.Dispatch.Observation
             endedKey = string.Empty;
             if (row.Stops != null && row.Stops.Length > MaxStopsPerTrip)
             {
-                NoteOverflow("trip-stop-capacity");
+                NoteOverflow("trip-stop-capacity", ScheduleClock.DateKey(ScheduleClock.ServiceDate(clock, row.SlotMinute)));
                 return string.Empty;
             }
             if (!ValidRow(line, row) || vehicle == Entity.Null)
@@ -95,7 +95,7 @@ namespace RapidTransitMod.Dispatch.Observation
 
             if (m_Store.ActiveTrips.Count >= MaxActiveTrips)
             {
-                NoteOverflow("active-trip-capacity");
+                NoteOverflow("active-trip-capacity", serviceDateKey);
                 return string.Empty;
             }
 
@@ -123,7 +123,7 @@ namespace RapidTransitMod.Dispatch.Observation
         {
             if (row.Stops != null && row.Stops.Length > MaxStopsPerTrip)
             {
-                NoteOverflow("trip-stop-capacity");
+                NoteOverflow("trip-stop-capacity", ScheduleClock.DateKey(serviceDate));
                 return string.Empty;
             }
             if (!ValidRow(line, row))
@@ -315,20 +315,14 @@ namespace RapidTransitMod.Dispatch.Observation
 
         internal IEnumerable<MonitorDateSlot> MonitorDateSlots => m_Store.DateSlots.Values;
 
-        internal bool MonitorOverflowed => m_Store.MonitorOverflowed;
-
         internal string MonitorOverflowReason => m_Store.MonitorOverflowReason;
 
-        internal int MonitorOverflowCount => m_Store.MonitorOverflowCount;
+        internal bool MonitorDataComplete(int dateKey) =>
+            !m_Store.DateSlots.TryGetValue(dateKey, out MonitorDateSlot slot) || !slot.Overflowed;
 
-        internal bool MonitorDataComplete => !m_Store.MonitorOverflowed;
-
-        internal int MonitorDroppedTripCount =>
-            m_Store.MonitorOverflowed ? m_Store.MonitorOverflowCount : 0;
+        internal bool AnyMonitorDateOverflowed => m_Store.DateSlots.Values.Any(slot => slot.Overflowed);
 
         internal string MonitorIssueCode => m_Store.MonitorIssueCode;
-
-        internal int MonitorIssueCount => m_Store.MonitorIssueCount;
 
         internal bool MonitorClaimsRestored => m_Store.MonitorClaimsRestored;
 
@@ -366,7 +360,7 @@ namespace RapidTransitMod.Dispatch.Observation
                 || trip.Stops.Count > MaxStopsPerTrip)
             {
                 if (trip != null && trip.Stops.Count > MaxStopsPerTrip)
-                    NoteOverflow("trip-stop-capacity");
+                    NoteOverflow("trip-stop-capacity", trip.ServiceDateKey);
                 return false;
             }
 
@@ -380,7 +374,7 @@ namespace RapidTransitMod.Dispatch.Observation
                     return false;
                 if (m_Store.ActiveTrips.Count >= MaxActiveTrips)
                 {
-                    NoteOverflow("active-trip-capacity");
+                    NoteOverflow("active-trip-capacity", trip.ServiceDateKey);
                     return false;
                 }
                 m_Store.ActiveTrips[trip.Vehicle] = trip;
@@ -401,11 +395,8 @@ namespace RapidTransitMod.Dispatch.Observation
             m_Store.ActiveTrips.Clear();
             m_Store.DateSlots.Clear();
             m_Store.MonitorCurrentDateKey = 0;
-            m_Store.MonitorOverflowed = false;
             m_Store.MonitorOverflowReason = string.Empty;
-            m_Store.MonitorOverflowCount = 0;
             m_Store.MonitorIssueCode = string.Empty;
-            m_Store.MonitorIssueCount = 0;
             m_Store.MonitorClaims.Clear();
             m_Store.VehicleMonitorClaims.Clear();
             m_Store.MonitorClaimsRestored = false;
@@ -579,37 +570,37 @@ namespace RapidTransitMod.Dispatch.Observation
                 return false;
             if (!m_Store.DateSlots.TryGetValue(trip.ServiceDateKey, out MonitorDateSlot slot))
             {
-                NoteOverflow("expired-date-slot");
+                NoteOverflow("expired-date-slot", trip.ServiceDateKey);
                 return false;
             }
             if (!slot.Trips.ContainsKey(trip.Key) && slot.Trips.Count >= MaxTripsPerDate)
             {
-                NoteOverflow("date-trip-capacity");
+                NoteOverflow("date-trip-capacity", trip.ServiceDateKey);
                 return false;
             }
             return true;
         }
 
-        private void NoteOverflow(string reason)
+        internal void MarkAllMonitorDatesOverflowed()
         {
-            m_Store.MonitorOverflowed = true;
+            foreach (MonitorDateSlot slot in m_Store.DateSlots.Values)
+                slot.Overflowed = true;
+        }
+
+        private void NoteOverflow(string reason, int dateKey)
+        {
+            if (m_Store.DateSlots.TryGetValue(dateKey, out MonitorDateSlot slot))
+                slot.Overflowed = true;
             m_Store.MonitorOverflowReason = reason ?? string.Empty;
-            if (m_Store.MonitorOverflowCount < int.MaxValue)
-                m_Store.MonitorOverflowCount++;
             m_Store.MonitorIssueCode = m_Store.MonitorOverflowReason;
-            if (m_Store.MonitorIssueCount < int.MaxValue)
-                m_Store.MonitorIssueCount++;
             m_Port.Log("[ServiceMonitorOverflow] reason=" + m_Store.MonitorOverflowReason
-                + " count=" + m_Store.MonitorOverflowCount);
+                + " date=" + dateKey);
         }
 
         private void NoteIssue(string reason)
         {
             m_Store.MonitorIssueCode = reason ?? string.Empty;
-            if (m_Store.MonitorIssueCount < int.MaxValue)
-                m_Store.MonitorIssueCount++;
-            m_Port.Log("[ServiceMonitorIssue] reason=" + m_Store.MonitorIssueCode
-                + " count=" + m_Store.MonitorIssueCount);
+            m_Port.Log("[ServiceMonitorIssue] reason=" + m_Store.MonitorIssueCode);
         }
 
         private static int EventMinute(ClockSnapshot clock, DateTime serviceDate)
@@ -1423,7 +1414,7 @@ namespace RapidTransitMod.Dispatch.Observation
 
         private string MonitorSnapshotStatus(string normalStatus)
         {
-            return m_Store.MonitorOverflowed ? "overflow" : normalStatus;
+            return AnyMonitorDateOverflowed ? "overflow" : normalStatus;
         }
 
         private TripDto BuildMonitorTripDto(MonitorTrip trip)

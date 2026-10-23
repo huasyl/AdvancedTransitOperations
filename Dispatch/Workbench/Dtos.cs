@@ -936,13 +936,9 @@ namespace RapidTransitMod
         [DataMember]
         public bool dataComplete;
         [DataMember]
-        public int droppedTripCount;
-        [DataMember]
         public bool persistenceHealthy;
         [DataMember]
         public string lastIssueCode;
-        [DataMember]
-        public int issueCount;
         [DataMember]
         public int serviceDateKey;
         [DataMember]
@@ -1008,13 +1004,9 @@ namespace RapidTransitMod
         [DataMember]
         public bool dataComplete;
         [DataMember]
-        public int droppedTripCount;
-        [DataMember]
         public bool persistenceHealthy;
         [DataMember]
         public string lastIssueCode;
-        [DataMember]
-        public int issueCount;
         [DataMember]
         public DispatchWorkbenchMonitorTripHeaderDto header;
         [DataMember]

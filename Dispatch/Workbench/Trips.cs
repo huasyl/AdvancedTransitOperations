@@ -13,40 +13,32 @@ namespace RapidTransitMod.Dispatch.Workbench
         private readonly Func<IEnumerable<MonitorTrip>> m_ActiveTrips;
         private readonly Func<IEnumerable<MonitorDateSlot>> m_DateSlots;
         private readonly Func<int, string> m_Slot;
-        private readonly Func<bool> m_DataComplete;
-        private readonly Func<int> m_DroppedTripCount;
+        private readonly Func<int, bool> m_DataComplete;
         private readonly Func<bool> m_PersistenceHealthy;
         private readonly Func<string> m_LastIssueCode;
-        private readonly Func<int> m_IssueCount;
 
         internal TripPort(
             Func<IEnumerable<MonitorTrip>> activeTrips,
             Func<IEnumerable<MonitorDateSlot>> dateSlots,
             Func<int, string> slot,
-            Func<bool> dataComplete = null,
-            Func<int> droppedTripCount = null,
+            Func<int, bool> dataComplete = null,
             Func<bool> persistenceHealthy = null,
-            Func<string> lastIssueCode = null,
-            Func<int> issueCount = null)
+            Func<string> lastIssueCode = null)
         {
             m_ActiveTrips = activeTrips ?? throw new ArgumentNullException(nameof(activeTrips));
             m_DateSlots = dateSlots ?? throw new ArgumentNullException(nameof(dateSlots));
             m_Slot = slot ?? throw new ArgumentNullException(nameof(slot));
-            m_DataComplete = dataComplete ?? (() => true);
-            m_DroppedTripCount = droppedTripCount ?? (() => 0);
+            m_DataComplete = dataComplete ?? (_ => true);
             m_PersistenceHealthy = persistenceHealthy ?? (() => true);
             m_LastIssueCode = lastIssueCode ?? (() => string.Empty);
-            m_IssueCount = issueCount ?? (() => 0);
         }
 
         internal IEnumerable<MonitorTrip> ActiveTrips() => m_ActiveTrips();
         internal IEnumerable<MonitorDateSlot> DateSlots() => m_DateSlots();
         internal string Slot(int minute) => minute < 0 ? null : m_Slot(minute % 1440);
-        internal bool DataComplete() => m_DataComplete();
-        internal int DroppedTripCount() => m_DroppedTripCount();
+        internal bool DataComplete(int dateKey) => m_DataComplete(dateKey);
         internal bool PersistenceHealthy() => m_PersistenceHealthy();
         internal string LastIssueCode() => m_LastIssueCode() ?? string.Empty;
-        internal int IssueCount() => m_IssueCount();
     }
 
     internal sealed class Trips
@@ -162,11 +154,9 @@ namespace RapidTransitMod.Dispatch.Workbench
                     ? string.Empty
                     : "monitor-list-day-offset-and-line-required",
                 hasLineTrips = hasLineTrips,
-                dataComplete = m_Port.DataComplete(),
-                droppedTripCount = Math.Max(0, m_Port.DroppedTripCount()),
+                dataComplete = m_Port.DataComplete(serviceDateKey),
                 persistenceHealthy = m_Port.PersistenceHealthy(),
                 lastIssueCode = m_Port.LastIssueCode(),
-                issueCount = Math.Max(0, m_Port.IssueCount()),
                 serviceDateKey = serviceDateKey,
                 currentServiceDateKey = currentServiceDateKey,
                 nowMinute = clock.NowMinute,
@@ -225,11 +215,9 @@ namespace RapidTransitMod.Dispatch.Workbench
                         ? "monitor-detail-trip-key-required"
                         : "trip-not-found")
                     : null,
-                dataComplete = m_Port.DataComplete(),
-                droppedTripCount = Math.Max(0, m_Port.DroppedTripCount()),
+                dataComplete = found == null || m_Port.DataComplete(found.ServiceDateKey),
                 persistenceHealthy = m_Port.PersistenceHealthy(),
-                lastIssueCode = m_Port.LastIssueCode(),
-                issueCount = Math.Max(0, m_Port.IssueCount())
+                lastIssueCode = m_Port.LastIssueCode()
             };
             if (found == null)
             {

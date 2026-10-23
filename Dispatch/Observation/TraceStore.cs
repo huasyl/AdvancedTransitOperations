@@ -34,15 +34,9 @@ namespace RapidTransitMod.Dispatch.Observation
 
         internal int MonitorCurrentDateKey { get; set; }
 
-        internal bool MonitorOverflowed { get; set; }
-
         internal string MonitorOverflowReason { get; set; } = string.Empty;
 
-        internal int MonitorOverflowCount { get; set; }
-
         internal string MonitorIssueCode { get; set; } = string.Empty;
-
-        internal int MonitorIssueCount { get; set; }
 
         internal bool MonitorClaimsRestored { get; set; }
 
@@ -63,11 +57,8 @@ namespace RapidTransitMod.Dispatch.Observation
             MonitorClaims.Clear();
             VehicleMonitorClaims.Clear();
             MonitorCurrentDateKey = 0;
-            MonitorOverflowed = false;
             MonitorOverflowReason = string.Empty;
-            MonitorOverflowCount = 0;
             MonitorIssueCode = string.Empty;
-            MonitorIssueCount = 0;
             MonitorClaimsRestored = false;
         }
 

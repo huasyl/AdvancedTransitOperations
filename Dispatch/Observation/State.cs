@@ -109,6 +109,7 @@ namespace RapidTransitMod.Dispatch.Observation
     internal sealed class MonitorDateSlot
     {
         public int DateKey;
+        public bool Overflowed;
         public readonly Dictionary<string, MonitorTrip> Trips =
             new Dictionary<string, MonitorTrip>(StringComparer.Ordinal);
     }

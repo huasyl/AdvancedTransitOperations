@@ -1232,9 +1232,7 @@ export default function useTimetableController({ activeTransportMode, isActive, 
         hasRangeTrips: tripKeys.length > 0,
         dataComplete: headers.dataComplete,
         persistenceHealthy: headers.persistenceHealthy,
-        droppedTripCount: headers.droppedTripCount,
         lastIssueCode: headers.lastIssueCode,
-        issueCount: headers.issueCount,
         headers: Object.fromEntries(asArray(headers.trips).map((trip) => [trip.tripKey, trip])),
         details: {}
       };

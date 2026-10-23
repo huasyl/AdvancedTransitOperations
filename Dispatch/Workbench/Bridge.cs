@@ -306,10 +306,8 @@ namespace RapidTransitMod.Dispatch.Workbench
                     () => m_Runtime.m_Observation.MonitorDateSlots,
                     Time.Slot,
                     MonitorDataComplete,
-                    () => m_Runtime.m_ObsRecorder?.MonitorDroppedTripCount ?? 0,
                     MonitorPersistenceHealthy,
-                    MonitorIssueCode,
-                    () => m_Runtime.m_ObsRecorder?.MonitorIssueCount ?? 0));
+                    MonitorIssueCode));
             return m_Trips;
         }
 
@@ -319,10 +317,10 @@ namespace RapidTransitMod.Dispatch.Workbench
                 && m_Runtime.m_Observation.MonitorPersistenceHealthy;
         }
 
-        private bool MonitorDataComplete()
+        private bool MonitorDataComplete(int dateKey)
         {
             return m_Runtime.m_ObsRecorder != null
-                && m_Runtime.m_ObsRecorder.MonitorDataComplete;
+                && m_Runtime.m_ObsRecorder.MonitorDataComplete(dateKey);
         }
 
         private string MonitorIssueCode()

@@ -20,7 +20,7 @@ namespace RapidTransitMod.Dispatch.Observation
         private const int MonitorTripVersion = 4;
         private const int MonitorAverageVersion = 2;
         private const int MaxMonitorDateSlots = 2;
-        private const int MaxMonitorTripsPerDate = 4096;
+        private const int MaxMonitorTripsPerDate = 8192;
         private const int MaxMonitorActiveTrips = 1024;
         private const int MaxMonitorTrips = MaxMonitorTripsPerDate * 2 + MaxMonitorActiveTrips;
         private const int MaxMonitorStops = MaxMonitorTrips * 256;
@@ -29,6 +29,7 @@ namespace RapidTransitMod.Dispatch.Observation
         private readonly ModRuntimeHostSystem m_Runtime;
         private bool m_MonitorPersistenceHealthy = true;
         private bool m_IgnoreLegacyMonitor;
+        private bool m_MonitorLoadIncomplete;
 
         public Buffers(ModRuntimeHostSystem runtime)
         {
@@ -129,6 +130,7 @@ namespace RapidTransitMod.Dispatch.Observation
                 return;
             }
             m_Runtime.m_ObsRecorder.ClearMonitor();
+            m_MonitorLoadIncomplete = false;
             DynamicBuffer<MonitorDateSlotElement> slots =
                 m_Runtime.EntityManager.GetBuffer<MonitorDateSlotElement>(city, true);
             HashSet<int> slotKeys = new HashSet<int>();
@@ -346,16 +348,15 @@ namespace RapidTransitMod.Dispatch.Observation
                 }
             }
             m_Runtime.m_ObsRecorder.TickDate(m_Runtime.m_SimClock.NowDate);
+            if (m_MonitorLoadIncomplete)
+                m_Runtime.m_ObsRecorder.MarkAllMonitorDatesOverflowed();
         }
 
         public void LoadMonitorIntegrity()
         {
             if (m_IgnoreLegacyMonitor)
                 return;
-            bool loadDataComplete = !m_Runtime.m_Obs.MonitorOverflowed;
-            int loadDroppedTripCount = m_Runtime.m_Obs.MonitorOverflowCount;
             string loadIssueCode = m_Runtime.m_Obs.MonitorIssueCode ?? string.Empty;
-            int loadIssueCount = m_Runtime.m_Obs.MonitorIssueCount;
             bool loadPersistenceHealthy = m_MonitorPersistenceHealthy;
 
             Entity city = m_Runtime.m_CitySystem.City;
@@ -379,12 +380,8 @@ namespace RapidTransitMod.Dispatch.Observation
             string issueCode = element.m_LastIssueCode.ToString();
             if (element.m_Version != MonitorVersion
                 || (element.m_DataComplete != 0 && element.m_DataComplete != 1)
-                || element.m_DroppedTripCount < 0
-                || element.m_DroppedTripCount > MaxMonitorTrips
                 || element.m_PersistenceHealthy < 0
                 || element.m_PersistenceHealthy > 1
-                || element.m_IssueCount < 0
-                || element.m_IssueCount > MaxMonitorTrips
                 || issueCode.Length > 64)
             {
                 RecordLoadIssue("monitor-integrity-invalid", false);
@@ -394,16 +391,8 @@ namespace RapidTransitMod.Dispatch.Observation
             string mergedIssueCode = !string.IsNullOrEmpty(loadIssueCode)
                 ? loadIssueCode
                 : issueCode;
-            m_Runtime.m_Obs.MonitorOverflowed = !loadDataComplete
-                || element.m_DataComplete == 0;
             m_Runtime.m_Obs.MonitorOverflowReason = mergedIssueCode;
-            m_Runtime.m_Obs.MonitorOverflowCount = MergeMonitorCount(
-                loadDroppedTripCount,
-                element.m_DroppedTripCount);
             m_Runtime.m_Obs.MonitorIssueCode = mergedIssueCode;
-            m_Runtime.m_Obs.MonitorIssueCount = MergeMonitorCount(
-                loadIssueCount,
-                element.m_IssueCount);
             m_MonitorPersistenceHealthy = loadPersistenceHealthy
                 && element.m_PersistenceHealthy != 0;
         }
@@ -666,25 +655,15 @@ namespace RapidTransitMod.Dispatch.Observation
             }
 
             string issueCode = m_Runtime.m_Obs.MonitorIssueCode ?? string.Empty;
-            if (issueCode.Length > 64
-                || m_Runtime.m_Obs.MonitorIssueCount < 0
-                || m_Runtime.m_Obs.MonitorIssueCount > MaxMonitorTrips
-                || m_Runtime.m_Obs.MonitorOverflowCount < 0
-                || m_Runtime.m_Obs.MonitorOverflowCount > MaxMonitorTrips)
-            {
-                throw new InvalidOperationException("monitor-integrity-invalid");
-            }
 
             snapshot.Integrity = new MonitorIntegrityElement
             {
                 m_Version = MonitorVersion,
-                m_DataComplete = m_Runtime.m_Obs.MonitorOverflowed ? 0 : 1,
-                m_DroppedTripCount = m_Runtime.m_Obs.MonitorOverflowed
-                    ? m_Runtime.m_Obs.MonitorOverflowCount
-                    : 0,
+                m_DataComplete = m_Runtime.m_ObsRecorder.AnyMonitorDateOverflowed ? 0 : 1,
+                m_DroppedTripCount = 0,
                 m_PersistenceHealthy = m_MonitorPersistenceHealthy ? 1 : 0,
                 m_LastIssueCode = issueCode,
-                m_IssueCount = m_Runtime.m_Obs.MonitorIssueCount
+                m_IssueCount = 0
             };
             return snapshot;
         }
@@ -786,8 +765,6 @@ namespace RapidTransitMod.Dispatch.Observation
         {
             m_MonitorPersistenceHealthy = false;
             m_Runtime.m_Obs.MonitorIssueCode = issueCode ?? "monitor-snapshot-failed";
-            if (m_Runtime.m_Obs.MonitorIssueCount < int.MaxValue)
-                m_Runtime.m_Obs.MonitorIssueCount++;
             m_Runtime.log.Info("[ObservationPersistence] " + m_Runtime.m_Obs.MonitorIssueCode
                 + (exception == null
                     ? string.Empty
@@ -802,30 +779,14 @@ namespace RapidTransitMod.Dispatch.Observation
         {
             m_MonitorPersistenceHealthy = false;
             string code = issueCode ?? "monitor-integrity-invalid";
-            if (dataIncomplete)
-                m_Runtime.m_Obs.MonitorOverflowed = true;
-            if (droppedTrip)
+            if (dataIncomplete || droppedTrip)
             {
-                m_Runtime.m_Obs.MonitorOverflowed = true;
-                m_Runtime.m_Obs.MonitorOverflowCount = MergeMonitorCount(
-                    m_Runtime.m_Obs.MonitorOverflowCount,
-                    1);
+                m_MonitorLoadIncomplete = true;
+                m_Runtime.m_ObsRecorder?.MarkAllMonitorDatesOverflowed();
             }
             m_Runtime.m_Obs.MonitorOverflowReason = code;
             m_Runtime.m_Obs.MonitorIssueCode = code;
-            m_Runtime.m_Obs.MonitorIssueCount = MergeMonitorCount(
-                m_Runtime.m_Obs.MonitorIssueCount,
-                1);
             m_Runtime.log.Info("[ObservationPersistence] " + m_Runtime.m_Obs.MonitorIssueCode);
-        }
-
-        private static int MergeMonitorCount(int left, int right)
-        {
-            if (left < 0 || right < 0)
-                return MaxMonitorTrips;
-            return left > MaxMonitorTrips - right
-                ? MaxMonitorTrips
-                : left + right;
         }
 
         private static bool TryBuildMonitorValues(
