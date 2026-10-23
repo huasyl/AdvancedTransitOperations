@@ -479,9 +479,14 @@ namespace RapidTransitMod.Dispatch.Workbench
                 return;
 
             RailEtaBridgeService service = RailEtaBridgeService.Current;
+            if (service != null && service.WorkerLost)
+            {
+                FailQueuedTheory(nowFrame);
+                return;
+            }
             if (m_TheoryPaused)
             {
-                if (service == null || service.WorkerLost || service.HotGeneration == 0
+                if (service == null || service.HotGeneration == 0
                     || !service.CanSubmit)
                 {
                     m_TheoryWakeFrame = nowFrame + TheoryRetryDelayFrames;
@@ -489,7 +494,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 }
                 m_TheoryPaused = false;
             }
-            if (service == null || service.WorkerLost || service.HotGeneration == 0)
+            if (service == null || service.HotGeneration == 0)
             {
                 m_TheoryPaused = true;
                 m_TheoryWakeFrame = nowFrame + TheoryRetryDelayFrames;
@@ -587,6 +592,20 @@ namespace RapidTransitMod.Dispatch.Workbench
             if (fallback != null)
                 m_TheoryWakeFrame = fallback.NextFrame;
             return null;
+        }
+
+        private void FailQueuedTheory(uint nowFrame)
+        {
+            while (m_TheoryQueue.Count > 0)
+            {
+                string lineId = m_TheoryQueue.Dequeue();
+                m_TheoryQueued.Remove(lineId);
+                if (m_Theory.TryGetValue(lineId, out TheoryEntry entry)
+                    && entry.State == "Queued")
+                {
+                    FinishTheory(entry, "Unavailable", "run-time-theory-worker-lost", string.Empty, nowFrame);
+                }
+            }
         }
 
         private void PollTheory(TheoryEntry entry, uint nowFrame)

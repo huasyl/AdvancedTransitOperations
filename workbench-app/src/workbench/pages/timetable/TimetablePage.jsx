@@ -730,7 +730,7 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
     const status = activeTransportMode === "bus"
       ? await controller.ensureBusHistoricalRuntime(request.lineId)
       : await controller.requestRuntime(request.lineId, request.source);
-    if (!status || status.state === "Failed" || status.state === "Cancelled") {
+    if (!status || status.state === "Failed" || status.state === "Cancelled" || status.state === "Unavailable") {
       setBatchRequest(null);
     }
   }
@@ -743,7 +743,7 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
     if (runtime?.state === "Completed") {
       applyBatchCustom(batchRequest);
       setBatchRequest(null);
-    } else if (runtime?.state === "Failed" || runtime?.state === "Cancelled") {
+    } else if (runtime?.state === "Failed" || runtime?.state === "Cancelled" || runtime?.state === "Unavailable") {
       setBatchRequest(null);
     }
   }, [batchRequest, controller.runtimes]);
