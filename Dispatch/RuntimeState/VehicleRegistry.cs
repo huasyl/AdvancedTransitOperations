@@ -22,8 +22,6 @@ namespace RapidTransitMod
         private Action<Entity> m_MarkSchedulerDirty;
         private bool m_Restoring;
         private Entity m_RestoreVehicle;
-        private LifecycleFactKind m_RestoreFactKind;
-        private Entity m_RestorePreviousLine;
 
         public VehicleRegistry(VehicleStateStore store, VehicleWorksets worksets, FrameEvents events, Func<uint> frame,
             Func<double, uint> toFramesCeil, Func<Entity, TransitMode> modeOfLine, Action<StopFact> publishStopFact)
@@ -370,13 +368,13 @@ namespace RapidTransitMod
             m_FramePlan?.ClearDeadline(vehicle, DeadlineKind.OriginBoardingGrace);
         }
 
-        public void Remove(Entity vehicle)
+        public void Remove(Entity vehicle, bool publish = true)
         {
             Entity line = ReadLine(vehicle);
             VehicleState state = m_Store.State.TryGetValue(vehicle, out VehicleState existingState)
                 ? existingState
                 : default;
-            if (vehicle != Entity.Null && !m_Restoring)
+            if (vehicle != Entity.Null && publish)
             {
                 uint frame = m_Frame();
                 m_Events.AppendLifecycle(vehicle, frame, LifecycleFactKind.Removed, line: line, state: state);
@@ -388,7 +386,7 @@ namespace RapidTransitMod
             m_FramePlan?.ClearVehicle(vehicle);
             m_SetDemand?.Invoke(vehicle, RuntimeDemandMask.DeparturePending | RuntimeDemandMask.OriginCandidate | RuntimeDemandMask.InboundWatch, false);
             m_Store.Remove(vehicle);
-            if (!m_Restoring)
+            if (publish)
                 MarkSchedulerDirty(line);
         }
 
@@ -404,16 +402,12 @@ namespace RapidTransitMod
         {
             m_Restoring = true;
             m_RestoreVehicle = vehicle;
-            m_RestoreFactKind = LifecycleFactKind.Registered;
-            m_RestorePreviousLine = Entity.Null;
         }
 
         public void BeginSilentRestore()
         {
             m_Restoring = true;
             m_RestoreVehicle = Entity.Null;
-            m_RestoreFactKind = default;
-            m_RestorePreviousLine = Entity.Null;
             m_SilentFramePlan = m_FramePlan;
             m_FramePlan = null;
         }
@@ -436,35 +430,22 @@ namespace RapidTransitMod
 
         internal bool IsSilentRestore => m_Restoring && m_RestoreVehicle == Entity.Null;
 
-        public void BeginRebind(Entity vehicle, Entity previousLine)
-        {
-            m_Restoring = true;
-            m_RestoreVehicle = vehicle;
-            m_RestoreFactKind = LifecycleFactKind.Rebound;
-            m_RestorePreviousLine = previousLine;
-        }
-
         public void EndRestore(Entity line)
         {
             if (!m_Restoring)
                 return;
 
             Entity vehicle = m_RestoreVehicle;
-            LifecycleFactKind factKind = m_RestoreFactKind;
-            Entity previousLine = m_RestorePreviousLine;
             m_Restoring = false;
             m_RestoreVehicle = Entity.Null;
             m_Events.AppendLifecycle(
                 vehicle,
                 m_Frame(),
-                factKind,
-                previousLine: factKind == LifecycleFactKind.Rebound ? previousLine : Entity.Null,
+                LifecycleFactKind.Registered,
                 line: line,
                 state: m_Store.State.TryGetValue(vehicle, out VehicleState state) ? state : default);
             if (m_Store.State.TryGetValue(vehicle, out VehicleState restoredState))
                 m_Events.AppendDispatch(vehicle, m_Frame(), DispatchFactKind.State, default, restoredState, line);
-            m_RestoreFactKind = default;
-            m_RestorePreviousLine = Entity.Null;
             m_FramePlan?.AddStage(vehicle, RuntimeStageMask.Stop | RuntimeStageMask.Dispatch);
             MarkSchedulerDirty(line);
         }
@@ -473,8 +454,6 @@ namespace RapidTransitMod
         {
             m_Restoring = false;
             m_RestoreVehicle = Entity.Null;
-            m_RestoreFactKind = default;
-            m_RestorePreviousLine = Entity.Null;
         }
 
         private void MarkSchedulerDirty(Entity line) => m_MarkSchedulerDirty?.Invoke(line);

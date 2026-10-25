@@ -86,6 +86,21 @@ namespace RapidTransitMod
                 actions.ReleaseDeparture(vehicle, nowFrame, ecb);
         }
 
+        internal void ReleaseExitHold(Entity vehicle, LifecycleKind lifecycle, uint nowFrame)
+        {
+            if (lifecycle != LifecycleKind.Rail && lifecycle != LifecycleKind.Road)
+                return;
+
+            EntityManager entityManager = m_CommandHost.EntityManager;
+            if (!entityManager.Exists(vehicle) || !entityManager.HasComponent<PublicTransport>(vehicle))
+                return;
+
+            DispatchActions actions = lifecycle == LifecycleKind.Road
+                ? m_RoadDispatchActions
+                : m_RailDispatchActions;
+            actions.ReleaseExitHold(vehicle, nowFrame);
+        }
+
         internal void HoldUntil(Entity vehicle, uint releaseFrame, EntityCommandBuffer ecb)
         {
             if (TryGetDispatchActions(vehicle, out DispatchActions actions, out _))

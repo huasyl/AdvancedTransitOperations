@@ -81,6 +81,19 @@ namespace RapidTransitMod.Dispatch.Commands
             CommitPublicTransport(vehicle, publicTransport, ecb);
         }
 
+        public void ReleaseExitHold(Entity vehicle, uint nowFrame)
+        {
+            PublicTransport publicTransport = m_Host.ReadPublicTransport(vehicle);
+            if ((publicTransport.m_State & PublicTransportFlags.Boarding) == 0
+                || publicTransport.m_DepartureFrame <= nowFrame)
+            {
+                return;
+            }
+
+            publicTransport.m_DepartureFrame = nowFrame > 0 ? nowFrame - 1 : 0;
+            CommitPublicTransport(vehicle, publicTransport, default);
+        }
+
         internal static void ForceOfficialBoardingClose(ref PublicTransport publicTransport, uint nowFrame)
         {
             publicTransport.m_DepartureFrame = nowFrame > ModRuntimeHostSystem.OFFICIAL_BOARDING_CLOSE_TIMEOUT_FRAMES

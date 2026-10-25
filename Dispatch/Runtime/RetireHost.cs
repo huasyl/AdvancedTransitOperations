@@ -69,8 +69,6 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly EntityQuery m_LineQuery;
         private readonly Func<bool, BufferLookup<RouteVehicle>> m_RouteVehicles;
         private readonly VehicleView m_VehicleView;
-        private readonly VehicleRegistry m_VehicleRegistry;
-        private readonly VehicleStateStore.MapRef<VehicleState> m_VehicleStates;
         private readonly SpawnIntentTrace m_SpawnIntentTrace;
         private readonly RuntimeHotPathProbe m_HotPathProbe;
         private readonly Action<Entity> m_RetireRuntime;
@@ -78,20 +76,16 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly Action<Entity, int, bool, int> m_ApplyRetireSpawnTarget;
         private readonly Action<Entity> m_ClearAssistLaunchPending;
         private readonly StopRuntime m_StopRuntime;
-        private readonly Action<Entity> m_ClearLap;
         private readonly Action<Entity> m_ClearDwell;
         private readonly Action<Entity> m_ClearDwellDeadlineCache;
         private readonly Action<Entity> m_CancelBusSeg;
-        private readonly Action<Entity> m_ClearTrackProjectionVehicle;
-        private readonly Action<Entity, string> m_ClearTrackProjectionVehicleProgressSuspect;
         private readonly Action<Entity, string> m_ClearBypassVehicle;
-        private readonly NativeHashMap<Entity, FixedString64Bytes> m_UICache;
-        private readonly NativeHashMap<Entity, int> m_CachedWaypoint;
         private readonly NativeHashMap<Entity, uint> m_PreparingFixCooldownUntil;
         private readonly RuntimeFramePlan m_FramePlan;
         private readonly FrameEvents m_Events;
         private readonly Action<StopFact> m_PublishStopFact;
         private readonly Action<Entity, int, StopControlResult> m_ApplyStopControl;
+        private readonly Func<Entity, ExitMode, string, ExitContext> m_ReleaseVehicle;
         private Action<Entity, Entity, uint> m_ServiceEnded;
 
         public RetireHost(ModRuntimeHostSystem runtime)
@@ -104,8 +98,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_LineQuery = runtime.m_LineQuery;
             m_RouteVehicles = readOnly => runtime.GetBufferLookup<RouteVehicle>(readOnly);
             m_VehicleView = runtime.m_VehicleView;
-            m_VehicleRegistry = runtime.m_VehicleRegistry;
-            m_VehicleStates = runtime.m_VehicleStateStore.State;
             m_SpawnIntentTrace = runtime.m_SpawnIntentTrace;
             m_HotPathProbe = runtime.m_RuntimeHotPathProbe;
             m_RetireRuntime = runtime.m_RuntimeEngine.Retire;
@@ -113,20 +105,16 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_ApplyRetireSpawnTarget = runtime.m_RuntimeEngine.ApplyRetireSpawnTarget;
             m_ClearAssistLaunchPending = runtime.m_RuntimeEngine.ClearAssistLaunchPending;
             m_StopRuntime = runtime.m_StopRuntime;
-            m_ClearLap = runtime.m_ObsPersist.ClearLap;
             m_ClearDwell = runtime.m_ObsPersist.ClearDwell;
             m_ClearDwellDeadlineCache = runtime.m_Observation.ClearDwellDeadlineCache;
             m_CancelBusSeg = runtime.m_Observation.CancelBusSeg;
-            m_ClearTrackProjectionVehicle = runtime.TrackProjection.ClearVehicle;
-            m_ClearTrackProjectionVehicleProgressSuspect = runtime.TrackProjection.ClearVehicleProgressSuspect;
             m_ClearBypassVehicle = (vehicle, reason) => runtime.Bypass.ClearVehicle(vehicle, reason);
-            m_UICache = runtime.m_UICache;
-            m_CachedWaypoint = runtime.m_CachedWpIdx;
             m_PreparingFixCooldownUntil = runtime.m_PreparingFixCooldownUntil;
             m_FramePlan = runtime.m_RuntimeFramePlan;
             m_Events = runtime.m_FrameEvents;
             m_PublishStopFact = runtime.PublishStopFact;
             m_ApplyStopControl = runtime.ApplyStopControl;
+            m_ReleaseVehicle = runtime.m_VehicleExit.Release;
         }
 
         internal void BindServiceEnd(Action<Entity, Entity, uint> ended)
@@ -439,26 +427,19 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public void ReleaseRetireRuntimeOwnership(Entity vehicle, string reason)
         {
-            ClearStopSessionState(vehicle);
-            m_VehicleRegistry.Remove(vehicle);
-            m_ClearLap(vehicle);
-            m_CachedWaypoint.Remove(vehicle);
-            m_ClearTrackProjectionVehicle(vehicle);
-            m_UICache.Remove(vehicle);
-            m_PreparingFixCooldownUntil.Remove(vehicle);
-            m_FramePlan.ClearDeadline(vehicle, DeadlineKind.PreparingCooldown);
-            m_ClearBypassVehicle(vehicle, reason);
-            m_ClearTrackProjectionVehicleProgressSuspect(vehicle, reason);
+            m_ReleaseVehicle(vehicle, TerminalExitMode(vehicle), reason);
         }
 
-        public void ReleaseRoadRetireRuntimeOwnership(Entity vehicle)
+        public void ReleaseRoadRetireRuntimeOwnership(Entity vehicle, string reason)
         {
-            m_VehicleRegistry.Remove(vehicle);
-            m_ClearLap(vehicle);
-            m_CachedWaypoint.Remove(vehicle);
-            m_UICache.Remove(vehicle);
-            m_PreparingFixCooldownUntil.Remove(vehicle);
-            m_FramePlan.ClearDeadline(vehicle, DeadlineKind.PreparingCooldown);
+            m_ReleaseVehicle(vehicle, TerminalExitMode(vehicle), reason);
+        }
+
+        private ExitMode TerminalExitMode(Entity vehicle)
+        {
+            return !m_EntityManager.Exists(vehicle) || m_EntityManager.HasComponent<Deleted>(vehicle)
+                ? ExitMode.Dead
+                : ExitMode.Live;
         }
     }
 }

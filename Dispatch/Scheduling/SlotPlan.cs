@@ -234,6 +234,8 @@ namespace RapidTransitMod.Dispatch.Scheduling
                 Entity other = m_ResolveRuntimeControllerVehicle(rvs[i].m_Vehicle);
                 if (other == vehicle || !m_Runtime.EntityManager.Exists(other))
                     continue;
+                if (!m_Runtime.m_VehicleView.TryGetLine(other, out Entity otherLine) || otherLine != line)
+                    continue;
                 if (!m_Runtime.m_VehicleView.TryGetTarget(other, out int otherTarget) || otherTarget != target)
                     continue;
 

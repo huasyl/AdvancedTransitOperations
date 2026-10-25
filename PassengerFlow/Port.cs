@@ -119,13 +119,6 @@ namespace RapidTransitMod.PassengerFlow
             Observer.RemoveVehicle(this, SamplingSystem.CurrentState, vehicle);
         }
 
-        internal void RebindVehicle(Entity vehicle, Entity line, VehicleState vehicleState, uint frame)
-        {
-            SamplingSystem.CancelRepresentatives(vehicle, null);
-            Observer.RemoveVehicle(this, SamplingSystem.CurrentState, vehicle, true, frame);
-            Observer.RegisterVehicle(this, SamplingSystem.CurrentState, vehicle, line, vehicleState, frame);
-        }
-
         internal void InvalidateAnchors(Entity line)
         {
             State state = SamplingSystem.CurrentState;

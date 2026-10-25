@@ -869,14 +869,11 @@ namespace RapidTransitMod.SignalPriority
                 if (frameEvent.Kind == FrameEventKind.Lifecycle)
                 {
                     LifecycleEvent fact = lifecycle[frameEvent.Index];
-                    if (fact.Kind == LifecycleFactKind.Removed
-                        || fact.Kind == LifecycleFactKind.Rebound)
+                    if (fact.Kind == LifecycleFactKind.Removed)
                     {
                         ForgetVehicle(
                             fact.Vehicle,
-                            fact.Kind == LifecycleFactKind.Removed
-                                ? "vehicle-removed"
-                                : "vehicle-rebound");
+                            "vehicle-removed");
                     }
                 }
             }

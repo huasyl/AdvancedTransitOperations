@@ -14,7 +14,7 @@ namespace RapidTransitMod
 
         public int Count => m_Store.State.Count;
 
-        internal NativeHashMap<Entity, VehicleState> StateMap => m_Store.StateMap;
+        internal NativeHashMap<Entity, VehicleState> StateMap => m_Store.State;
 
         public bool Contains(Entity vehicle) => m_Store.State.ContainsKey(vehicle);
 

@@ -88,26 +88,23 @@ namespace RapidTransitMod.PassengerFlow
             state.OpenStops.Remove(vehicle);
         }
 
-        internal static void RemoveVehicle(Port port, State state, Entity vehicle,
-            bool preserveVehicleId = false, uint? factFrame = null)
+        internal static void RemoveVehicle(Port port, State state, Entity vehicle)
         {
             if (state == null)
                 return;
 
             Entity runtimeVehicle = port != null ? port.RuntimeVehicle(vehicle) : vehicle;
-            state.RemoveVehicleLoad(vehicle, factFrame ?? port.Frame(), port.Clock());
+            state.RemoveVehicleLoad(vehicle, port.Frame(), port.Clock());
             state.OpenStops.Remove(vehicle);
             state.LastLaunchFrames.Remove(vehicle);
             state.Baselines.Remove(vehicle);
-            if (!preserveVehicleId)
-                state.VehicleIds.Remove(vehicle);
+            state.VehicleIds.Remove(vehicle);
             if (runtimeVehicle != Entity.Null)
             {
                 state.OpenStops.Remove(runtimeVehicle);
                 state.LastLaunchFrames.Remove(runtimeVehicle);
                 state.Baselines.Remove(runtimeVehicle);
-                if (!preserveVehicleId)
-                    state.VehicleIds.Remove(runtimeVehicle);
+                state.VehicleIds.Remove(runtimeVehicle);
             }
 
             state.Trips.RemoveVehicle(vehicle);

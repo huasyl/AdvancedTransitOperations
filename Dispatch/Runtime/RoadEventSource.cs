@@ -321,8 +321,6 @@ namespace RapidTransitMod.Dispatch.Runtime
                 }
                 m_FrameRows[rowIndex] = row;
                 UpdateBaseline(row);
-                if (row.CurrentRoute != row.RegisteredLine)
-                    m_Runtime.m_VehicleRegistrar.ObserveRoadRoute(vehicle);
             }
 
             for (int i = 0; i < m_StaleVehicles.Count; i++)
@@ -571,24 +569,6 @@ namespace RapidTransitMod.Dispatch.Runtime
                 m_FrameRows[rowIndex] = row;
             }
             CommitWaypoint(vehicle, waypoint);
-        }
-
-        public void RebindSource(Entity vehicle)
-        {
-            m_Baselines.Remove(vehicle);
-            if (!m_FrameRowIndex.TryGetValue(vehicle, out int rowIndex))
-                return;
-
-            int last = m_FrameRows.Count - 1;
-            if (rowIndex != last)
-            {
-                RoadFrameRow moved = m_FrameRows[last];
-                m_FrameRows[rowIndex] = moved;
-                m_FrameRowIndex[moved.Vehicle] = rowIndex;
-            }
-            m_FrameRows.RemoveAt(last);
-            m_FrameRowIndex.Remove(vehicle);
-            m_Demands.Remove(vehicle);
         }
 
         public void CommitWaypoint(Entity vehicle, int waypoint)

@@ -233,7 +233,6 @@ namespace RapidTransitMod.Dispatch.Runtime
 
             entities.Dispose();
             m_Runtime.m_VehicleRegistry.Clear();
-            m_Runtime.m_VehicleRegistrar.ClearPendingRebindCandidates();
             m_Runtime.m_VehicleRegistrar.ClearRegistrationConfirmations();
             m_Runtime.m_VehicleRegistrar.ClearStartupGate();
             m_Runtime.m_LineServiceState.Reset();
@@ -283,7 +282,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_StableFrameCount = 0;
             m_Runtime.m_LastVehicleCount = -1;
             m_Runtime.m_LastPuppetMasterMinute = -1;
-            m_Runtime.m_LastRegisterSweepMinute = -1;
             m_Runtime.m_LastSchedulerTickMinute = -1;
             m_Runtime.m_SelectPanel.ClearDebugSummaries();
             m_Runtime.m_StationContextQuery.Clear();
@@ -305,7 +303,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_Observation.ClearDispatchEta();
             m_Runtime.m_Announcements.Clear();
             m_Runtime.m_VehicleRegistry.Clear();
-            m_Runtime.m_VehicleRegistrar.ClearPendingRebindCandidates();
             m_Runtime.m_VehicleRegistrar.ClearRegistrationConfirmations();
             m_Runtime.m_VehicleRegistrar.ClearStartupGate();
             m_Runtime.m_LineServiceState.Reset();
@@ -353,7 +350,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_WaypointIndex.Clear();
             m_Runtime.m_RouteProgress.Clear();
             m_Runtime.m_LastPuppetMasterMinute = -1;
-            m_Runtime.m_LastRegisterSweepMinute = -1;
             m_Runtime.m_LastSchedulerTickMinute = -1;
             m_Runtime.m_SelectPanel.ClearDebugSummaries();
             m_Runtime.m_StationContextQuery.Clear();

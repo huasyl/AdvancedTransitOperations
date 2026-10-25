@@ -186,9 +186,7 @@ namespace RapidTransitMod.Dispatch.Commands
         private void Terminal(Entity vehicle, Entry entry)
         {
             Accept(vehicle, entry);
-            m_RetireHost.ReleaseRoadRetireRuntimeOwnership(vehicle);
-            m_RetireHost.ClearRetireDeadline(vehicle);
-            m_Entries.Remove(vehicle);
+            m_RetireHost.ReleaseRoadRetireRuntimeOwnership(vehicle, "road-retire-terminal");
         }
 
         private int CountPassengers(Entity vehicle)

@@ -135,6 +135,38 @@ namespace RapidTransitMod.Dispatch.Persistence
             }
         }
 
+        public void RemoveVehicle(Entity vehicle)
+        {
+            if (!m_Runtime.m_VehicleCacheBufferReady) return;
+            Entity city = m_Runtime.m_CitySystem.City;
+            if (city == Entity.Null) return;
+            if (!m_Runtime.EntityManager.HasBuffer<VehicleStateCacheElement>(city)) return;
+
+            DynamicBuffer<VehicleStateCacheElement> states =
+                m_Runtime.EntityManager.GetBuffer<VehicleStateCacheElement>(city);
+            for (int i = states.Length - 1; i >= 0; i--)
+            {
+                if (states[i].m_VehicleEntity == vehicle)
+                    states.RemoveAt(i);
+            }
+
+            DynamicBuffer<TimedPlanCacheElement> plans =
+                m_Runtime.EntityManager.GetBuffer<TimedPlanCacheElement>(city);
+            for (int i = plans.Length - 1; i >= 0; i--)
+            {
+                if (plans[i].m_VehicleEntity == vehicle)
+                    plans.RemoveAt(i);
+            }
+
+            DynamicBuffer<TimedStopCacheElement> stops =
+                m_Runtime.EntityManager.GetBuffer<TimedStopCacheElement>(city);
+            for (int i = stops.Length - 1; i >= 0; i--)
+            {
+                if (stops[i].m_VehicleEntity == vehicle)
+                    stops.RemoveAt(i);
+            }
+        }
+
         public bool Restore(
             Entity v,
             Entity line,

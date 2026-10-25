@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Generic;
 using RapidTransitMod.Dispatch.Runtime;
 using Unity.Entities;
@@ -9,21 +8,14 @@ namespace RapidTransitMod
     {
         private readonly ModRuntimeHostSystem m_Runtime;
         private readonly LineSpawnControl m_LineSpawnControl;
-        private readonly Action<Entity> m_ClearAssistLaunchPending;
-        private readonly Action<StopFact> m_PublishStopFact;
-        private readonly Action<Entity, int, StopControlResult> m_ApplyStopControl;
         private readonly List<Entity> m_DeadVehicles = new List<Entity>();
 
         public RuntimeVehicleCleanup(
             ModRuntimeHostSystem runtime,
-            LineSpawnControl lineSpawnControl,
-            Action<Entity> clearAssistLaunchPending)
+            LineSpawnControl lineSpawnControl)
         {
             m_Runtime = runtime;
             m_LineSpawnControl = lineSpawnControl;
-            m_ClearAssistLaunchPending = clearAssistLaunchPending;
-            m_PublishStopFact = runtime.PublishStopFact;
-            m_ApplyStopControl = runtime.ApplyStopControl;
         }
 
         private EntityManager EntityManager => m_Runtime.EntityManager;
@@ -40,21 +32,12 @@ namespace RapidTransitMod
             bool removedRail = false;
             foreach (Entity dead in m_DeadVehicles)
             {
-                VehicleState deadState = m_Runtime.m_VehicleView.TryGetState(dead, out VehicleState removedState)
-                    ? removedState
-                    : default;
-                Entity mappedLine = m_Runtime.m_VehicleView.TryGetLine(dead, out Entity removedLine)
-                    ? removedLine
-                    : Entity.Null;
-                bool hasLifecycle = RuntimePorts.TryResolveLineLifecycle(
-                    m_Runtime,
-                    mappedLine,
-                    out LifecycleKind lifecycle);
-                bool isRail = hasLifecycle && lifecycle == LifecycleKind.Rail;
-                bool isRoad = hasLifecycle && lifecycle == LifecycleKind.Road;
-                removedRail |= isRail;
-                if (deadState == VehicleState.Preparing)
+                if (m_Runtime.m_VehicleView.TryGetState(dead, out VehicleState removedState)
+                    && removedState == VehicleState.Preparing)
                 {
+                    Entity mappedLine = m_Runtime.m_VehicleView.TryGetLine(dead, out Entity removedLine)
+                        ? removedLine
+                        : Entity.Null;
                     int removedTargetMin = m_Runtime.m_VehicleView.TryGetTarget(dead, out int removedTarget)
                         ? removedTarget
                         : -1;
@@ -73,74 +56,12 @@ namespace RapidTransitMod
                             + " prepAgeFrames=" + removedPrepAge);
                     }
                 }
-                m_Runtime.m_StationContextQuery.RemoveVehicle(dead);
-                m_Runtime.m_CommandApplier.FlushRetireShadowSnapshots(dead, "entity-removed");
-                m_Runtime.m_CommandApplier.ResetRetireShadowSnapshots(dead);
-                m_Runtime.m_CommandApplier.RemoveRoadCommandLog(dead);
-                StopCancelResult cancelledStop = m_Runtime.m_StopRuntime.CancelStopSession(
-                    dead,
-                    m_Runtime.m_SimulationSystem.frameIndex);
-                if (cancelledStop.Exists)
-                {
-                    m_PublishStopFact(cancelledStop.Fact);
-                    m_ApplyStopControl(dead, cancelledStop.Control.WaypointIndex, cancelledStop.Control);
-                }
-                m_Runtime.m_VehicleRegistry.Remove(dead);
-                if (isRail)
-                    m_Runtime.m_RailEventSource.RemoveVehicle(dead);
-                else if (isRoad)
-                    m_Runtime.m_RoadEventSource.RemoveVehicle(dead);
-                else
-                {
-                    m_Runtime.m_RailEventSource.RemoveVehicle(dead);
-                    m_Runtime.m_RoadEventSource.RemoveVehicle(dead);
-                }
-                m_Runtime.m_ObsPersist.ClearLap(dead);
-                m_Runtime.m_UICache.Remove(dead);
-                if (isRail)
-                    m_Runtime.m_BoardingFirstFrameGuardState.Remove(dead);
-                m_Runtime.m_StopRuntime.RemoveVehicle(dead);
-                m_Runtime.m_CachedWpIdx.Remove(dead);
-                if (isRail)
-                {
-                    m_Runtime.TrackProjection.ClearVehicle(dead);
-                    m_Runtime.m_WaypointIndex.Remove(dead);
-                }
-                m_Runtime.m_RouteProgress.Remove(dead);
-                if (isRail)
-                {
-                    m_Runtime.Bypass.ClearVehicle(dead);
-                    m_Runtime.TrackProjection.ClearVehicleProgressSuspect(dead, "vehicle-removed");
-                }
-                m_Runtime.m_Observation.ClearForcedMidStop(dead);
-                m_Runtime.m_CommandApplier.RemoveRetireHandoff(dead);
-                m_Runtime.m_PreparingFixCooldownUntil.Remove(dead);
-                m_ClearAssistLaunchPending(dead);
-                m_Runtime.m_Observation.ClearDwellDeadlineCache(dead);
-                m_Runtime.m_Observation.ClearDispatchEta(dead);
-                m_Runtime.m_Observation.RemoveBusSegVehicle(dead);
-                m_Runtime.m_SpawnIntentTrace?.Remove(dead);
-                m_Runtime.m_ObsPersist.ClearDwell(dead);
-                if (isRail)
-                    m_Runtime.m_Observation.ClearVehicleSlices(dead);
-                m_Runtime.m_Observation.ClearDebug(dead);
-                m_Runtime.m_RuntimeLog.ClearVehicle(dead);
-                List<Entity> affectedLocals = isRail
-                    ? m_Runtime.Bypass.ForgetBlocker(dead)
-                    : null;
-                if (affectedLocals != null)
-                {
-                    for (int i = 0; i < affectedLocals.Count; i++)
-                    {
-                        m_Runtime.m_RuntimeFramePlan.AddStage(
-                            affectedLocals[i],
-                            RuntimeStageMask.Bypass);
-                    }
-                }
-                if (mappedLine != Entity.Null && deadState != VehicleState.Retiring)
+                ExitContext context = m_Runtime.m_VehicleExit.Release(dead, ExitMode.Dead, "entity-removed");
+                removedRail |= context.Lifecycle == LifecycleKind.Rail;
+                if (context.Line != Entity.Null && context.State != VehicleState.Retiring)
                 {
                     removedCountByLine ??= new Dictionary<Entity, int>();
-                    removedCountByLine[mappedLine] = removedCountByLine.TryGetValue(mappedLine, out int removedCount)
+                    removedCountByLine[context.Line] = removedCountByLine.TryGetValue(context.Line, out int removedCount)
                         ? removedCount + 1
                         : 1;
                 }

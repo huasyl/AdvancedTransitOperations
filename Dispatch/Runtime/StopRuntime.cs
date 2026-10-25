@@ -1426,17 +1426,13 @@ namespace RapidTransitMod.Dispatch.Runtime
             ClearSession(vehicle);
         }
 
-        internal StopCancelResult CancelRebind(Entity vehicle, uint nowFrame)
+        internal StopCancelResult ReleaseVehicle(Entity vehicle, uint nowFrame)
         {
             StopCancelResult result = CancelStopSession(vehicle, nowFrame);
             RemoveVehicle(vehicle);
             ClearForcedMidStop(vehicle);
+            ClearDwellDeadline(vehicle);
             return result;
-        }
-
-        internal StopCancelResult CancelUnavailableVehicle(Entity vehicle, uint nowFrame)
-        {
-            return CancelRebind(vehicle, nowFrame);
         }
 
         internal void RemoveVehicle(Entity vehicle)

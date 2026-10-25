@@ -229,6 +229,7 @@ namespace RapidTransitMod
         internal DispatchEngine m_RuntimeEngine = null!;
         internal LineSpawnControl m_LineSpawnControl = null!;
         internal RuntimeVehicleCleanup m_RuntimeVehicleCleanup = null!;
+        internal VehicleExit m_VehicleExit = null!;
         internal SchedulerApply m_SchedulerApply = null!;
         internal VehicleRegistrar m_VehicleRegistrar = null!;
         internal RuntimeVehicleLabels m_VehicleLabels = null!;
@@ -363,7 +364,6 @@ namespace RapidTransitMod
         internal int m_StableFrameCount = 0;
         internal int m_LastVehicleCount = -1;
         internal int m_LastPuppetMasterMinute = -1;
-        internal int m_LastRegisterSweepMinute = -1;
         internal int m_LastSchedulerTickMinute = -1;
         internal const int STABLE_FRAMES_REQUIRED = 5;
 
@@ -660,7 +660,6 @@ namespace RapidTransitMod
                 }
 
                 m_SystemReady = true;
-                m_LastRegisterSweepMinute = nowMinute;
                 m_DispatchScheduler.ResetMonitorClock(clockSnapshot);
                 m_ObsBuffers.LoadMonitor();
                 m_ObsBuffers.LoadMonitorIntegrity();
@@ -690,17 +689,19 @@ namespace RapidTransitMod
                 QueueRoadTimedStops();
                 m_RuntimeHotPathProbe.MarkCost(ref runtimeCost, RuntimeCostPhase.SourceCollect);
 
-                bool runFullRegisterSweep = nowMinute != m_LastRegisterSweepMinute;
                 bool registerSourceFrame = m_RailEventSource.CollectedThisFrame(simulationFrame);
-                bool scanSpawnLines = (simulationFrame & 15u) == 4u;
-                if (runFullRegisterSweep || registerSourceFrame || scanSpawnLines)
+                bool scanVehicles = (simulationFrame & 15u) == 4u;
+                if (registerSourceFrame || scanVehicles)
                 {
                     try
                     {
                         using (s_RegisterMarker.Auto())
-                            m_VehicleRegistrar.Register(runFullRegisterSweep, scanSpawnLines);
-                        if (runFullRegisterSweep)
-                            m_LastRegisterSweepMinute = nowMinute;
+                        {
+                            if (registerSourceFrame)
+                                m_VehicleRegistrar.RetryRegistrationConfirmations();
+                            if (scanVehicles)
+                                m_VehicleRegistrar.Scan();
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -1173,7 +1174,7 @@ namespace RapidTransitMod
 
         private void CancelStopRelease(Entity vehicle, uint nowFrame)
         {
-            StopCancelResult cancelled = m_StopRuntime.CancelUnavailableVehicle(vehicle, nowFrame);
+            StopCancelResult cancelled = m_StopRuntime.ReleaseVehicle(vehicle, nowFrame);
             if (cancelled.Exists)
             {
                 PublishStopFact(cancelled.Fact);
@@ -1998,18 +1999,6 @@ namespace RapidTransitMod
                     lifecycleEvent.Vehicle, lifecycleEvent.Line, lifecycleEvent.State, lifecycleEvent.Frame);
                 return;
             }
-            if (lifecycleEvent.Kind == LifecycleFactKind.Rebound)
-            {
-                m_Observation.EndMonitor(
-                    lifecycleEvent.Vehicle,
-                    lifecycleEvent.Frame,
-                    MonitorEndReason.Rebound);
-                m_Observation.CancelBusSeg(lifecycleEvent.Vehicle);
-                m_Announcements.RemoveVehicle(lifecycleEvent.Vehicle);
-                PassengerFlow.Runtime.Current?.RebindVehicle(
-                    lifecycleEvent.Vehicle, lifecycleEvent.Line, lifecycleEvent.State, lifecycleEvent.Frame);
-                return;
-            }
 
             if (lifecycleEvent.Kind == LifecycleFactKind.Removed)
             {
@@ -2017,19 +2006,7 @@ namespace RapidTransitMod
                     lifecycleEvent.Vehicle,
                     lifecycleEvent.Frame,
                     MonitorEndReason.Removed);
-                if (RuntimePorts.TryResolveLineLifecycle(this, lifecycleEvent.Line, out LifecycleKind lifecycle))
-                {
-                    if (lifecycle == LifecycleKind.Rail)
-                    {
-                        m_RailEtaService?.CancelTargetRequests(lifecycleEvent.Vehicle, "Removed");
-                        m_RailEventSource.RemoveVehicle(lifecycleEvent.Vehicle);
-                    }
-                    else if (lifecycle == LifecycleKind.Road)
-                        m_RoadEventSource.RemoveVehicle(lifecycleEvent.Vehicle);
-                }
                 m_LifecycleResolveLogFrames.Remove(lifecycleEvent.Vehicle);
-                m_CommandApplier.RemoveRoadCommandLog(lifecycleEvent.Vehicle);
-                m_Observation.RemoveBusSegVehicle(lifecycleEvent.Vehicle);
                 m_Announcements.RemoveVehicle(lifecycleEvent.Vehicle);
                 PassengerFlow.Runtime.Current?.RemoveVehicle(lifecycleEvent.Vehicle);
                 return;

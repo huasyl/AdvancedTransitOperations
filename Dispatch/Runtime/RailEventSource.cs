@@ -99,10 +99,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                     if (rowIndex < 0)
                         continue;
 
-                    RailFrameRow row = m_FrameRows[rowIndex];
                     m_Runtime.m_RuntimeHotPathProbe.CountSourceRow();
-                    if (row.CurrentRoute != row.RegisteredLine)
-                        m_Runtime.m_VehicleRegistrar.ObserveRailRoute(vehicle);
                 }
             }
             finally
@@ -514,32 +511,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_FrameRows[rowIndex] = row;
             CommitWaypoint(vehicle, waypoint);
             UpdateBaseline(row);
-        }
-
-        public void RegisterStopInput(Entity vehicle, Entity line, PublicTransport publicTransport, int waypoint, int waypointCount)
-        {
-            RegisterSource(vehicle, line, publicTransport, waypoint, waypointCount);
-        }
-
-        public void RebindSource(Entity vehicle)
-        {
-            m_Baselines.Remove(vehicle);
-            if (m_FrameRowIndex.TryGetValue(vehicle, out int rowIndex))
-            {
-                RailFrameRow row = m_FrameRows[rowIndex];
-                row.RegisteredLine = Entity.Null;
-                row.CurrentRoute = Entity.Null;
-                row.RegistryState = default;
-                row.Demands = RuntimeDemandMask.None;
-                row.InputValid = false;
-                row.MovingKnown = false;
-                row.Moving = false;
-                row.CachedWaypoint = -1;
-                row.WaypointCount = 0;
-                row.IsCompilable = false;
-                row.Changes = RailChangeMask.None;
-                m_FrameRows[rowIndex] = row;
-            }
         }
 
         public void CommitWaypoint(Entity vehicle, int waypoint)

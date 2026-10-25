@@ -81,6 +81,8 @@ namespace RapidTransitMod.Dispatch.Scheduling
                 Entity other = rvs[i].m_Vehicle;
                 if (other == vehicle || !m_Runtime.EntityManager.Exists(other))
                     continue;
+                if (!m_Runtime.m_VehicleView.TryGetLine(other, out Entity otherLine) || otherLine != line)
+                    continue;
 
                 if (m_Runtime.m_VehicleView.TryGetSlot(other, out int currentSlotMinute) && currentSlotMinute == targetMinute)
                     return true;

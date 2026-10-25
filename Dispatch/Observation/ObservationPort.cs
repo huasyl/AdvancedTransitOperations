@@ -568,6 +568,17 @@ namespace RapidTransitMod.Dispatch.Observation
             m_DispatchEtaRequests.Remove(vehicle);
         }
 
+        public void ClearVehicle(Entity vehicle, bool rail)
+        {
+            m_Runtime.m_ObsPersist.ClearLap(vehicle);
+            m_Runtime.m_ObsPersist.ClearDwell(vehicle);
+            ClearDispatchEta(vehicle);
+            RemoveBusSegVehicle(vehicle);
+            ClearDebug(vehicle);
+            if (rail)
+                ClearVehicleSlices(vehicle);
+        }
+
         public void ClearDispatchEta()
         {
             m_DispatchEtaRequests.Clear();

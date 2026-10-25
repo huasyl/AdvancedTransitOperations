@@ -562,12 +562,7 @@ namespace RapidTransitMod.Dispatch.Commands
 
         private void ReleaseRetireOwnership(Entity vehicle, string reason)
         {
-            RemoveWatch(vehicle);
-            m_RetireHandoffStages.Remove(vehicle);
-            m_RetireHost.ClearRetireDeadline(vehicle);
             m_RetireHost.ReleaseRetireRuntimeOwnership(vehicle, reason);
-            FlushShadow(vehicle, reason);
-            ResetShadow(vehicle);
         }
 
         private bool IsRetireBoundaryReady(

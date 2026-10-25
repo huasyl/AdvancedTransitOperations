@@ -200,8 +200,11 @@ namespace RapidTransitMod
                         if (!seenRuntimeVehicles.Add(runtimeVehicle))
                             continue;
 
-                        runtimeVehicles.Add(runtimeVehicle);
                         m_Runtime.m_RuntimeLog.RouteOwnerMismatch(line, runtimeVehicle, "schedule-buffer");
+                        if (!m_Runtime.m_VehicleView.TryGetLine(runtimeVehicle, out Entity registeredLine) || registeredLine != line)
+                            continue;
+
+                        runtimeVehicles.Add(runtimeVehicle);
                     }
 
                     bool lineHasHistory = false;

@@ -7,7 +7,6 @@ namespace RapidTransitMod.Dispatch.Runtime
     internal enum LifecycleFactKind : byte
     {
         Registered,
-        Rebound,
         Removed
     }
 

@@ -78,8 +78,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_LineSpawnControl = new LineSpawnControl(runtime);
             runtime.m_RuntimeVehicleCleanup = new RuntimeVehicleCleanup(
                 runtime,
-                runtime.m_LineSpawnControl,
-                runtime.m_RuntimeEngine.ClearAssistLaunchPending);
+                runtime.m_LineSpawnControl);
             runtime.m_VehicleRegistrar = new VehicleRegistrar(runtime);
             runtime.m_VehicleLabels = new RuntimeVehicleLabels(runtime);
             runtime.m_LineAnchorCatalog = new LineAnchorCatalog(runtime.EntityManager);
@@ -606,6 +605,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_JustLaunched = new NativeHashSet<Entity>(64, Allocator.Persistent);
             runtime.m_LineSpawnRequestFrame = new NativeHashMap<Entity, uint>(64, Allocator.Persistent);
 
+            runtime.m_VehicleExit = new VehicleExit(runtime);
             runtime.m_CommandApplier = new DispatchCommandApplier(runtime);
             runtime.m_VanillaServiceControl = new VanillaServiceControl(
                 runtime,
@@ -676,6 +676,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_DispatchScheduler = null!;
             runtime.m_SchedulerApply = null!;
             runtime.m_RuntimeVehicleCleanup = null!;
+            runtime.m_VehicleExit = null!;
             runtime.m_LineSpawnControl = null!;
             runtime.m_SpawnLeadTheory = null!;
             runtime.m_VehicleRegistrar = null!;
