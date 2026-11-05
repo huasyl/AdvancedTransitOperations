@@ -11,9 +11,6 @@ namespace RapidTransitMod.Dispatch.Persistence
 {
     internal sealed class VehicleCache
     {
-        internal delegate PublicTransport ReadPublicTransport(Entity vehicle);
-        internal delegate void CommitPublicTransport(Entity vehicle, PublicTransport value);
-
         private readonly ModRuntimeHostSystem m_Runtime;
         private readonly Func<Entity, float> m_ReadLap;
         private readonly Func<Entity, float> m_ReadDist;
@@ -167,14 +164,9 @@ namespace RapidTransitMod.Dispatch.Persistence
             }
         }
 
-        public bool Restore(
-            Entity v,
-            Entity line,
-            bool allowRunningRestore,
-            ReadPublicTransport readPublicTransport = null,
-            CommitPublicTransport commitPublicTransport = null,
-            bool registryOnly = false)
+        public bool Restore(Entity v, Entity line, bool allowRunningRestore, out VehicleState restoredState)
         {
+            restoredState = default;
             if (!m_Runtime.m_VehicleCacheBufferReady) return false;
             Entity city = m_Runtime.m_CitySystem.City;
             if (city == Entity.Null) return false;
@@ -192,24 +184,7 @@ namespace RapidTransitMod.Dispatch.Persistence
                 {
                     m_Runtime.m_StopRuntime.ClearTimedPlan(v);
                     m_Runtime.m_RuntimeEngine.RestoreHold(v, cachedTarget);
-
-                    if (!registryOnly && m_Runtime.EntityManager.HasComponent<PublicTransport>(v))
-                    {
-                        uint frame = m_Runtime.m_SimulationSystem.frameIndex;
-                        PublicTransport pt = readPublicTransport != null
-                            ? readPublicTransport(v)
-                            : m_Runtime.EntityManager.GetComponentData<PublicTransport>(v);
-                        pt.m_DepartureFrame = frame + 99999;
-                        if (commitPublicTransport != null)
-                            commitPublicTransport(v, pt);
-                        else
-                            m_Runtime.EntityManager.SetComponentData(v, pt);
-                    }
-                    if (RtLog.VerboseEnabled && !m_Runtime.m_VehicleRegistry.IsSilentRestore)
-                    {
-                        m_Runtime.log.Info("[恢复] 线路" + line.Index + " 车辆" + v.Index
-                            + " Holding target=" + (cachedTarget >= 0 ? ModRuntimeHostSystem.SlotStr(cachedTarget) : "-"));
-                    }
+                    restoredState = cachedState;
                     return true;
                 }
 
@@ -220,42 +195,42 @@ namespace RapidTransitMod.Dispatch.Persistence
 
                     m_Runtime.m_RuntimeEngine.RestoreRun(v);
                     RestoreTimed(v, line);
-
-                    float cachedLapDist = -1f;
-                    bool restoredLapStart = false;
-                    if (!registryOnly && m_Runtime.EntityManager.HasComponent<Odometer>(v))
-                    {
-                        cachedLapDist = m_ReadDist(line);
-                        float currentOdo = m_Runtime.EntityManager.GetComponentData<Odometer>(v).m_Distance;
-                        m_Runtime.m_ObsPersist.StartLap(
-                            v,
-                            cachedLapDist > 0f ? currentOdo - cachedLapDist : currentOdo,
-                            m_Runtime.m_SimulationSystem.frameIndex);
-                        restoredLapStart = true;
-                    }
-                    else if (!registryOnly)
-                    {
-                        m_Runtime.m_ObsPersist.ClearLapStart(v);
-                    }
-                    if (!registryOnly)
-                    {
-                        m_Runtime.m_ObsPersist.SetLapFrames(v, 0);
-                        m_Runtime.m_ObsPersist.MarkLapRestored(v);
-                    }
-                    if (RtLog.VerboseEnabled && !m_Runtime.m_VehicleRegistry.IsSilentRestore)
-                    {
-                        m_Runtime.log.Info("[恢复] 线路" + line.Index + " 车辆" + v.Index
-                            + " Running lapDist=" + cachedLapDist.ToString("F1")
-                            + " lapStart=" + (restoredLapStart ? "ok" : "missing-odometer")
-                            + " startFrame=" + (restoredLapStart ? m_Runtime.m_SimulationSystem.frameIndex.ToString() : "-"));
-                    }
-
+                    restoredState = cachedState;
                     return true;
                 }
 
                 return false;
             }
             return false;
+        }
+
+        public void RestoreLap(Entity v, Entity line)
+        {
+            float cachedLapDist = -1f;
+            bool restoredLapStart = false;
+            if (m_Runtime.EntityManager.HasComponent<Odometer>(v))
+            {
+                cachedLapDist = m_ReadDist(line);
+                float currentOdo = m_Runtime.EntityManager.GetComponentData<Odometer>(v).m_Distance;
+                m_Runtime.m_ObsPersist.StartLap(
+                    v,
+                    cachedLapDist > 0f ? currentOdo - cachedLapDist : currentOdo,
+                    m_Runtime.m_SimulationSystem.frameIndex);
+                restoredLapStart = true;
+            }
+            else
+            {
+                m_Runtime.m_ObsPersist.ClearLapStart(v);
+            }
+            m_Runtime.m_ObsPersist.SetLapFrames(v, 0);
+            m_Runtime.m_ObsPersist.MarkLapRestored(v);
+            if (RtLog.VerboseEnabled)
+            {
+                m_Runtime.log.Info("[恢复] 线路" + line.Index + " 车辆" + v.Index
+                    + " Running lapDist=" + cachedLapDist.ToString("F1")
+                    + " lapStart=" + (restoredLapStart ? "ok" : "missing-odometer")
+                    + " startFrame=" + (restoredLapStart ? m_Runtime.m_SimulationSystem.frameIndex.ToString() : "-"));
+            }
         }
 
         private bool RestoreTimed(Entity vehicle, Entity line)
@@ -403,7 +378,7 @@ namespace RapidTransitMod.Dispatch.Persistence
                     m_Runtime.m_ObsPersist.SetLapStartOdo(v, currentOdo);
             }
 
-            if (RtLog.VerboseEnabled && !m_Runtime.m_VehicleRegistry.IsSilentRestore)
+            if (RtLog.VerboseEnabled)
             {
                 m_Runtime.log.Info("[恢复] 线路" + line.Index + " 车辆" + v.Index
                     + " Running进度恢复"

@@ -55,14 +55,14 @@ namespace RapidTransitMod
             var candidates = new List<StartupCandidate>();
             CollectStartupIndex(candidates, lines);
             List<StartupCandidate> operational = BuildOperationalStartupCandidates(candidates, lines);
-            AdoptStartupCandidates(operational);
+            AdoptStartupCandidates(operational, frame);
             RebaselineStartupSources(operational, frame);
             RestoreStartupStops(operational, frame);
             for (int i = 0; i < lines.Count; i++)
                 m_Runtime.m_LineInitialAdopted.Add(lines[i]);
-            LogStartupAdoption(frame, candidates, lines, operational);
             double elapsedMs = (System.Diagnostics.Stopwatch.GetTimestamp() - startTimestamp) * 1000.0
                 / System.Diagnostics.Stopwatch.Frequency;
+            LogStartupAdoption(frame, candidates, lines, operational);
             m_Runtime.log.Info("[Startup] First activation: lines=" + lines.Count
                 + " vehicles=" + candidates.Count
                 + " adopted=" + operational.Count
@@ -134,32 +134,72 @@ namespace RapidTransitMod
                 {
                     m_PendingRegistrationConfirmations[candidate.Vehicle] = (candidate.Line, 2);
                 }
+
+                if (m_Runtime.m_VehicleView.TryGetState(candidate.Vehicle, out VehicleState finalState))
+                {
+                    if (finalState == VehicleState.Running)
+                        m_Runtime.m_RuntimeEngine.CommitRunning(candidate.Vehicle, candidate.Line);
+                    else if (finalState == VehicleState.Holding)
+                        m_Runtime.m_Observation.Seed(candidate.Vehicle, candidate.Line, frame);
+                }
             }
         }
 
-        private void AdoptStartupCandidates(List<StartupCandidate> operational)
+        private void AdoptStartupCandidates(List<StartupCandidate> operational, uint frame)
         {
-            int kept = 0;
-            for (int i = 0; i < operational.Count; i++)
+            m_Runtime.m_VehicleRegistry.BeginSilentRestore();
+            try
             {
-                StartupCandidate candidate = operational[i];
-                DynamicBuffer<RouteWaypoint> waypoints =
-                    m_Runtime.EntityManager.GetBuffer<RouteWaypoint>(candidate.Line, true);
-                AdoptCandidate(
-                    candidate.Line,
-                    candidate.Vehicle,
-                    waypoints,
+                for (int i = 0; i < operational.Count; i++)
+                    AdoptStartupVehicle(operational[i], frame);
+            }
+            finally
+            {
+                m_Runtime.m_VehicleRegistry.EndSilentRestore();
+            }
+        }
+
+        private void AdoptStartupVehicle(StartupCandidate candidate, uint frame)
+        {
+            Entity vehicle = candidate.Vehicle;
+            Entity line = candidate.Line;
+            VehicleState initialState;
+            if (candidate.Lifecycle == LifecycleKind.Road)
+            {
+                bool waypointKnown = m_Runtime.m_RoadEventSource.TryReadCurrentWaypoint(
+                    vehicle,
+                    line,
+                    out bool boarding,
+                    out int waypointIndex);
+                PublicTransport publicTransport = m_Runtime.EntityManager.GetComponentData<PublicTransport>(vehicle);
+                initialState = ResolveRoadInitialState(
+                    waypointKnown,
+                    waypointIndex,
+                    boarding,
                     adoptExistingVehicles: true,
-                    restoreVehicleCache: true,
-                    startupSilent: true);
-                if (m_Runtime.m_VehicleView.TryGetLine(candidate.Vehicle, out Entity registeredLine)
-                    && registeredLine == candidate.Line)
-                {
-                    operational[kept++] = candidate;
-                }
+                    publicTransport.m_State);
+                m_Runtime.m_RuntimeEngine.Adopt(vehicle, line, initialState, frame, null);
+                m_Runtime.m_RoadEventSource.RegisterSource(vehicle, line, waypointKnown ? waypointIndex : -1);
+            }
+            else
+            {
+                m_PendingRegistrationConfirmations.Remove(vehicle);
+                PublicTransport publicTransport = m_Runtime.EntityManager.GetComponentData<PublicTransport>(vehicle);
+                bool boarding = (publicTransport.m_State & PublicTransportFlags.Boarding) != 0;
+                DynamicBuffer<RouteWaypoint> waypoints =
+                    m_Runtime.EntityManager.GetBuffer<RouteWaypoint>(line, true);
+                initialState = InferInitialState(
+                    vehicle,
+                    waypoints,
+                    publicTransport,
+                    boarding,
+                    -1,
+                    adoptExistingVehicles: true,
+                    out _);
+                m_Runtime.m_RuntimeEngine.Adopt(vehicle, line, initialState, frame, null);
             }
 
-            operational.RemoveRange(kept, operational.Count - kept);
+            m_Runtime.m_VehicleCache.Restore(vehicle, line, initialState != VehicleState.Holding, out _);
         }
 
         private void LogStartupAdoption(
@@ -521,37 +561,41 @@ namespace RapidTransitMod
             return index != 0 ? index : left.Version.CompareTo(right.Version);
         }
 
-        private PublicTransport ReadRailPublicTransport(Entity vehicle)
+        private bool RestoreLiveCache(Entity vehicle, Entity line, bool allowRunningRestore, bool rail)
         {
-            return m_Runtime.EntityManager.GetComponentData<PublicTransport>(vehicle);
+            if (!m_Runtime.m_VehicleCache.Restore(vehicle, line, allowRunningRestore, out VehicleState restoredState))
+                return false;
+
+            if (restoredState == VehicleState.Holding)
+                WriteRestoredDeparture(vehicle, line, rail);
+            else if (restoredState == VehicleState.Running)
+                m_Runtime.m_VehicleCache.RestoreLap(vehicle, line);
+            return true;
         }
 
-        private PublicTransport ReadRoadPublicTransport(Entity vehicle)
+        private void WriteRestoredDeparture(Entity vehicle, Entity line, bool rail)
         {
-            return m_Runtime.EntityManager.GetComponentData<PublicTransport>(vehicle);
-        }
-
-        private void CommitRailPublicTransport(Entity vehicle, PublicTransport value)
-        {
+            PublicTransport publicTransport = m_Runtime.EntityManager.GetComponentData<PublicTransport>(vehicle);
             uint frame = m_Runtime.m_SimulationSystem.frameIndex;
-            m_Runtime.m_RailEventSource.RecordPublicTransportWrite(vehicle, value, frame);
-            m_Runtime.EntityManager.SetComponentData(vehicle, value);
-        }
-
-        private void CommitRoadPublicTransport(Entity vehicle, PublicTransport value)
-        {
-            uint frame = m_Runtime.m_SimulationSystem.frameIndex;
-            m_Runtime.m_RoadEventSource.RecordPublicTransportWrite(vehicle, value, frame);
-            m_Runtime.EntityManager.SetComponentData(vehicle, value);
+            publicTransport.m_DepartureFrame = frame + 99999;
+            if (rail)
+                m_Runtime.m_RailEventSource.RecordPublicTransportWrite(vehicle, publicTransport, frame);
+            else
+                m_Runtime.m_RoadEventSource.RecordPublicTransportWrite(vehicle, publicTransport, frame);
+            m_Runtime.EntityManager.SetComponentData(vehicle, publicTransport);
+            if (RtLog.VerboseEnabled)
+            {
+                int target = m_Runtime.m_VehicleView.TryGetTarget(vehicle, out int targetMinute) ? targetMinute : -1;
+                m_Runtime.log.Info("[恢复] 线路" + line.Index + " 车辆" + vehicle.Index
+                    + " Holding target=" + (target >= 0 ? ModRuntimeHostSystem.SlotStr(target) : "-"));
+            }
         }
 
         private void AdoptRoadCandidate(
             Entity line,
             Entity vehicle,
             DynamicBuffer<RouteWaypoint> waypoints,
-            bool adoptExistingVehicles,
-            bool restoreVehicleCache,
-            bool startupSilent)
+            bool adoptExistingVehicles)
         {
             if (!m_Runtime.EntityManager.HasComponent<PublicTransport>(vehicle))
                 return;
@@ -580,68 +624,46 @@ namespace RapidTransitMod
             }
 
             uint nowFrame = m_Runtime.m_SimulationSystem.frameIndex;
-            if (startupSilent)
-            {
-                m_Runtime.m_VehicleRegistry.BeginSilentRestore();
-            }
-            else
-            {
-                m_Runtime.m_VehicleRegistry.BeginRestore(vehicle);
-            }
+            m_Runtime.m_VehicleRegistry.BeginRestore(vehicle);
 
             try
             {
                 m_Runtime.m_RuntimeEngine.Adopt(vehicle, line, initialState, nowFrame, dispatchFrame);
                 m_Runtime.m_RoadEventSource.RegisterSource(vehicle, line, waypointKnown ? waypointIndex : -1);
-                if (!startupSilent)
+                m_Runtime.m_ObsPersist.SetLapDistance(vehicle, -1f);
+                StopFact restoredStop = m_Runtime.m_StopRuntime.RestoreRegistration(
+                    vehicle,
+                    line,
+                    boarding,
+                    waypointKnown ? waypointIndex : -1,
+                    nowFrame);
+                if (restoredStop.Exists)
                 {
-                    m_Runtime.m_ObsPersist.SetLapDistance(vehicle, -1f);
-                    StopFact restoredStop = m_Runtime.m_StopRuntime.RestoreRegistration(
-                        vehicle,
-                        line,
-                        boarding,
-                        waypointKnown ? waypointIndex : -1,
-                        nowFrame);
-                    if (restoredStop.Exists)
-                    {
-                        m_PublishStopFact(restoredStop);
-                    }
-
-                    m_Runtime.m_RoadEventSource.CommitWaypoint(
-                        vehicle,
-                        waypointKnown ? waypointIndex : -1);
-                    m_Runtime.m_UICache.Remove(vehicle);
+                    m_PublishStopFact(restoredStop);
                 }
 
-                if (restoreVehicleCache)
-                {
-                    bool restored = m_Runtime.m_VehicleCache.Restore(
-                        vehicle,
-                        line,
-                        initialState != VehicleState.Holding,
-                        readPublicTransport: startupSilent ? null : ReadRoadPublicTransport,
-                        commitPublicTransport: startupSilent ? null : CommitRoadPublicTransport,
-                        registryOnly: startupSilent);
-                    if (!startupSilent && !restored && initialState == VehicleState.Running)
-                        m_Runtime.m_VehicleCache.RestoreRun(vehicle, line, waypoints, "road-register");
-                }
+                m_Runtime.m_RoadEventSource.CommitWaypoint(
+                    vehicle,
+                    waypointKnown ? waypointIndex : -1);
+                m_Runtime.m_UICache.Remove(vehicle);
 
-                if (startupSilent)
-                    m_Runtime.m_VehicleRegistry.EndSilentRestore();
-                else
-                    m_Runtime.m_VehicleRegistry.EndRestore(line);
+                bool restored = RestoreLiveCache(
+                    vehicle,
+                    line,
+                    initialState != VehicleState.Holding,
+                    rail: false);
+                if (!restored && initialState == VehicleState.Running)
+                    m_Runtime.m_VehicleCache.RestoreRun(vehicle, line, waypoints, "road-register");
+
+                m_Runtime.m_VehicleRegistry.EndRestore(line);
             }
             catch
             {
-                if (startupSilent)
-                    m_Runtime.m_VehicleRegistry.EndSilentRestore();
-                else
-                    m_Runtime.m_VehicleRegistry.CancelRestore();
+                m_Runtime.m_VehicleRegistry.CancelRestore();
                 throw;
             }
 
-            if (!startupSilent
-                && m_Runtime.m_VehicleView.TryGetState(vehicle, out VehicleState finalState))
+            if (m_Runtime.m_VehicleView.TryGetState(vehicle, out VehicleState finalState))
             {
                 if (finalState == VehicleState.Running)
                     m_Runtime.m_RuntimeEngine.CommitRunning(vehicle, line);
@@ -681,9 +703,7 @@ namespace RapidTransitMod
             Entity line,
             Entity vehicle,
             DynamicBuffer<RouteWaypoint> waypoints,
-            bool adoptExistingVehicles,
-            bool restoreVehicleCache = true,
-            bool startupSilent = false)
+            bool adoptExistingVehicles)
         {
             if (!RuntimePorts.TryResolveLineLifecycle(m_Runtime, line, out LifecycleKind lifecycle))
                 return;
@@ -693,9 +713,7 @@ namespace RapidTransitMod
                     line,
                     vehicle,
                     waypoints,
-                    adoptExistingVehicles,
-                    restoreVehicleCache,
-                    startupSilent);
+                    adoptExistingVehicles);
                 return;
             }
 
@@ -706,7 +724,7 @@ namespace RapidTransitMod
             uint nowFrame = m_Runtime.m_SimulationSystem.frameIndex;
             int waypointIndex = -1;
             m_PendingRegistrationConfirmations.Remove(vehicle);
-            if (!startupSilent && boarding)
+            if (boarding)
             {
                 m_Runtime.m_WaypointIndex.TryConfirmBoardingWaypoint(
                     vehicle,
@@ -734,20 +752,13 @@ namespace RapidTransitMod
                 m_Runtime.m_LineSpawnRequestFrame.Remove(line);
             }
 
-            if (startupSilent)
-            {
-                m_Runtime.m_VehicleRegistry.BeginSilentRestore();
-            }
-            else
-            {
-                m_Runtime.m_RailEventSource.RegisterSource(
-                    vehicle,
-                    line,
-                    publicTransport,
-                    waypointIndex,
-                    waypoints.Length);
-                m_Runtime.m_VehicleRegistry.BeginRestore(vehicle);
-            }
+            m_Runtime.m_RailEventSource.RegisterSource(
+                vehicle,
+                line,
+                publicTransport,
+                waypointIndex,
+                waypoints.Length);
+            m_Runtime.m_VehicleRegistry.BeginRestore(vehicle);
             bool restored = false;
             VehicleState finalState = default;
             int finalTarget = -1;
@@ -758,71 +769,51 @@ namespace RapidTransitMod
             spawnIntent = dispatchFrame.HasValue
                 ? m_Runtime.m_SpawnIntentTrace.Bind(line, vehicle, dispatchFrame.Value, nowFrame)
                 : string.Empty;
-            if (!startupSilent)
-                m_Runtime.m_ObsPersist.SetLapDistance(vehicle, -1f);
-            StopFact restoredStop = startupSilent
-                ? default
-                : m_Runtime.m_StopRuntime.RestoreRegistration(
-                    vehicle,
-                    line,
-                    boarding,
-                    waypointIndex,
-                    nowFrame);
+            m_Runtime.m_ObsPersist.SetLapDistance(vehicle, -1f);
+            StopFact restoredStop = m_Runtime.m_StopRuntime.RestoreRegistration(
+                vehicle,
+                line,
+                boarding,
+                waypointIndex,
+                nowFrame);
             if (restoredStop.Exists)
             {
                 m_PublishStopFact(restoredStop);
             }
-            if (!startupSilent)
-            {
-                m_Runtime.m_RailEventSource.CommitWaypoint(vehicle, waypointIndex);
-                m_Runtime.m_UICache.Remove(vehicle);
-                m_Runtime.TrackProjection.ClearVehicleProgressSuspect(vehicle, "register-reset");
-                if (initialReason == "boarding-midway")
-                    m_Runtime.TrackProjection.MarkVehicleProgressSuspect(vehicle, initialReason);
-            }
+            m_Runtime.m_RailEventSource.CommitWaypoint(vehicle, waypointIndex);
+            m_Runtime.m_UICache.Remove(vehicle);
+            m_Runtime.TrackProjection.ClearVehicleProgressSuspect(vehicle, "register-reset");
+            if (initialReason == "boarding-midway")
+                m_Runtime.TrackProjection.MarkVehicleProgressSuspect(vehicle, initialReason);
 
             bool preferOriginHolding = initialState == VehicleState.Holding
                 && waypointIndex == 0;
-            if (restoreVehicleCache)
-            {
-                restored = m_Runtime.m_VehicleCache.Restore(
-                    vehicle,
-                    line,
-                    !preferOriginHolding,
-                    readPublicTransport: startupSilent ? null : ReadRailPublicTransport,
-                    commitPublicTransport: startupSilent ? null : CommitRailPublicTransport,
-                    registryOnly: startupSilent);
-                if (!startupSilent && !restored && initialState == VehicleState.Running)
-                    restored = m_Runtime.m_VehicleCache.RestoreRun(vehicle, line, waypoints, initialReason);
-            }
+            restored = RestoreLiveCache(
+                vehicle,
+                line,
+                !preferOriginHolding,
+                rail: true);
+            if (!restored && initialState == VehicleState.Running)
+                restored = m_Runtime.m_VehicleCache.RestoreRun(vehicle, line, waypoints, initialReason);
             finalState = m_Runtime.m_VehicleView.GetState(vehicle);
             finalTarget = m_Runtime.m_VehicleView.TryGetTarget(vehicle, out int target) ? target : -1;
-            if (startupSilent)
-                m_Runtime.m_VehicleRegistry.EndSilentRestore();
-            else
-            {
-                m_Runtime.m_VehicleRegistry.EndRestore(line);
-                m_Runtime.m_RailEventSource.RefreshOwners(vehicle);
-            }
+            m_Runtime.m_VehicleRegistry.EndRestore(line);
+            m_Runtime.m_RailEventSource.RefreshOwners(vehicle);
             }
             catch
             {
-                if (startupSilent)
-                    m_Runtime.m_VehicleRegistry.EndSilentRestore();
-                else
-                    m_Runtime.m_VehicleRegistry.CancelRestore();
+                m_Runtime.m_VehicleRegistry.CancelRestore();
                 throw;
             }
-            if (!startupSilent)
-                SetRegistrationReady(vehicle, waypointIndex, finalState, nowFrame);
-            if (!startupSilent && boarding && waypointIndex < 0)
+            SetRegistrationReady(vehicle, waypointIndex, finalState, nowFrame);
+            if (boarding && waypointIndex < 0)
                 m_PendingRegistrationConfirmations[vehicle] = (line, 2);
-            if (!startupSilent && finalState == VehicleState.Running)
+            if (finalState == VehicleState.Running)
                 m_Runtime.m_RuntimeEngine.CommitRunning(vehicle, line);
-            if (!startupSilent && finalState == VehicleState.Holding)
+            if (finalState == VehicleState.Holding)
                 m_Runtime.m_Observation.Seed(vehicle, line, nowFrame);
 
-            if (!startupSilent && RtLog.VerboseEnabled)
+            if (RtLog.VerboseEnabled)
             {
                 string lineTag = "线路" + line.Index;
                 m_Runtime.log.Info("[注册] " + lineTag + " 车辆" + vehicle.Index

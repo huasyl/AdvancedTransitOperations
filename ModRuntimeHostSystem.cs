@@ -634,10 +634,6 @@ namespace RapidTransitMod
             m_StopRuntime.RouteInvalidatedTimedPlans(simulationFrame, CanVehicleBypass);
             m_RailEventSource.CompileSourceRows(m_RuntimeFramePlan, simulationFrame);
             m_RoadEventSource.CompileSourceRows(m_RuntimeFramePlan, simulationFrame);
-            if (startupActivation)
-            {
-                ApplyStartupActivationState(m_RuntimeFramePlan.Entries, simulationFrame);
-            }
             m_RuntimeHotPathProbe.MarkCost(ref runtimeCost, RuntimeCostPhase.SourceRoute);
             m_RuntimeFramePlan.Freeze(RuntimeStageMask.Stop);
             IReadOnlyList<FramePlanEntry> stopEntries = m_RuntimeFramePlan.ForStage(RuntimeStageMask.Stop);
@@ -1153,27 +1149,6 @@ namespace RapidTransitMod
             }
         }
 
-        private void ApplyStartupActivationState(IReadOnlyList<FramePlanEntry> entries, uint frame)
-        {
-            for (int i = 0; i < entries.Count; i++)
-            {
-                FramePlanEntry entry = entries[i];
-                if ((entry.Stages & RuntimeStageMask.Dispatch) == 0)
-                    continue;
-                Entity vehicle = entry.Vehicle;
-                if (!m_VehicleView.TryGetLine(vehicle, out Entity line)
-                    || !m_VehicleView.TryGetState(vehicle, out VehicleState state))
-                {
-                    continue;
-                }
-
-                if (state == VehicleState.Running)
-                    m_RuntimeEngine.CommitRunning(vehicle, line);
-                else if (state == VehicleState.Holding)
-                    m_Observation.Seed(vehicle, line, frame);
-            }
-        }
-
         private void ApplyRunningCommits()
         {
             IReadOnlyList<RunningCommit> commits = m_RuntimeEngine.RunningCommits;
@@ -1575,7 +1550,7 @@ namespace RapidTransitMod
                         true,
                         reason: "vanilla-blocker-chain-stall"),
                     nowFrame);
-                Game.Vehicles.PublicTransport publicTransport = ReadRailPublicTransport(candidate.Local);
+                Game.Vehicles.PublicTransport publicTransport = EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(candidate.Local);
                 m_StopRuntime.ReleaseTimedStop(candidate.Local, nowFrame);
                 m_CommandApplier.ForceDepart(candidate.Local, ref publicTransport, nowFrame, commandBuffer);
                 m_StopRuntime.StartDeparturePending(candidate.Local, nowFrame);
@@ -2766,11 +2741,6 @@ namespace RapidTransitMod
             return left.Index != right.Index
                 ? left.Index.CompareTo(right.Index)
                 : left.Version.CompareTo(right.Version);
-        }
-
-        private Game.Vehicles.PublicTransport ReadRailPublicTransport(Entity vehicle)
-        {
-            return EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle);
         }
 
         private void ApplyLineServiceChanges(ClockSnapshot clockSnapshot)

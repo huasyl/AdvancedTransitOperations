@@ -258,6 +258,7 @@ namespace RapidTransitMod
         public void RestoreRun(Entity vehicle)
         {
             m_Vehicles.SetState(vehicle, VehicleState.Running);
+            m_Vehicles.ClearPreparing(vehicle);
             m_Vehicles.ClearTarget(vehicle);
             m_Vehicles.ClearSlot(vehicle);
             m_Vehicles.ClearLaunch(vehicle);

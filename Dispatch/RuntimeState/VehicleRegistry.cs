@@ -427,8 +427,6 @@ namespace RapidTransitMod
             EndRestore(line);
         }
 
-        internal bool IsSilentRestore => m_Restoring && m_RestoreVehicle == Entity.Null;
-
         public void EndRestore(Entity line)
         {
             if (!m_Restoring)
