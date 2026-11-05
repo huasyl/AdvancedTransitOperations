@@ -1,8 +1,6 @@
 using System;
-using Colossal.Serialization.Entities;
 using System.Collections.Generic;
 using Game;
-using Game.Common;
 using Game.Routes;
 using Game.SceneFlow;
 using Game.Vehicles;
@@ -22,23 +20,41 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime = runtime;
         }
 
-        public void Loaded(Context serializationContext)
+        public void Loaded()
+        {
+            m_Runtime.EntityManager.CompleteAllTrackedJobs();
+            ResetForLoad();
+            MigrationReport report = RestoreSavedConfig();
+            RestoreLineBaseline();
+            PublishLoaded(report);
+        }
+
+        internal void ActivateFirstFrame(uint frame, ClockSnapshot clock)
+        {
+            m_Runtime.m_LineProfile.ConfirmLoadedRoutes();
+            m_Runtime.m_VehicleRegistrar.ActivateStartup(frame);
+            m_Runtime.m_SystemReady = true;
+            m_Runtime.m_DispatchScheduler.ResetMonitorClock(clock);
+            m_Runtime.m_ObsBuffers.LoadMonitor();
+            m_Runtime.m_ObsBuffers.LoadMonitorIntegrity();
+            m_Runtime.m_ObsBuffers.LoadMonitorAverages();
+            m_Runtime.m_LineStructureInvalidator.OnObservationRestored();
+            m_Runtime.log.Info("[Startup] Takeover complete, system ready");
+        }
+
+        private void ResetForLoad()
         {
             ClearTracking();
             m_Runtime.m_SimClock.ForceRefresh(m_Runtime.m_SimulationSystem.frameIndex);
-            m_Runtime.m_StartupRuntimeStateCleared = true;
-
-            // 阶段 B（前半，Reset 类）——保持原位，不动迁移语义。
-            m_Runtime.m_SpawnIntentTrace?.Clear();
             m_Runtime.m_SpawnLeadTheory?.Clear();
-            m_Runtime.m_RailEtaService?.ResetCity();
 #if RT_DEBUG_TOOLS
             RailEtaHost.RailEtaHotDebugApi.RequestReloadLatest();
 #endif
-            m_Runtime.m_Observation.ClearDispatchEta();
             PassengerFlow.SamplingSystem.ClearState();
+        }
 
-            // 阶段 A: ScanLineAnchors（在任何 Applied/draft 恢复前完成）。Scan 后映射冻结。
+        private MigrationReport RestoreSavedConfig()
+        {
             try
             {
                 if (RuntimeRoot.ScanLineAnchors(m_Runtime))
@@ -67,20 +83,15 @@ namespace RapidTransitMod.Dispatch.Runtime
                     + ex.GetType().Name + ": " + ex.Message);
             }
 
-            // 阶段 B（后半，Reset 类）——保持原位，不动迁移语义。
             ResetCityBufferReadyFlags();
             m_Runtime.m_CommandApplier.ResetRetireDispatchLockStages();
             m_Runtime.m_CommandApplier.ProjectRetireDispatchLocksImmediatelyOnLoad();
             m_Runtime.m_SystemReady = false;
-            m_Runtime.m_StartupRuntimeStateCleared = true;
-            m_Runtime.m_StableFrameCount = 0;
-            m_Runtime.m_LastVehicleCount = -1;
             m_Runtime.m_AnnouncementWorkbench.Reset();
             m_Runtime.m_WorkbenchBridge.Reset();
             m_Runtime.m_OverviewFeatureSettingsPersist.Reset();
             m_Runtime.m_OverviewFeatureSettingsPersist.Restore();
 
-            // 阶段 C: Applied buffer 恢复 vs 字符串 draft，按 buffer 是否存在分流。
             Entity city = m_Runtime.m_CitySystem.City;
             bool hasAppliedBuffer = city != Entity.Null
                 && (m_Runtime.EntityManager.HasBuffer<AppliedWorkbenchLineStateElement>(city)
@@ -128,7 +139,6 @@ namespace RapidTransitMod.Dispatch.Runtime
                 }
             }
 
-            // 阶段 D: store 迁移（Applied/LineConfig）。
             MigrationReport report = new MigrationReport();
             try
             {
@@ -143,7 +153,6 @@ namespace RapidTransitMod.Dispatch.Runtime
                     + ex.GetType().Name + ": " + ex.Message);
             }
 
-            // 阶段 E: 先恢复 PassengerFlow 持久化聚合，再运行各字符串域迁移。
             try
             {
                 PassengerFlow.Persistence.RestoreFromCity(m_Runtime.EntityManager, m_Runtime.m_CitySystem.City);
@@ -163,7 +172,6 @@ namespace RapidTransitMod.Dispatch.Runtime
                     + ex.GetType().Name + ": " + ex.Message);
             }
 
-            // 阶段 F: 恢复 Applied 配置（LineConfigStore 已迁移到 stable）。
             try
             {
                 m_Runtime.m_WorkbenchBridge.Applied().RefreshCfg();
@@ -174,8 +182,19 @@ namespace RapidTransitMod.Dispatch.Runtime
                     + ex.GetType().Name + ": " + ex.Message);
             }
 
-            // 阶段 G: 清理 + 发布 + 保存。
+            return report;
+        }
+
+        private void RestoreLineBaseline()
+        {
             m_Runtime.m_Bypass.WarmStaticSceneIndex();
+            m_Runtime.m_LineStructureInvalidator.AcceptLoadedChains();
+            m_Runtime.m_LineProfile.BaselineLoadedLines();
+        }
+
+        private void PublishLoaded(MigrationReport report)
+        {
+            Entity city = m_Runtime.m_CitySystem.City;
             if (RtLog.CacheInvalidationDiagnosticsEnabled)
             {
                 int CountBuffer<T>() where T : unmanaged, IBufferElementData
@@ -203,7 +222,6 @@ namespace RapidTransitMod.Dispatch.Runtime
                 m_Runtime.m_WorkbenchBridge.Ui().Fault("OnGameLoaded.NotifyWorkbenchSnapshotChanged", ex);
             }
 
-            // 阶段 H: 迁移汇总。
 #if RT_VERBOSE_LOGS
             report.LogDetails(message => m_Runtime.log.Info(message));
 #endif
@@ -211,84 +229,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             {
                 m_Runtime.log.Info("[LineKeyMigration] summary: " + report.Summary());
             }
-        }
-
-        public void ClearAll()
-        {
-            m_Runtime.m_TransitSignalRuntime?.Clear("city-cleared");
-            m_Runtime.m_LineStructureInvalidator?.ResetRuntimeState();
-            m_Runtime.m_LineChangeSource?.ResetPending();
-            m_Runtime.m_SpawnIntentTrace?.Clear();
-            m_Runtime.m_SpawnLeadTheory?.Clear();
-            m_Runtime.m_RailEtaService?.ResetCity();
-            m_Runtime.m_Observation.ClearDispatchEta();
-            PassengerFlow.SamplingSystem.ClearState();
-            EntityCommandBuffer commandBuffer = m_Runtime.m_EndFrameBarrier.CreateCommandBuffer();
-            NativeArray<Entity> entities = m_Runtime.m_AllPublicTransportQuery.ToEntityArray(Allocator.Temp);
-            foreach (Entity entity in entities)
-            {
-                if (!m_Runtime.EntityManager.HasComponent<Game.Prefabs.PrefabData>(entity))
-                    commandBuffer.AddComponent<Deleted>(entity);
-            }
-
-            entities.Dispose();
-            m_Runtime.m_VehicleRegistry.Clear();
-            m_Runtime.m_VehicleRegistrar.ClearRegistrationConfirmations();
-            m_Runtime.m_VehicleRegistrar.ClearStartupGate();
-            m_Runtime.m_LineServiceState.Reset();
-            m_Runtime.m_DispatchScheduler.ClearServiceWindows();
-            m_Runtime.m_ServiceWindowStore.ClearAll();
-            m_Runtime.m_RailEventSource.ResetTracking();
-            m_Runtime.m_ObsPersist.ClearLaps();
-            m_Runtime.m_UICache.Clear();
-            m_Runtime.m_VehicleLabels.Clear();
-            m_Runtime.m_StopRuntimeState.ClearBoardingStates();
-            m_Runtime.m_BoardingFirstFrameGuardState.Clear();
-            m_Runtime.m_StopRuntimeState.ClearStopSessions();
-            m_Runtime.m_StopRuntimeState.ClearInvalidatedRecovery();
-            m_Runtime.m_StopRuntime.ClearTimedDeadlines();
-            m_Runtime.m_CachedWpIdx.Clear();
-            m_Runtime.m_StopRuntimeState.ClearForcedMidStopGrace();
-            m_Runtime.m_CommandApplier.ClearRetireHandoffState();
-            m_Runtime.m_PreparingFixCooldownUntil.Clear();
-            m_Runtime.m_SpawningLines.Clear();
-            m_Runtime.m_LineSpawnRequestFrame.Clear();
-            m_Runtime.m_LastSpawnBlockedLogFrame.Clear();
-            m_Runtime.m_LastScheduleDiagnosticLogFrame.Clear();
-            m_Runtime.m_LineTimes.Clear();
-            m_Runtime.m_LineProfile.ClearStability();
-            ResetCityBufferReadyFlags();
-            m_Runtime.m_Observation.ClearDwellDeadlineCache();
-            m_Runtime.m_ObsPersist.ClearDwell();
-            m_Runtime.m_DwellObservationBufferReady = false;
-            m_Runtime.m_DwellObservationCacheLoaded = false;
-            m_Runtime.m_StationDwellObservationBufferReady = false;
-            m_Runtime.m_StationDwellObservationCacheLoaded = false;
-            m_Runtime.m_Observation.ClearStationAnchorObservationDiagnosticsState();
-            m_Runtime.m_ObsPersist.ClearSlices();
-            m_Runtime.m_SliceAdmission.Clear();
-            m_Runtime.m_Obs.Clear();
-            m_Runtime.m_TraversalSliceObservationBufferReady = false;
-            m_Runtime.m_TraversalSliceObservationCacheLoaded = false;
-            m_Runtime.m_JustLaunched.Clear();
-            m_Runtime.m_RuntimeEngine.ClearAssistLaunchPending();
-            m_Runtime.m_Bypass.ClearAll();
-            m_Runtime.m_TrackModel.InvalidateAll();
-            m_Runtime.m_TrackProjection.Clear();
-            m_Runtime.m_WaypointIndex.Clear();
-            m_Runtime.m_RouteProgress.Clear();
-            m_Runtime.m_SystemReady = false;
-            m_Runtime.m_StartupRuntimeStateCleared = false;
-            m_Runtime.m_StableFrameCount = 0;
-            m_Runtime.m_LastVehicleCount = -1;
-            m_Runtime.m_LastPuppetMasterMinute = -1;
-            m_Runtime.m_LastSchedulerTickMinute = -1;
-            m_Runtime.m_SelectPanel.ClearDebugSummaries();
-            m_Runtime.m_StationContextQuery.Clear();
-            m_Runtime.m_RuntimeLog.Clear();
-            m_Runtime.m_RuntimeHotPathProbe.Clear();
-            m_Runtime.ClearFrameBuffers();
-            m_Runtime.log.Info("[清场] 已清除所有公共交通车辆");
         }
 
         public void ClearTracking()
@@ -304,7 +244,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_Announcements.Clear();
             m_Runtime.m_VehicleRegistry.Clear();
             m_Runtime.m_VehicleRegistrar.ClearRegistrationConfirmations();
-            m_Runtime.m_VehicleRegistrar.ClearStartupGate();
             m_Runtime.m_LineServiceState.Reset();
             m_Runtime.m_DispatchScheduler.ClearServiceWindows();
             m_Runtime.m_ServiceWindowStore.ClearTracking();
@@ -356,7 +295,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_RuntimeLog.Clear();
             m_Runtime.m_RuntimeHotPathProbe.Clear();
             m_Runtime.ClearFrameBuffers();
-            m_Runtime.log.Info("[启动] 已清空跨档运行态缓存");
+            m_Runtime.log.Info("[Startup] Cleared runtime state from the previous save");
         }
 
 #if RT_DEBUG_TOOLS

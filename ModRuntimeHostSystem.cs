@@ -358,20 +358,14 @@ namespace RapidTransitMod
             return m_VehicleStateStore.State.IsCreated && m_VehicleView.TryGetState(vehicle, out state);
         }
 
-        // ── 启动稳定检测（仅启动阶段执行一次，通过后永久关闭）──
         internal bool m_SystemReady = false;
-        internal bool m_StartupRuntimeStateCleared = false;
-        internal int m_StableFrameCount = 0;
-        internal int m_LastVehicleCount = -1;
         internal int m_LastPuppetMasterMinute = -1;
         internal int m_LastSchedulerTickMinute = -1;
-        internal const int STABLE_FRAMES_REQUIRED = 5;
 
         // ── 定期写缓存 ──
         internal uint m_LastVehicleCacheFlushFrame = 0;
         internal const uint VEHICLE_CACHE_FLUSH_INTERVAL = 300;
 
-        internal EntityQuery m_AllPublicTransportQuery;
         internal EntityQuery m_LineQuery;
         internal const int SLOT_INTERVAL_MINUTES = 30;
         internal const int SPAWN_LEAD_MINUTES = 60;
@@ -437,7 +431,6 @@ namespace RapidTransitMod
         internal const int LATE_DISPATCH_WINDOW_MINUTES = 8;
         internal const float ETA_SCALE_MIN = 0.5f;
         internal const float ETA_SCALE_MAX = 2.0f;
-        internal const uint NEW_LINE_STABLE_FRAMES = 300;
         private const int DISPATCH_SAMPLE_HISTORY_LIMIT = 8;
         private const float DISPATCH_SAMPLE_OUTLIER_FACTOR = 1.5f;
         private const float DISPATCH_FAST_SAMPLE_MARGIN = 0.98f;
@@ -462,9 +455,6 @@ namespace RapidTransitMod
             m_CitySystem = World.GetOrCreateSystemManaged<CitySystem>();
             m_CameraUpdateSystem = World.GetOrCreateSystemManaged<CameraUpdateSystem>();
 
-            m_AllPublicTransportQuery = GetEntityQuery(
-                ComponentType.ReadOnly<Game.Vehicles.PublicTransport>());
-
             m_LineQuery = GetEntityQuery(new EntityQueryDesc
             {
                 All = new ComponentType[] {
@@ -486,8 +476,6 @@ namespace RapidTransitMod
             m_HasInvalidatedRecovery = m_StopRuntime.HasInvalidatedRecovery;
             m_IsDeparturePending = m_StopRuntime.IsDeparturePending;
             m_IsForcedMidStopGraceActive = m_StopRuntime.IsForcedMidStopGraceActive;
-
-            log.Info("=== RapidTransit v41.1 [VehicleCache] 启动 ===");
         }
 
         internal bool IsBypassStationSetting(Entity entity)
@@ -514,6 +502,7 @@ namespace RapidTransitMod
         protected override void OnUpdate()
         {
             uint simulationFrame = m_SimulationSystem.frameIndex;
+            bool startupActivation = !m_SystemReady;
             RuntimeCostFrame runtimeCost = m_RuntimeHotPathProbe.BeginCost(
                 simulationFrame,
                 m_SystemReady,
@@ -524,7 +513,7 @@ namespace RapidTransitMod
                     m_SimClock.RefreshIfDue(simulationFrame);
                 else
                     m_SimClock.ForceRefresh(simulationFrame);
-                if (GameManager.instance.gameMode == GameMode.Game && m_SystemReady)
+                if (GameManager.instance.gameMode == GameMode.Game)
                     m_LineChangeSource?.ConfirmChanges();
                 Dependency = m_RailEtaService?.TickHot(simulationFrame, Dependency) ?? Dependency;
             }
@@ -533,14 +522,6 @@ namespace RapidTransitMod
             m_SelectPanel.UpdateVersionBucket();
 
 #if RT_DEBUG_TOOLS
-            if (Input.GetKey(KeyCode.LeftControl)
-                && Input.GetKey(KeyCode.LeftAlt)
-                && Input.GetKey(KeyCode.X))
-            {
-                m_RuntimeLifecycleHost.ClearAll();
-                return;
-            }
-
             if (Input.GetKeyDown(KeyCode.F8))
             {
                 m_RuntimeLifecycleHost.SpawnTest();
@@ -550,65 +531,12 @@ namespace RapidTransitMod
             if (m_Bypass.ToggleKey(Input.GetKey(KeyCode.F5)))
                 return;
 
-            if (Input.GetKeyDown(KeyCode.F6))
-            {
-                m_RuntimeLifecycleHost.ClearAll();
-                return;
-            }
-
             if (Input.GetKeyDown(KeyCode.F7))
             {
                 m_CommandApplier.ForceRetireOne();
                 return;
             }
 #endif
-
-            bool startupActivation = false;
-            if (!m_SystemReady)
-            {
-                if (!m_VehicleRegistrar.StartupGateActive)
-                {
-                    if (!m_StartupRuntimeStateCleared)
-                    {
-                        m_RuntimeLifecycleHost.ClearTracking();
-                        m_StartupRuntimeStateCleared = true;
-                    }
-
-                    BufferLookup<RouteVehicle> routeVehicles = GetBufferLookup<RouteVehicle>(true);
-                    NativeArray<Entity> lines = m_LineQuery.ToEntityArray(Allocator.Temp);
-                    int totalVehicles = 0;
-                    foreach (Entity line in lines)
-                    {
-                        if (routeVehicles.TryGetBuffer(line, out DynamicBuffer<RouteVehicle> vehicles))
-                            totalVehicles += vehicles.Length;
-                    }
-
-                    lines.Dispose();
-                    if (totalVehicles != m_LastVehicleCount)
-                    {
-                        m_LastVehicleCount = totalVehicles;
-                        m_StableFrameCount = 0;
-                        return;
-                    }
-
-                    m_StableFrameCount++;
-                    if (m_StableFrameCount < STABLE_FRAMES_REQUIRED)
-                        return;
-
-                    m_VehicleRegistrar.BeginStartupGate();
-                    log.Info("[启动] 稳定检测通过，进入静默接管(车辆数=" + totalVehicles + ")");
-                }
-
-                if (!m_VehicleRegistrar.IsStartupActivationFrame(simulationFrame))
-                {
-                    m_VehicleCache.Ensure();
-                    m_ServiceWindowStore.Ensure();
-                    m_VehicleRegistrar.TickStartupGate();
-                    return;
-                }
-
-                startupActivation = true;
-            }
 
             m_FrameEvents.BeginFrame();
             m_RailEventSource.BeginFrame();
@@ -653,32 +581,16 @@ namespace RapidTransitMod
 
             if (startupActivation)
             {
-                bool activated = m_VehicleRegistrar.TryActivateStartup(simulationFrame);
-                if (!activated)
-                {
-                    return;
-                }
-
-                m_SystemReady = true;
-                m_DispatchScheduler.ResetMonitorClock(clockSnapshot);
-                m_ObsBuffers.LoadMonitor();
-                m_ObsBuffers.LoadMonitorIntegrity();
-                m_ObsBuffers.LoadMonitorAverages();
-                m_LineStructureInvalidator.OnObservationRestored();
-                log.Info("[启动] 静默接管完成，系统就绪");
+                m_RuntimeLifecycleHost.ActivateFirstFrame(simulationFrame, clockSnapshot);
             }
-
-            if (!startupActivation)
+            else
             {
                 m_CommandApplier.ReconcileRetireDispatchLocksOnReady();
                 m_RuntimeFramePlan.DrainUiCommands();
                 ApplyUiCommands(commandBuffer, clockSnapshot);
                 ApplyLineServiceChanges(clockSnapshot);
-            }
-            m_RuntimeHotPathProbe.MarkCost(ref runtimeCost, RuntimeCostPhase.Setup);
+                m_RuntimeHotPathProbe.MarkCost(ref runtimeCost, RuntimeCostPhase.Setup);
 
-            if (!startupActivation)
-            {
                 using (s_SourceMarker.Auto())
                 {
                     m_RailEventSource.CollectIfDue(simulationFrame);
@@ -2879,7 +2791,7 @@ namespace RapidTransitMod
 #if RT_DEBUG_TOOLS
             m_RuntimeProbe.StopTrace("gameLoaded");
 #endif
-            m_RuntimeLifecycleHost.Loaded(serializationContext);
+            m_RuntimeLifecycleHost.Loaded();
             Broadcasting.AssetLifecycle.Instance?.Loaded(serializationContext, m_AnnouncementWorkbench);
         }
 

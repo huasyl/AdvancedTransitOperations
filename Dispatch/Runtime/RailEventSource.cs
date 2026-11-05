@@ -418,23 +418,15 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_DemandVehicles.Clear();
         }
 
-        public bool RebaselineStartup(IReadOnlyList<Entity> vehicles, uint frame)
+        public void RebaselineStartup(IReadOnlyList<Entity> vehicles, uint frame)
         {
-            if ((frame & 15u) != 3u)
-                return false;
-
             for (int i = 0; i < vehicles.Count; i++)
             {
-                int rowIndex = EnsureSourceRow(vehicles[i], frame);
-                if (rowIndex < 0)
-                    return false;
-                RailFrameRow row = m_FrameRows[rowIndex];
+                if (EnsureSourceRow(vehicles[i], frame) < 0)
+                    continue;
                 m_Runtime.m_RuntimeHotPathProbe.CountSourceRow();
-                if (!row.InputValid || row.CurrentRoute != row.RegisteredLine)
-                    return false;
             }
             m_LastCollectedFrame = frame;
-            return true;
         }
 
         public bool TryGetStartupSource(Entity vehicle, Entity line, uint frame, out bool boarding, out int waypoint, out int waypointCount)

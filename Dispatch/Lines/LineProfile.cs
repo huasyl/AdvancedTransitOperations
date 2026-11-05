@@ -15,6 +15,8 @@ namespace RapidTransitMod.Dispatch.Lines
 {
     internal sealed class LineProfile
     {
+        private const uint NEW_LINE_STABLE_FRAMES = 300;
+
         internal sealed class RoadRouteSnapshot
         {
             internal Entity[] Waypoints = System.Array.Empty<Entity>();
@@ -408,7 +410,64 @@ namespace RapidTransitMod.Dispatch.Lines
                 return false;
             }
 
-            return nowFrame - stableSince >= ModRuntimeHostSystem.NEW_LINE_STABLE_FRAMES;
+            return nowFrame - stableSince >= NEW_LINE_STABLE_FRAMES;
+        }
+
+        internal void BaselineLoadedLines()
+        {
+            uint stableSince = m_Runtime.m_SimulationSystem.frameIndex - NEW_LINE_STABLE_FRAMES;
+            using NativeArray<Entity> lines = m_Runtime.m_LineQuery.ToEntityArray(Allocator.Temp);
+            for (int i = 0; i < lines.Length; i++)
+            {
+                Entity line = lines[i];
+                if (!RuntimePorts.TryResolveLineLifecycle(m_Runtime, line, out LifecycleKind lifecycle))
+                    continue;
+                DynamicBuffer<RouteWaypoint> waypoints = m_Runtime.EntityManager.GetBuffer<RouteWaypoint>(line, true);
+                if (lifecycle == LifecycleKind.Rail)
+                {
+                    m_LineWaypointSignature[line] = ComputeWaypointSignature(waypoints);
+                }
+                else if (lifecycle == LifecycleKind.Road)
+                {
+                    m_RoadSnapshots[line] = CaptureRoadRoute(waypoints);
+                    m_LineWaypointSignature[line] = 0;
+                }
+                else
+                {
+                    continue;
+                }
+                m_LineStableSinceFrame[line] = stableSince;
+            }
+        }
+
+        internal void ConfirmLoadedRoutes()
+        {
+            using NativeArray<Entity> lines = m_Runtime.m_LineQuery.ToEntityArray(Allocator.Temp);
+            for (int i = 0; i < lines.Length; i++)
+            {
+                Entity line = lines[i];
+                if (!RuntimePorts.TryResolveLineLifecycle(m_Runtime, line, out LifecycleKind lifecycle)
+                    || lifecycle != LifecycleKind.Road
+                    || !m_RoadSnapshots.TryGetValue(line, out RoadRouteSnapshot previous))
+                {
+                    continue;
+                }
+                DynamicBuffer<RouteWaypoint> waypoints = m_Runtime.EntityManager.GetBuffer<RouteWaypoint>(line, true);
+                if (!MatchesRoadRoute(previous, waypoints))
+                    ReplaceRoadRoute(line, previous, waypoints);
+            }
+        }
+
+        private void ReplaceRoadRoute(
+            Entity line,
+            RoadRouteSnapshot previous,
+            DynamicBuffer<RouteWaypoint> waypoints)
+        {
+            RoadRouteSnapshot current = CaptureRoadRoute(waypoints);
+            m_Runtime.m_LineStructureInvalidator.RequestRoadRoute(line, previous, current);
+            m_RoadSnapshots[line] = current;
+            m_LineStableSinceFrame[line] = m_Runtime.m_SimulationSystem.frameIndex;
+            m_DiagnosedLines.Remove(line);
         }
 
         internal void ResetRailStructure(Entity line, DynamicBuffer<RouteWaypoint> waypoints)
@@ -467,11 +526,7 @@ namespace RapidTransitMod.Dispatch.Lines
 
             if (!MatchesRoadRoute(previous, waypoints))
             {
-                RoadRouteSnapshot current = CaptureRoadRoute(waypoints);
-                m_Runtime.m_LineStructureInvalidator.RequestRoadRoute(line, previous, current);
-                m_RoadSnapshots[line] = current;
-                m_LineStableSinceFrame[line] = nowFrame;
-                m_DiagnosedLines.Remove(line);
+                ReplaceRoadRoute(line, previous, waypoints);
                 return false;
             }
 
@@ -481,7 +536,7 @@ namespace RapidTransitMod.Dispatch.Lines
                 return false;
             }
 
-            return nowFrame - stableSince >= ModRuntimeHostSystem.NEW_LINE_STABLE_FRAMES;
+            return nowFrame - stableSince >= NEW_LINE_STABLE_FRAMES;
         }
 
         internal bool TryReadRoadRoute(Entity line, out RoadRouteSnapshot snapshot)

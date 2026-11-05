@@ -449,7 +449,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             LineProfile.RoadRouteSnapshot oldRoute,
             LineProfile.RoadRouteSnapshot newRoute)
         {
-            if (line == Entity.Null || oldRoute == null || newRoute == null || !m_Runtime.m_SystemReady)
+            if (line == Entity.Null || oldRoute == null || newRoute == null)
                 return;
             if (m_PendingRoadLines.TryGetValue(line, out PendingRoadInvalidation pending))
             {
@@ -527,6 +527,36 @@ namespace RapidTransitMod.Dispatch.Runtime
             for (int i = 0; i < roadLines.Count; i++)
                 DrainRoadLine(roadLines[i]);
         }
+        internal void AcceptLoadedChains()
+        {
+            int accepted = 0;
+            int waiting = 0;
+            foreach (RailStructureState state in m_RailStates.Values)
+            {
+                if (state.Phase != RailPhase.Candidate)
+                    continue;
+                if (IsCompleteChain(state.CandidateChain)
+                    && TryReadRailLayout(state.Line, out LineStopLayout layout))
+                {
+                    PromoteCandidate(state, layout);
+                    accepted++;
+                }
+                else
+                {
+                    waiting++;
+                }
+            }
+            m_Runtime.log.Info("[Startup] Track chains on load: accepted=" + accepted + " waiting=" + waiting);
+        }
+        private void PromoteCandidate(RailStructureState state, LineStopLayout layout)
+        {
+            state.StableChain = state.CandidateChain;
+            state.StableLayout = layout;
+            state.PendingOldStopSig = string.Empty;
+            state.Phase = RailPhase.Stable;
+            state.PendingApplied = false;
+            DeactivateRail(state.Line);
+        }
         private void DrainRailState(RailStructureState state, uint frame)
         {
             if (state == null)
@@ -538,20 +568,13 @@ namespace RapidTransitMod.Dispatch.Runtime
             }
             if (state.Phase == RailPhase.Candidate)
             {
-                if (!m_Runtime.m_SystemReady)
-                    return;
                 if (!IsCompleteChain(state.CandidateChain))
                     return;
                 if (frame - state.LastCandidateFrame < CandidateQuietFrames)
                     return;
                 if (!TryReadRailLayout(state.Line, out LineStopLayout layout))
                     return;
-                state.StableChain = state.CandidateChain;
-                state.StableLayout = layout;
-                state.PendingOldStopSig = string.Empty;
-                state.Phase = RailPhase.Stable;
-                state.PendingApplied = false;
-                DeactivateRail(state.Line);
+                PromoteCandidate(state, layout);
                 return;
             }
             if (state.Phase != RailPhase.WaitingFinal
@@ -561,8 +584,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             {
                 return;
             }
-            if (!m_Runtime.m_SystemReady)
-                return;
             if (!m_ObservationRestored)
                 return;
             if (state.Phase == RailPhase.Deleted)
@@ -623,7 +644,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         }
         private void CommitRailPlan(RailStructureState state, uint frame)
         {
-            if (!m_Runtime.m_SystemReady || !m_ObservationRestored || state?.PendingPlan == null)
+            if (!m_ObservationRestored || state?.PendingPlan == null)
                 return;
             LineStructurePlan plan = state.PendingPlan;
             if (!PlanMatches(state, plan))

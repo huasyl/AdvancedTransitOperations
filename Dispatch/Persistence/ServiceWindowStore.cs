@@ -143,15 +143,6 @@ namespace RapidTransitMod.Dispatch.Persistence
             m_Dirty = false;
         }
 
-        internal void ClearAll()
-        {
-            m_Restored.Clear();
-            Entity city = m_Runtime.m_CitySystem.City;
-            if (city != Entity.Null && m_Runtime.EntityManager.HasBuffer<LineServiceWindowElement>(city))
-                m_Runtime.EntityManager.GetBuffer<LineServiceWindowElement>(city).Clear();
-            m_Dirty = false;
-        }
-
         private static DateTime ReadTime(int dateKey, int minute)
         {
             if (dateKey <= 0 || minute < 0 || minute >= 1440)

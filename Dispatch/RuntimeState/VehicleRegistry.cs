@@ -368,13 +368,13 @@ namespace RapidTransitMod
             m_FramePlan?.ClearDeadline(vehicle, DeadlineKind.OriginBoardingGrace);
         }
 
-        public void Remove(Entity vehicle, bool publish = true)
+        public void Remove(Entity vehicle)
         {
             Entity line = ReadLine(vehicle);
             VehicleState state = m_Store.State.TryGetValue(vehicle, out VehicleState existingState)
                 ? existingState
                 : default;
-            if (vehicle != Entity.Null && publish)
+            if (vehicle != Entity.Null)
             {
                 uint frame = m_Frame();
                 m_Events.AppendLifecycle(vehicle, frame, LifecycleFactKind.Removed, line: line, state: state);
@@ -386,8 +386,7 @@ namespace RapidTransitMod
             m_FramePlan?.ClearVehicle(vehicle);
             m_SetDemand?.Invoke(vehicle, RuntimeDemandMask.DeparturePending | RuntimeDemandMask.OriginCandidate | RuntimeDemandMask.InboundWatch, false);
             m_Store.Remove(vehicle);
-            if (publish)
-                MarkSchedulerDirty(line);
+            MarkSchedulerDirty(line);
         }
 
         public void Clear()

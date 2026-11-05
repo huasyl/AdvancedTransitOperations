@@ -6,9 +6,7 @@ namespace RapidTransitMod.Dispatch.Runtime
     internal enum ExitMode
     {
         Dead,
-        Live,
-        SilentRetry,
-        SilentLeave
+        Live
     }
 
     internal readonly struct ExitContext
@@ -40,16 +38,15 @@ namespace RapidTransitMod.Dispatch.Runtime
         {
             ExitContext context = Capture(vehicle);
             uint frame = m_Runtime.m_SimulationSystem.frameIndex;
-            bool silent = mode == ExitMode.SilentRetry || mode == ExitMode.SilentLeave;
 
-            if (mode == ExitMode.Live || mode == ExitMode.SilentLeave)
+            if (mode == ExitMode.Live)
             {
                 m_Runtime.m_CommandApplier.ReleaseExitHold(vehicle, context.Lifecycle, frame);
                 m_Runtime.m_VehicleCache.RemoveVehicle(vehicle);
             }
 
             StopCancelResult cancelled = m_Runtime.m_StopRuntime.ReleaseVehicle(vehicle, frame);
-            if (!silent && cancelled.Exists)
+            if (cancelled.Exists)
                 m_Runtime.PublishStopFact(cancelled.Fact);
 
             bool rail = context.Lifecycle == LifecycleKind.Rail;
@@ -60,7 +57,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 m_Runtime.m_RoadEventSource.RemoveVehicle(vehicle);
             m_Runtime.m_RouteProgress.Remove(vehicle);
             ClearHostFields(vehicle, reason);
-            m_Runtime.m_VehicleRegistry.Remove(vehicle, publish: !silent);
+            m_Runtime.m_VehicleRegistry.Remove(vehicle);
             return context;
         }
 

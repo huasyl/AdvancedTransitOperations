@@ -598,26 +598,22 @@ namespace RapidTransitMod.Dispatch.Runtime
             SyncBoardingBaseline(row);
         }
 
-        public bool RebaselineStartup(IReadOnlyList<Entity> vehicles, uint frame)
+        public void RebaselineStartup(IReadOnlyList<Entity> vehicles, uint frame)
         {
             for (int i = 0; i < vehicles.Count; i++)
+                EnsureSourceRow(vehicles[i], frame);
+
+            for (int i = 0; i < vehicles.Count; i++)
             {
-                int rowIndex = EnsureSourceRow(vehicles[i], frame);
-                if (rowIndex < 0)
-                    return false;
+                if (!m_FrameRowIndex.TryGetValue(vehicles[i], out int rowIndex))
+                    continue;
 
                 RoadFrameRow row = m_FrameRows[rowIndex];
                 if (!row.InputValid || row.CurrentRoute != row.RegisteredLine)
-                    return false;
-            }
+                    continue;
 
-            for (int i = 0; i < vehicles.Count; i++)
-            {
-                if (m_FrameRowIndex.TryGetValue(vehicles[i], out int rowIndex))
-                    UpdateBaseline(m_FrameRows[rowIndex]);
+                UpdateBaseline(row);
             }
-
-            return true;
         }
 
         public bool TryReadCurrentWaypoint(
