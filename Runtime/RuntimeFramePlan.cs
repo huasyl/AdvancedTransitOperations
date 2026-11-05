@@ -46,7 +46,6 @@ namespace RapidTransitMod.Runtime
             }
         }
 
-        public IReadOnlyList<FramePlanEntry> Entries => m_Entries;
         public IReadOnlyList<DeadlineEntry> DueDeadlines => m_DueDeadlines;
         public IReadOnlyList<UiCommand> UiCommands => m_FrameUiCommands;
 

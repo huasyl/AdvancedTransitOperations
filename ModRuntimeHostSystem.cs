@@ -232,6 +232,7 @@ namespace RapidTransitMod
         internal VehicleExit m_VehicleExit = null!;
         internal SchedulerApply m_SchedulerApply = null!;
         internal VehicleRegistrar m_VehicleRegistrar = null!;
+        internal VehicleStartup m_VehicleStartup = null!;
         internal RuntimeVehicleLabels m_VehicleLabels = null!;
         internal RuntimeResolve m_Resolve = null!;
         internal ViewTracking.FollowContext m_FollowContext = null!;

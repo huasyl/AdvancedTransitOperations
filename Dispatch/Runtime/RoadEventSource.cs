@@ -598,22 +598,17 @@ namespace RapidTransitMod.Dispatch.Runtime
             SyncBoardingBaseline(row);
         }
 
-        public void RebaselineStartup(IReadOnlyList<Entity> vehicles, uint frame)
+        public void RebaselineStartup(Entity vehicle, uint frame)
         {
-            for (int i = 0; i < vehicles.Count; i++)
-                EnsureSourceRow(vehicles[i], frame);
+            EnsureSourceRow(vehicle, frame);
+            if (!m_FrameRowIndex.TryGetValue(vehicle, out int rowIndex))
+                return;
 
-            for (int i = 0; i < vehicles.Count; i++)
-            {
-                if (!m_FrameRowIndex.TryGetValue(vehicles[i], out int rowIndex))
-                    continue;
+            RoadFrameRow row = m_FrameRows[rowIndex];
+            if (!row.InputValid || row.CurrentRoute != row.RegisteredLine)
+                return;
 
-                RoadFrameRow row = m_FrameRows[rowIndex];
-                if (!row.InputValid || row.CurrentRoute != row.RegisteredLine)
-                    continue;
-
-                UpdateBaseline(row);
-            }
+            UpdateBaseline(row);
         }
 
         public bool TryReadCurrentWaypoint(
@@ -648,12 +643,10 @@ namespace RapidTransitMod.Dispatch.Runtime
             Entity line,
             uint frame,
             out bool boarding,
-            out int waypoint,
-            out int waypointCount)
+            out int waypoint)
         {
             boarding = false;
             waypoint = -1;
-            waypointCount = 0;
             if (!TryGetRow(vehicle, out RoadFrameRow row)
                 || row.RegisteredLine != line
                 || row.SourceFrame != frame
@@ -663,7 +656,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             }
 
             boarding = OfficialBoarding(row);
-            waypointCount = waypoints.Length;
             if (!TryResolveTargetWaypoint(row.Vehicle, waypoints, out waypoint))
                 waypoint = row.CachedWaypoint;
             if (row.RegistryState == VehicleState.Holding)

@@ -32,7 +32,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         internal void ActivateFirstFrame(uint frame, ClockSnapshot clock)
         {
             m_Runtime.m_LineProfile.ConfirmLoadedRoutes();
-            m_Runtime.m_VehicleRegistrar.ActivateStartup(frame);
+            m_Runtime.m_VehicleStartup.Activate(frame);
             m_Runtime.m_SystemReady = true;
             m_Runtime.m_DispatchScheduler.ResetMonitorClock(clock);
             m_Runtime.m_ObsBuffers.LoadMonitor();

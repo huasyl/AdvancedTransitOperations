@@ -17,11 +17,9 @@ namespace RapidTransitMod
         private readonly Func<Entity, TransitMode> m_ModeOfLine;
         private readonly Action<StopFact> m_PublishStopFact;
         private RuntimeFramePlan m_FramePlan;
-        private RuntimeFramePlan m_SilentFramePlan;
         private Action<Entity, RuntimeDemandMask, bool> m_SetDemand;
         private Action<Entity> m_MarkSchedulerDirty;
         private bool m_Restoring;
-        private Entity m_RestoreVehicle;
 
         public VehicleRegistry(VehicleStateStore store, VehicleWorksets worksets, FrameEvents events, Func<uint> frame,
             Func<double, uint> toFramesCeil, Func<Entity, TransitMode> modeOfLine, Action<StopFact> publishStopFact)
@@ -397,44 +395,17 @@ namespace RapidTransitMod
             m_Store.Clear();
         }
 
-        public void BeginRestore(Entity vehicle)
+        public void BeginRestore()
         {
             m_Restoring = true;
-            m_RestoreVehicle = vehicle;
         }
 
-        public void BeginSilentRestore()
-        {
-            m_Restoring = true;
-            m_RestoreVehicle = Entity.Null;
-            m_SilentFramePlan = m_FramePlan;
-            m_FramePlan = null;
-        }
-
-        public void EndSilentRestore()
-        {
-            m_FramePlan = m_SilentFramePlan;
-            m_SilentFramePlan = null;
-            m_Restoring = false;
-        }
-
-        public void PublishStartupRestore(Entity vehicle, Entity line)
-        {
-            if (vehicle == Entity.Null || !m_Store.State.ContainsKey(vehicle))
-                return;
-
-            BeginRestore(vehicle);
-            EndRestore(line);
-        }
-
-        public void EndRestore(Entity line)
+        public void EndRestore(Entity vehicle, Entity line)
         {
             if (!m_Restoring)
                 return;
 
-            Entity vehicle = m_RestoreVehicle;
             m_Restoring = false;
-            m_RestoreVehicle = Entity.Null;
             m_Events.AppendLifecycle(
                 vehicle,
                 m_Frame(),
@@ -450,7 +421,6 @@ namespace RapidTransitMod
         public void CancelRestore()
         {
             m_Restoring = false;
-            m_RestoreVehicle = Entity.Null;
         }
 
         private void MarkSchedulerDirty(Entity line) => m_MarkSchedulerDirty?.Invoke(line);

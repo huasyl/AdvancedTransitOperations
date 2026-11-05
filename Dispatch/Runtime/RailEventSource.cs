@@ -418,22 +418,17 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_DemandVehicles.Clear();
         }
 
-        public void RebaselineStartup(IReadOnlyList<Entity> vehicles, uint frame)
+        public void RebaselineStartup(Entity vehicle, uint frame)
         {
-            for (int i = 0; i < vehicles.Count; i++)
-            {
-                if (EnsureSourceRow(vehicles[i], frame) < 0)
-                    continue;
+            if (EnsureSourceRow(vehicle, frame) >= 0)
                 m_Runtime.m_RuntimeHotPathProbe.CountSourceRow();
-            }
             m_LastCollectedFrame = frame;
         }
 
-        public bool TryGetStartupSource(Entity vehicle, Entity line, uint frame, out bool boarding, out int waypoint, out int waypointCount)
+        public bool TryGetStartupSource(Entity vehicle, Entity line, uint frame, out bool boarding, out int waypoint)
         {
             boarding = false;
             waypoint = -1;
-            waypointCount = 0;
             if (!TryGetRow(vehicle, out RailFrameRow row)
                 || !row.InputValid
                 || row.RegisteredLine != line
@@ -447,7 +442,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_FrameRows[m_FrameRowIndex[vehicle]] = row;
             boarding = OfficialBoarding(row);
             waypoint = row.CachedWaypoint;
-            waypointCount = row.WaypointCount;
             return true;
         }
 
@@ -456,10 +450,9 @@ namespace RapidTransitMod.Dispatch.Runtime
             Entity line,
             uint frame,
             out bool boarding,
-            out int waypoint,
-            out int waypointCount)
+            out int waypoint)
         {
-            if (!TryGetStartupSource(vehicle, line, frame, out boarding, out waypoint, out waypointCount))
+            if (!TryGetStartupSource(vehicle, line, frame, out boarding, out waypoint))
                 return false;
 
             if (!m_FrameRowIndex.TryGetValue(vehicle, out int rowIndex))
@@ -477,10 +470,9 @@ namespace RapidTransitMod.Dispatch.Runtime
                 default,
                 out _,
                 out waypoint);
-            waypointCount = waypoints.Length;
             if (waypoint >= 0)
                 row.CachedWaypoint = waypoint;
-            row.WaypointCount = waypointCount;
+            row.WaypointCount = waypoints.Length;
             m_FrameRows[rowIndex] = row;
             if (waypoint >= 0)
                 CommitWaypoint(vehicle, waypoint);

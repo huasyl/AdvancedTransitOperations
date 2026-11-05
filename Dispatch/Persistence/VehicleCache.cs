@@ -233,7 +233,7 @@ namespace RapidTransitMod.Dispatch.Persistence
             }
         }
 
-        private bool RestoreTimed(Entity vehicle, Entity line)
+        private void RestoreTimed(Entity vehicle, Entity line)
         {
             m_Runtime.m_StopRuntime.ClearTimedPlan(vehicle);
             Entity city = m_Runtime.m_CitySystem.City;
@@ -241,7 +241,7 @@ namespace RapidTransitMod.Dispatch.Persistence
                 || !m_Runtime.EntityManager.HasBuffer<TimedPlanCacheElement>(city)
                 || !m_Runtime.EntityManager.HasBuffer<TimedStopCacheElement>(city))
             {
-                return false;
+                return;
             }
 
             DynamicBuffer<TimedPlanCacheElement> plans =
@@ -270,7 +270,7 @@ namespace RapidTransitMod.Dispatch.Persistence
                 || header.m_ServiceDateTicks <= DateTime.MinValue.Ticks
                 || header.m_ServiceDateTicks > DateTime.MaxValue.Ticks)
             {
-                return false;
+                return;
             }
 
             var clock = m_Runtime.m_SimClock.Snapshot;
@@ -281,7 +281,7 @@ namespace RapidTransitMod.Dispatch.Persistence
             {
                 m_Runtime.m_StopRuntime.InvalidateTimedPlan(
                     vehicle, header.m_ActiveStopOrder >= 0);
-                return false;
+                return;
             }
 
             TimedStop[] stops = new TimedStop[header.m_StopCount];
@@ -306,7 +306,7 @@ namespace RapidTransitMod.Dispatch.Persistence
                     || element.m_Depart < -1
                     || element.m_Depart >= 48 * 60)
                 {
-                    return false;
+                    return;
                 }
 
                 seen[element.m_Order] = true;
@@ -323,7 +323,7 @@ namespace RapidTransitMod.Dispatch.Persistence
             if (count != stops.Length
                 || !m_Runtime.m_LineView.TryStopLayout(line, out string stopSig, out int[] currentWaypoints))
             {
-                return false;
+                return;
             }
 
             TimedStopPlan plan = new TimedStopPlan
@@ -345,7 +345,7 @@ namespace RapidTransitMod.Dispatch.Persistence
                 plan,
                 header.m_ArrivalWaitMinutes,
                 header.m_ClockTicksPerDay);
-            return m_Runtime.m_StopRuntime.RestoreTimedPlan(snapshot, stopSig, currentWaypoints);
+            m_Runtime.m_StopRuntime.RestoreTimedPlan(snapshot, stopSig, currentWaypoints);
         }
 
         public bool RestoreRun(Entity v, Entity line, DynamicBuffer<RouteWaypoint> wps, string initReason)

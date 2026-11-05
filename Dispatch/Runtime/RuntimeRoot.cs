@@ -80,6 +80,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 runtime,
                 runtime.m_LineSpawnControl);
             runtime.m_VehicleRegistrar = new VehicleRegistrar(runtime);
+            runtime.m_VehicleStartup = new VehicleStartup(runtime);
             runtime.m_VehicleLabels = new RuntimeVehicleLabels(runtime);
             runtime.m_LineAnchorCatalog = new LineAnchorCatalog(runtime.EntityManager);
             runtime.m_LineServiceState = new LineServiceState(runtime.EntityManager);
@@ -680,6 +681,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_LineSpawnControl = null!;
             runtime.m_SpawnLeadTheory = null!;
             runtime.m_VehicleRegistrar = null!;
+            runtime.m_VehicleStartup = null!;
             runtime.m_VehicleLabels = null!;
             runtime.m_SelectPanel = null!;
             runtime.m_SelectPort = null!;
