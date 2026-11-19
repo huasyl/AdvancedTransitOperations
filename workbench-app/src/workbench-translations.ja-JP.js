@@ -253,7 +253,6 @@ export const nativeScheduleTranslationsJaJp = {
   "timetable.table.stop.origin": "始発",
   "timetable.table.stop.terminal": "終着",
   "timetable.time.dayOffset": "（+{dayOffset}日）",
-  "timetable.time.dayHint": "+{dayOffset}日",
   "timetable.validation.format": "形式が正しくありません",
   "timetable.validation.dwell": "停車時間は{minutes}分以上",
   "timetable.validation.thirdDay": "3日目は非対応",

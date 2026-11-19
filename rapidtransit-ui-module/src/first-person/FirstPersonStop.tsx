@@ -1,6 +1,6 @@
 import React from "react";
 import { FirstPersonData } from "./firstPersonBindings";
-import { formatServiceMinute } from "../shared/time-format";
+import { ServiceTime } from "../shared/ServiceTime";
 
 const TEXT = "#f4f8fc";
 const FIELD_STYLE: React.CSSProperties = { display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0, paddingLeft: "24rem", paddingRight: "24rem" };
@@ -16,7 +16,7 @@ export function FirstPersonStop({ data, t }: { data: NonNullable<FirstPersonData
       </div>
       {data.plannedDepartureMinute != null ? <div style={FIELD_STYLE}>
         <div style={LABEL_STYLE}>{t("plannedDeparture")}</div>
-        <div style={VALUE_STYLE}>{formatServiceMinute(data.plannedDepartureMinute)}</div>
+        <div style={VALUE_STYLE}><ServiceTime minute={data.plannedDepartureMinute} markSize="13rem" /></div>
       </div> : null}
     </div>
   );

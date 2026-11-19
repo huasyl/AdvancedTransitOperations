@@ -1,18 +1,16 @@
 import { useValue } from "cs2/api";
 import { Panel, Scrollable } from "cs2/ui";
 import React from "react";
-import { activeLocale$, useLocalPanelOpen, panelDataJson$, devSightJson$, devSightVisible$, etaHotAvailable$, etaHotStatusJson$, etaSnapshotStatusJson$, setLocalPanelOpen, visible$ } from "./selectionBindings";
+import { useLocalPanelOpen, panelDataJson$, devSightJson$, devSightVisible$, etaHotAvailable$, etaHotStatusJson$, etaSnapshotStatusJson$, setLocalPanelOpen, visible$ } from "./selectionBindings";
 import { useT } from "./selectionI18n";
 import { COLORS } from "./selectionStyles";
 import { SignalPriority } from "./SignalPriority";
 import { buildDetailRows, DevSightData, EtaHotStatusData, EtaSnapshotStatusData, formatAlertText, PanelData } from "./selectionViewModel";
-import { ActionButton, ArrivalTimesRow, BypassToggleRow, DetailRow, DevSightBlock, LatinScheduleRows, PanelHeader, ScheduledTimeRow, SectionCard, VehicleInfoRow } from "./components";
+import { ActionButton, BypassToggleRow, DetailRow, DevSightBlock, PanelHeader, SectionCard, TimeRow, VehicleInfoRow } from "./components";
 
 export function RapidTransitPanel() {
   const t = useT();
   const open = useLocalPanelOpen();
-  const activeLocale = useValue<string>(activeLocale$) || "";
-  const isCjkLocale = /^(zh|ja)([-_]|$)/i.test(activeLocale);
   const visible = useValue<boolean>(visible$) === true;
   const panelDataJson = useValue<string>(panelDataJson$) || "";
   const devSightVisible = useValue<boolean>(devSightVisible$) === true;
@@ -90,8 +88,6 @@ export function RapidTransitPanel() {
   const hasPlannedDeparture = isVehicle
     && typeof panelData?.plannedDepartureMinute === "number"
     && panelData.plannedDepartureMinute >= 0;
-  const showArrivalPair = hasPlannedArrival && hasActualArrival;
-  const showLatinSchedule = !isCjkLocale && (hasPlannedArrival || hasPlannedDeparture);
   const titleKey = mode === "line" ? "lineTitle" : "vehicleTitle";
   const actionButtons: Array<{ action: string; label: string }> = [];
 
@@ -181,47 +177,24 @@ export function RapidTransitPanel() {
                             {panelData.showCurrentStop ? (
                               <div style={{ display: "flex", flexDirection: "column" }}>
                                 <VehicleInfoRow label="currentStation" value={panelData.currentStationName} t={t} />
-                                {isCjkLocale || !showLatinSchedule ? (
-                                  <>
-                                    {showArrivalPair ? (
-                                      <div style={{ marginTop: "8rem" }}>
-                                        <ArrivalTimesRow
-                                          plannedArrivalMinute={panelData.plannedArrivalMinute}
-                                          actualArrivalMinute={panelData.actualArrivalMinute}
-                                          t={t}
-                                        />
-                                      </div>
-                                    ) : null}
-                                    {!showArrivalPair && hasPlannedArrival ? (
-                                      <div style={{ marginTop: "8rem" }}>
-                                        <ScheduledTimeRow label="arrival" minute={panelData.plannedArrivalMinute} t={t} />
-                                      </div>
-                                    ) : null}
-                                    {!showArrivalPair && hasActualArrival ? (
-                                      <div style={{ marginTop: "8rem" }}>
-                                        <VehicleInfoRow label="actualArrival" value={panelData.actualArrivalMinute} valueKind="serviceMinute" level="secondary" t={t} />
-                                      </div>
-                                    ) : null}
-                                    {hasPlannedDeparture ? (
-                                      <div style={{ marginTop: "8rem" }}>
-                                        <ScheduledTimeRow label="departure" minute={panelData.plannedDepartureMinute} t={t} />
-                                      </div>
-                                    ) : null}
-                                    <div style={{ marginTop: "8rem" }}>
-                                      <VehicleInfoRow label="stopped" value={panelData.stopDwellValue} level="secondary" t={t} />
-                                    </div>
-                                  </>
-                                ) : (
+                                {hasPlannedArrival ? (
                                   <div style={{ marginTop: "8rem" }}>
-                                    <LatinScheduleRows
-                                      plannedArrivalMinute={panelData.plannedArrivalMinute}
-                                      actualArrivalMinute={panelData.actualArrivalMinute}
-                                      plannedDepartureMinute={panelData.plannedDepartureMinute}
-                                      stopDwellValue={panelData.stopDwellValue}
-                                      t={t}
-                                    />
+                                    <TimeRow label="plannedArrival" minute={panelData.plannedArrivalMinute} actualMinute={panelData.actualArrivalMinute} t={t} />
                                   </div>
-                                )}
+                                ) : null}
+                                {!hasPlannedArrival && hasActualArrival ? (
+                                  <div style={{ marginTop: "8rem" }}>
+                                    <VehicleInfoRow label="actualArrival" value={panelData.actualArrivalMinute} valueKind="serviceMinute" level="secondary" t={t} />
+                                  </div>
+                                ) : null}
+                                {hasPlannedDeparture ? (
+                                  <div style={{ marginTop: "8rem" }}>
+                                    <TimeRow label="plannedDeparture" minute={panelData.plannedDepartureMinute} t={t} />
+                                  </div>
+                                ) : null}
+                                <div style={{ marginTop: "8rem" }}>
+                                  <VehicleInfoRow label="stopped" value={panelData.stopDwellValue} level="secondary" t={t} />
+                                </div>
                               </div>
                             ) : null}
                             {showAhead ? (
@@ -236,7 +209,7 @@ export function RapidTransitPanel() {
                                 ) : null}
                                 {typeof panelData.nextPlannedArrivalMinute === "number" && panelData.nextPlannedArrivalMinute >= 0 ? (
                                   <div style={{ marginTop: "8rem" }}>
-                                    <ScheduledTimeRow label="arrival" minute={panelData.nextPlannedArrivalMinute} t={t} />
+                                    <TimeRow label="plannedArrival" minute={panelData.nextPlannedArrivalMinute} t={t} />
                                   </div>
                                 ) : null}
                               </div>

@@ -253,7 +253,6 @@ export const nativeScheduleTranslationsZhCn = {
   "timetable.table.stop.origin": "始发",
   "timetable.table.stop.terminal": "终到",
   "timetable.time.dayOffset": "（+{dayOffset}日）",
-  "timetable.time.dayHint": "+{dayOffset}日",
   "timetable.validation.format": "格式错误",
   "timetable.validation.dwell": "停站不得小于 {minutes} 分钟",
   "timetable.validation.thirdDay": "暂不支持跨三日时刻",

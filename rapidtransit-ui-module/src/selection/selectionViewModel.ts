@@ -1,6 +1,3 @@
-import { formatServiceMinute } from "../shared/time-format";
-export { formatServiceMinute } from "../shared/time-format";
-
 export interface DetailRowData {
   label?: string;
   value?: string | number;
@@ -227,10 +224,6 @@ export function buildDetailRows(panelData: PanelData | null, mode: string) {
 }
 
 export function formatValue(value: string | number | undefined, valueKind: string | undefined, t: (key: string) => string) {
-  if (valueKind === "serviceMinute") {
-    return formatServiceMinute(typeof value === "number" ? value : undefined);
-  }
-
   if (value == null || value === "" || value === "-") {
     return "-";
   }

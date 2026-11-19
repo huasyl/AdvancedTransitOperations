@@ -3,6 +3,7 @@ import WorkbenchDropdown from "../../shared/WorkbenchDropdown";
 import { useNativeScheduleI18n } from "../../shared/workbench-i18n";
 import OperationMonitor from "./OperationMonitor";
 import RunChart from "./RunChart";
+import ServiceTime from "./ServiceTime";
 import TimetableIcon from "./TimetableIcons";
 import { formatServiceMinute, minutesToTime, serviceDayOffset, timeToMinutes } from "./timetable-data";
 import useTimetableController from "./useTimetableController";
@@ -20,22 +21,9 @@ function formatServiceTime(value, t) {
   return formatServiceMinute(value, (dayOffset) => t("timetable.time.dayOffset", { dayOffset }));
 }
 
-function formatDayHint(value, t) {
+function formatDayHint(value) {
   const dayOffset = serviceDayOffset(value);
-  return dayOffset > 0 ? t("timetable.time.dayHint", { dayOffset }) : "";
-}
-
-function renderArrivalTime(value, t) {
-  if (!Number.isFinite(value)) {
-    return "--";
-  }
-  const dayOffset = serviceDayOffset(value);
-  return (
-    <span className="rtw-timetable-service-time">
-      <span>{minutesToTime(value)}</span>
-      {dayOffset > 0 ? <span className="rtw-timetable-day-mark">{t("timetable.time.dayHint", { dayOffset })}</span> : null}
-    </span>
-  );
+  return dayOffset > 0 ? `+${dayOffset}` : "";
 }
 
 function diagnosticNow() {
@@ -1258,7 +1246,7 @@ function TimetableEditor({ line, historicalRuntime, theoryRuntime, showHistorica
             const nextInputRef = nextOccurrence != null ? getTimeInputRef(nextOccurrence) : null;
             const hint = error
               ? t(`timetable.validation.${error}`, { minutes: minimumScheduleMinutes })
-              : formatDayHint(Number.isFinite(draftMinute) ? draftMinute : stop.departureMinute, t);
+              : formatDayHint(Number.isFinite(draftMinute) ? draftMinute : stop.departureMinute);
             return (
               <div key={stop.occurrence} className="rtw-timetable-table-row rtw-timetable-stop-row rtw-timetable-stagger-row" style={{ animationDelay: `${Math.min(index, 5) * 70}ms` }}>
                 <div className="is-section rtw-timetable-stop-cell">
@@ -1266,18 +1254,18 @@ function TimetableEditor({ line, historicalRuntime, theoryRuntime, showHistorica
                   {index === 0 ? <span className="rtw-timetable-stop-tag">{t("timetable.table.stop.origin")}</span> : null}
                   {isLast ? <span className="rtw-timetable-stop-tag">{t("timetable.table.stop.terminal")}</span> : null}
                 </div>
-                <div className="is-time is-arrival">{index === 0 ? "--" : renderArrivalTime(stop.arrivalMinute, t)}</div>
+                <div className="is-time is-arrival">{index === 0 ? "--" : <ServiceTime value={stop.arrivalMinute} />}</div>
                 <div className={`is-time is-departure ${error ? "has-error" : ""}`} onBlur={(event) => {
                   const value = event.target?.value ?? "";
                   if (value && !isLast && index > 0 && train.canEdit && !isValidTimeValue(value)) {
                     onInvalidTime(train.id, stop.occurrence, value);
                   }
                 }}>
-                  {isLast ? "--" : index === 0 || !train.canEdit ? formatServiceTime(stop.departureMinute, t) : (
+                  {isLast ? "--" : index === 0 || !train.canEdit ? <ServiceTime value={stop.departureMinute} /> : (
                     <>
                       <TimetableIcon name="clock" />
                       <DemoTextField label="" value={draft?.value ?? (stop.departureMinute == null ? "" : minutesToTime(stop.departureMinute))} onCommit={(value) => onTimeChange(train.id, stop.occurrence, value)} onDraftChange={(value) => onTimeDraft(train.id, stop.occurrence, value)} inputRef={inputRef} previousInputRef={previousInputRef} nextInputRef={nextInputRef} errorText={error ? hint : ""} preserveInvalidTime allowEmptyCommit className="rtw-timetable-time-field" timeMode />
-                      <span className={`rtw-timetable-time-hint ${error ? "is-error" : ""}`}>{hint}</span>
+                      <span className={`rtw-timetable-time-hint ${error ? "is-error" : ""}`}>{error || !hint ? hint : <span className="rtw-timetable-day-mark">{hint}</span>}</span>
                     </>
                   )}
                 </div>
@@ -1299,7 +1287,7 @@ function TimetableEditor({ line, historicalRuntime, theoryRuntime, showHistorica
       <div className="rtw-timetable-table is-summary rtw-timetable-content-enter">
         <div className="rtw-timetable-table-body">{line.trains.map((item, index) => (
           <button type="button" key={item.id} className="rtw-timetable-summary-item rtw-timetable-stagger-row" style={{ animationDelay: `${Math.min(Math.floor(index / 3), 5) * 70}ms` }} onClick={() => onEdit(item.id)}>
-            <span className="rtw-timetable-summary-time">{formatServiceTime(item.slotMinute, t)}</span>
+            <span className="rtw-timetable-summary-time"><ServiceTime value={item.slotMinute} /></span>
             <span className={`dw-demo-badge ${item.scheduleType === "custom" ? "is-express" : "is-local"}`}>{item.scheduleType === "custom" ? t("timetable.mode.custom") : t("timetable.mode.default")}</span>
           </button>
         ))}</div>

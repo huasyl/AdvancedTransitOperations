@@ -1,8 +1,9 @@
 import { trigger } from "cs2/api";
 import React, { useState } from "react";
 import { GROUP } from "./selectionBindings";
+import { ServiceTime } from "../shared/ServiceTime";
 import { COLORS } from "./selectionStyles";
-import { formatServiceMinute, formatValue } from "./selectionViewModel";
+import { formatValue } from "./selectionViewModel";
 
 export function SectionCard(props: React.PropsWithChildren<{ compact?: boolean; dense?: boolean; first?: boolean; alert?: boolean; seamless?: boolean }>) {
   const children = React.Children.toArray(props.children);
@@ -39,19 +40,23 @@ export function DetailRow(props: {
     return null;
   }
 
+  const padding = props.strong ? "6.5rem" : props.dense ? "3.5rem" : "5.5rem";
+
   return (
     <div
       style={{
         display: "flex",
         flexDirection: "row",
         justifyContent: "space-between",
-        alignItems: "center",
-        minHeight: props.strong ? "36rem" : props.dense ? "28rem" : "32rem"
+        alignItems: "flex-start",
+        paddingTop: padding,
+        paddingBottom: padding
       }}
     >
       <div
         style={{
-          minWidth: 0,
+          flexShrink: 0,
+          whiteSpace: "nowrap",
           fontSize: props.strong ? "17rem" : "15rem",
           lineHeight: props.strong ? "23rem" : "20rem",
           fontWeight: props.strong ? 600 : 400,
@@ -67,9 +72,11 @@ export function DetailRow(props: {
           fontWeight: props.strong ? 600 : 500,
           color: COLORS.title,
           textAlign: "right",
-          flexShrink: 0,
+          flexShrink: 1,
+          minWidth: 0,
           marginLeft: "14rem",
-          whiteSpace: "nowrap"
+          whiteSpace: "normal",
+          overflowWrap: "break-word"
         }}
       >
         {formatValue(props.value, props.valueKind, props.t)}
@@ -87,6 +94,7 @@ export function VehicleInfoRow(props: {
 }) {
   const level = props.level || "primary";
   const secondary = level === "secondary";
+  const padding = secondary ? "1.5rem" : "3.5rem";
 
   return (
     <div
@@ -94,14 +102,16 @@ export function VehicleInfoRow(props: {
         display: "flex",
         flexDirection: "row",
         justifyContent: "space-between",
-        alignItems: "center",
-        minHeight: secondary ? "24rem" : "28rem",
+        alignItems: "flex-start",
+        paddingTop: padding,
+        paddingBottom: padding,
         marginLeft: secondary ? "16rem" : "0"
       }}
     >
       <div
         style={{
-          minWidth: 0,
+          flexShrink: 0,
+          whiteSpace: "nowrap",
           fontSize: "15rem",
           lineHeight: "20rem",
           fontWeight: 400,
@@ -112,159 +122,69 @@ export function VehicleInfoRow(props: {
       </div>
       <div
         style={{
-          flexShrink: 0,
+          flexShrink: 1,
+          minWidth: 0,
           marginLeft: "12rem",
           fontSize: "16rem",
           lineHeight: "21rem",
           fontWeight: 500,
           color: COLORS.title,
           textAlign: "right",
-          whiteSpace: "nowrap"
+          whiteSpace: "normal",
+          overflowWrap: "break-word"
         }}
       >
-        {formatValue(props.value, props.valueKind, props.t)}
+        {props.valueKind === "serviceMinute"
+          ? <ServiceTime minute={typeof props.value === "number" ? props.value : undefined} markSize="11rem" />
+          : formatValue(props.value, props.valueKind, props.t)}
       </div>
     </div>
   );
 }
 
-export function ArrivalTimesRow(props: {
-  plannedArrivalMinute?: number;
-  actualArrivalMinute?: number;
-  t: (key: string) => string;
-}) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "row",
-        justifyContent: "space-between",
-        alignItems: "center",
-        minHeight: "24rem",
-        marginLeft: "16rem"
-      }}
-    >
-      <div style={{ flexShrink: 0, fontSize: "15rem", lineHeight: "20rem", fontWeight: 400, color: COLORS.text }}>
-        {props.t("arrival")}
-      </div>
-      <div style={{ display: "flex", flexDirection: "row", alignItems: "center", flexShrink: 0, marginLeft: "12rem" }}>
-        <div style={{ fontSize: "15rem", lineHeight: "20rem", color: COLORS.text }}>
-          {props.t("scheduled")}
-        </div>
-        <div style={{ marginLeft: "8rem", fontSize: "16rem", lineHeight: "21rem", fontWeight: 500, color: COLORS.title, whiteSpace: "nowrap" }}>
-          {formatServiceMinute(props.plannedArrivalMinute)}
-        </div>
-        <div style={{ marginLeft: "12rem", fontSize: "15rem", lineHeight: "20rem", color: COLORS.text }}>
-          {props.t("actual")}
-        </div>
-        <div style={{ marginLeft: "8rem", fontSize: "16rem", lineHeight: "21rem", fontWeight: 500, color: COLORS.title, whiteSpace: "nowrap" }}>
-          {formatServiceMinute(props.actualArrivalMinute)}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-export function ScheduledTimeRow(props: {
+export function TimeRow(props: {
   label: string;
   minute?: number;
+  actualMinute?: number;
   t: (key: string) => string;
 }) {
+  const delay = typeof props.minute === "number" && props.minute >= 0
+    && typeof props.actualMinute === "number" && props.actualMinute >= 0
+    ? props.actualMinute - props.minute
+    : null;
+
   return (
     <div
       style={{
         display: "flex",
         flexDirection: "row",
-        justifyContent: "space-between",
         alignItems: "center",
         minHeight: "24rem",
         marginLeft: "16rem"
       }}
     >
-      <div style={{ fontSize: "15rem", lineHeight: "20rem", fontWeight: 400, color: COLORS.text }}>
+      <div style={{ flex: "1 1 auto", minWidth: 0, fontSize: "15rem", lineHeight: "20rem", fontWeight: 400, color: COLORS.text }}>
         {props.t(props.label)}
       </div>
-      <div style={{ display: "flex", flexDirection: "row", alignItems: "center", flexShrink: 0, marginLeft: "12rem" }}>
-        <div style={{ fontSize: "15rem", lineHeight: "20rem", color: COLORS.text }}>
-          {props.t("scheduled")}
+      {delay === null ? null : (
+        <div
+          style={{
+            flexShrink: 0,
+            marginLeft: "12rem",
+            fontSize: "15rem",
+            lineHeight: "20rem",
+            fontWeight: 400,
+            color: delay > 0 ? "var(--warningColor)" : delay < 0 ? "var(--accentColorNormal)" : "var(--positiveColor)",
+            whiteSpace: "nowrap"
+          }}
+        >
+          {delay === 0
+            ? props.t("onTime")
+            : props.t(delay > 0 ? "minutesLate" : "minutesEarly").replace("{minutes}", String(Math.abs(delay)))}
         </div>
-        <div style={{ marginLeft: "8rem", fontSize: "16rem", lineHeight: "21rem", fontWeight: 500, color: COLORS.title, whiteSpace: "nowrap" }}>
-          {formatServiceMinute(props.minute)}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-export function LatinScheduleRows(props: {
-  plannedArrivalMinute?: number;
-  actualArrivalMinute?: number;
-  plannedDepartureMinute?: number;
-  stopDwellValue?: string | number;
-  t: (key: string) => string;
-}) {
-  const hasArrival = (typeof props.plannedArrivalMinute === "number" && props.plannedArrivalMinute >= 0)
-    || (typeof props.actualArrivalMinute === "number" && props.actualArrivalMinute >= 0);
-  const hasDeparture = typeof props.plannedDepartureMinute === "number" && props.plannedDepartureMinute >= 0;
-  const columnStyle = {
-    width: "82rem",
-    flexShrink: 0,
-    textAlign: "right" as const,
-    whiteSpace: "nowrap" as const
-  };
-  const rowStyle = {
-    display: "flex",
-    flexDirection: "row" as const,
-    alignItems: "center",
-    minHeight: "24rem"
-  };
-  const labelStyle = {
-    flex: "1 1 auto",
-    minWidth: 0,
-    fontSize: "15rem",
-    lineHeight: "20rem",
-    fontWeight: 400,
-    color: COLORS.text
-  };
-  const valueStyle = {
-    ...columnStyle,
-    fontSize: "16rem",
-    lineHeight: "21rem",
-    fontWeight: 500,
-    color: COLORS.title
-  };
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", marginLeft: "16rem" }}>
-      {hasArrival || hasDeparture ? (
-        <div style={rowStyle}>
-          <div style={{ flex: "1 1 auto", minWidth: 0 }} />
-          <div style={{ ...columnStyle, fontSize: "15rem", lineHeight: "20rem", color: COLORS.text }}>
-            {props.t("scheduled")}
-          </div>
-          <div style={{ ...columnStyle, marginLeft: "12rem", fontSize: "15rem", lineHeight: "20rem", color: COLORS.text }}>
-            {props.t("actual")}
-          </div>
-        </div>
-      ) : null}
-      {hasArrival ? (
-        <div style={rowStyle}>
-          <div style={labelStyle}>{props.t("arrival")}</div>
-          <div style={valueStyle}>{formatServiceMinute(props.plannedArrivalMinute)}</div>
-          <div style={{ ...valueStyle, marginLeft: "12rem" }}>{formatServiceMinute(props.actualArrivalMinute)}</div>
-        </div>
-      ) : null}
-      {hasDeparture ? (
-        <div style={rowStyle}>
-          <div style={labelStyle}>{props.t("departure")}</div>
-          <div style={valueStyle}>{formatServiceMinute(props.plannedDepartureMinute)}</div>
-          <div style={{ ...valueStyle, marginLeft: "12rem" }}>—</div>
-        </div>
-      ) : null}
-      <div style={rowStyle}>
-        <div style={labelStyle}>{props.t("stopped")}</div>
-        <div style={columnStyle} />
-        <div style={{ ...valueStyle, marginLeft: "12rem" }}>{props.stopDwellValue || "-"}</div>
+      )}
+      <div style={{ flexShrink: 0, marginLeft: "12rem", fontSize: "16rem", lineHeight: "21rem", fontWeight: 500, color: COLORS.title, whiteSpace: "nowrap" }}>
+        <ServiceTime minute={props.minute} markSize="11rem" />
       </div>
     </div>
   );

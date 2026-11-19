@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { getWorkbenchApi } from "../../shared/workbench-api";
 import TimetableIcon from "./TimetableIcons";
-import { formatServiceMinute } from "./timetable-data";
+import ServiceTime from "./ServiceTime";
 
 export default function OperationMonitor({ line, dateMode, isActive, t }) {
   const api = useMemo(() => getWorkbenchApi(), []);
@@ -116,12 +116,12 @@ export default function OperationMonitor({ line, dateMode, isActive, t }) {
                 <Fragment key={trip.tripKey}>
                   <div className={`rtw-timetable-table-row rtw-timetable-monitor-row rtw-timetable-stagger-row ${expanded ? "is-expanded" : ""}`} style={{ animationDelay: `${Math.min(index, 5) * 70}ms` }} onClick={() => toggleTrip(trip.tripKey)}>
                     <div className="is-trip is-strong">
-                      <span>{formatMinute(trip.plannedStartMinute, t)}</span>
+                      <span>{formatMinute(trip.plannedStartMinute)}</span>
                       <span className={`dw-demo-badge ${custom ? "is-express" : "is-local"}`}>{t(custom ? "timetable.mode.custom" : "timetable.mode.default")}</span>
                     </div>
-                    <div className="is-actual is-time">{formatMinute(trip.actualStartMinute, t)}</div>
-                    <div className="is-terminal is-time">{formatMinute(trip.plannedEndMinute, t)}</div>
-                    <div className="is-terminal is-time">{formatMinute(trip.actualEndMinute, t)}</div>
+                    <div className="is-actual is-time">{formatMinute(trip.actualStartMinute)}</div>
+                    <div className="is-terminal is-time">{formatMinute(trip.plannedEndMinute)}</div>
+                    <div className="is-terminal is-time">{formatMinute(trip.actualEndMinute)}</div>
                     <div className={`is-trip-status ${getTripStatusClass(trip)}`}>{t(getTripStatus(trip))}</div>
                     <div className="is-action"><button type="button" className={`rtw-timetable-table-action ${expanded ? "is-active" : ""}`}>{expanded ? t("timetable.action.collapse") : t("timetable.action.fullRoute")}</button></div>
                   </div>
@@ -167,8 +167,8 @@ function TripDetail({ detail, header, stationNames, t }) {
               return (
                 <div key={`${stop.stopKey}-${stop.order}`} className="rtw-timetable-table-row rtw-timetable-stagger-row" style={{ animationDelay: `${Math.min(index, 5) * 70}ms` }}>
                   <div className="is-station"><span className="rtw-timetable-station-cell"><span className="rtw-timetable-station-spacer" />{stationNames.get(stop.stopKey) || stop.stopKey}</span></div>
-                  <TimePair arrival={stop.plannedArrivalMinute} departure={stop.plannedDepartureMinute} t={t} />
-                  <TimePair arrival={stop.actualArrivalMinute} departure={stop.actualDepartureMinute} t={t} />
+                  <TimePair arrival={stop.plannedArrivalMinute} departure={stop.plannedDepartureMinute} />
+                  <TimePair arrival={stop.actualArrivalMinute} departure={stop.actualDepartureMinute} />
                   <div className={`is-delta ${stop.skipped ? "is-muted" : delta > 0 ? "is-warning" : delta < 0 ? "is-accent" : "is-good"}`}>{stop.skipped ? t("timetable.monitor.skipped") : delta == null ? "--" : formatDelay(delta, t)}</div>
                   <div className={`is-status ${stop.cleared ? "is-muted" : "is-warning"}`}>{t(status)}</div>
                 </div>
@@ -181,8 +181,8 @@ function TripDetail({ detail, header, stationNames, t }) {
   );
 }
 
-function TimePair({ arrival, departure, t }) {
-  return <div className="is-pair is-time"><span>{formatMinute(arrival, t)}</span><span className="rtw-timetable-time-sep">/</span><span>{formatMinute(departure, t)}</span></div>;
+function TimePair({ arrival, departure }) {
+  return <div className="is-pair is-time"><span>{formatMinute(arrival)}</span><span className="rtw-timetable-time-sep">/</span><span>{formatMinute(departure)}</span></div>;
 }
 
 function getStopStatus(stop, index, trip, isClosing) {
@@ -253,10 +253,10 @@ function getStopDelta(stop) {
   return null;
 }
 
-function formatMinute(value, t) {
+function formatMinute(value) {
   return value == null || value < 0
     ? "--"
-    : formatServiceMinute(value, (dayOffset) => t("timetable.time.dayOffset", { dayOffset }));
+    : <ServiceTime value={value} />;
 }
 
 function formatDelay(value, t) {

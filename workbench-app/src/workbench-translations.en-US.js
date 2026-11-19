@@ -253,7 +253,6 @@ export const nativeScheduleTranslationsEnUs = {
   "timetable.table.stop.origin": "Origin",
   "timetable.table.stop.terminal": "Terminal",
   "timetable.time.dayOffset": " (+{dayOffset} day)",
-  "timetable.time.dayHint": "+{dayOffset} day",
   "timetable.validation.format": "Invalid format",
   "timetable.validation.dwell": "Minimum dwell: {minutes} min",
   "timetable.validation.thirdDay": "Third day unsupported",
