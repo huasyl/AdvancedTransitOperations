@@ -1,14 +1,15 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getWorkbenchApi } from "../../shared/workbench-api";
 import TimetableIcon from "./TimetableIcons";
 import ServiceTime from "./ServiceTime";
 
-export default function OperationMonitor({ line, dateMode, isActive, t }) {
+export default function OperationMonitor({ line, dateMode, isActive, t, focus = null, onFocused }) {
   const api = useMemo(() => getWorkbenchApi(), []);
   const [trips, setTrips] = useState([]);
   const [details, setDetails] = useState({});
   const [expandedTripKey, setExpandedTripKey] = useState("");
   const [error, setError] = useState("");
+  const scrollRef = useRef(null);
   const stationNames = useMemo(
     () => {
       const names = new Map();
@@ -78,6 +79,27 @@ export default function OperationMonitor({ line, dateMode, isActive, t }) {
     loadHeaders().catch((loadError) => setError(loadError instanceof Error ? loadError.message : String(loadError)));
   }, [isActive, loadHeaders]);
 
+  useEffect(() => {
+    if (!focus || !isActive || focus.lineId !== line?.id) {
+      return;
+    }
+    const index = trips.findIndex((trip) => trip.tripKey === focus.tripKey);
+    if (index < 0) {
+      return;
+    }
+    if (expandedTripKey !== focus.tripKey) {
+      setExpandedTripKey(focus.tripKey);
+      if (!details[focus.tripKey]) {
+        setDetails((current) => ({ ...current, [focus.tripKey]: null }));
+        loadDetail(focus.tripKey);
+      }
+      return;
+    }
+    const scroll = scrollRef.current;
+    scroll.scrollTop = index * scroll.querySelector(".rtw-timetable-monitor-row").getBoundingClientRect().height;
+    onFocused();
+  }, [focus, isActive, line?.id, trips, expandedTripKey]);
+
   async function toggleTrip(tripKey) {
     if (expandedTripKey === tripKey) {
       setExpandedTripKey("");
@@ -105,7 +127,7 @@ export default function OperationMonitor({ line, dateMode, isActive, t }) {
             <div className="is-action">{t("timetable.table.head.action")}</div>
           </div>
         </div>
-        <div className="rtw-timetable-table-scroll">
+        <div ref={scrollRef} className="rtw-timetable-table-scroll">
           <div className="rtw-timetable-table is-monitor">
           <div className="rtw-timetable-table-body">
             {trips.map((trip, index) => {

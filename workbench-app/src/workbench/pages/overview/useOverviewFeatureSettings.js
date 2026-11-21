@@ -33,14 +33,17 @@ function applyFeatureSettings(systems, featureSettings) {
 export default function useOverviewFeatureSettings({ systems, featureSettings: sourceFeatureSettings, canEdit = true, onSaved }) {
   const workbenchApi = useMemo(() => getWorkbenchApi(), []);
   const [featureSettings, setFeatureSettings] = useState(() => normalizeFeatureSettings(systems, sourceFeatureSettings));
+  const [error, setError] = useState("");
   const committedFeatureSettingsRef = useRef(normalizeFeatureSettings(systems, sourceFeatureSettings));
   const latestRunIdRef = useRef(0);
+  const operationInFlightRef = useRef(false);
 
   useEffect(() => {
+    if (!sourceFeatureSettings || operationInFlightRef.current) return;
     const nextSettings = normalizeFeatureSettings(systems, sourceFeatureSettings);
     committedFeatureSettingsRef.current = nextSettings;
     setFeatureSettings(nextSettings);
-  }, [sourceFeatureSettings, systems]);
+  }, [sourceFeatureSettings]);
 
   async function toggleFeature(featureKey) {
     if (!canEdit || !Object.prototype.hasOwnProperty.call(committedFeatureSettingsRef.current, featureKey)) {
@@ -53,6 +56,8 @@ export default function useOverviewFeatureSettings({ systems, featureSettings: s
     };
     const runId = latestRunIdRef.current + 1;
     latestRunIdRef.current = runId;
+    operationInFlightRef.current = true;
+    setError("");
     setFeatureSettings(nextSettings);
     traceWorkbench("overview.feature.toggle", { featureKey, enabled: nextSettings[featureKey] });
 
@@ -63,7 +68,11 @@ export default function useOverviewFeatureSettings({ systems, featureSettings: s
         shouldContinue: () => latestRunIdRef.current === runId
       });
 
-      if (latestRunIdRef.current !== runId || operationResult.interrupted || operationResult.superseded) {
+      if (latestRunIdRef.current !== runId) {
+        return;
+      }
+      if (operationResult.interrupted || operationResult.superseded) {
+        setFeatureSettings(committedFeatureSettingsRef.current);
         return;
       }
 
@@ -90,10 +99,14 @@ export default function useOverviewFeatureSettings({ systems, featureSettings: s
         featureKey,
         message: error?.message || error
       });
+      setError(error?.message || String(error));
+    } finally {
+      if (latestRunIdRef.current === runId) operationInFlightRef.current = false;
     }
   }
 
   return {
+    error,
     systems: applyFeatureSettings(systems, featureSettings),
     toggleFeature
   };

@@ -87,11 +87,11 @@ export function getCachedRulePreviewRows(entries, showSkipped, moveSkippedToEnd,
   const skippedEntries = showSkipped ? previewEntries.filter((entry) => entry?.skipped) : [];
   const nextRows = [
     ...chunkItemsBySize(keptEntries, maxItemsPerRow).map((rowEntries) => ({
-      text: rowEntries.map((entry) => entry.time).join(" · "),
+      times: rowEntries.map((entry) => entry.time),
       isSkipped: false
     })),
     ...chunkItemsBySize(skippedEntries, maxItemsPerRow).map((rowEntries) => ({
-      text: rowEntries.map((entry) => entry.time).join(" · "),
+      times: rowEntries.map((entry) => entry.time),
       isSkipped: true
     }))
   ];
@@ -116,7 +116,6 @@ export function DemoTopPreviewTimes({
         <span key={`row-${rowIndex}`} className="dw-demo-preview-rule-row">
           {rowTimes.map((time, index) => (
             <span key={`${time}-${rowIndex}-${index}`} className="dw-demo-preview-item">
-              {index > 0 ? <span className="dw-demo-preview-separator" aria-hidden="true">·</span> : null}
               <span className="dw-demo-preview-token">
                 <span className="dw-demo-preview-time">{time}</span>
               </span>
@@ -144,7 +143,7 @@ export function DemoRuleTextPreviewTimes({
       {rowsToRender.map((row, rowIndex) => {
         return (
           <span key={`row-${rowIndex}`} className={`dw-demo-preview-rule-row is-text ${row.isSkipped ? "is-skipped-row" : ""}`}>
-            <span className={`dw-demo-preview-rule-text-part ${row.isSkipped ? "is-skipped is-block" : ""}`}>{row.text}</span>
+            <span className={`dw-demo-preview-rule-text-part dw-departure-preview-times ${row.isSkipped ? "is-skipped is-block" : ""}`}>{row.times.map((time, index) => <span className="dw-departure-preview-time" key={`${time}-${index}`}>{time}</span>)}</span>
           </span>
         );
       })}

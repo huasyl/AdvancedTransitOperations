@@ -8,12 +8,13 @@ import {
 } from "../schedule-catalog";
 import { DemoDisplayField, DemoTextField } from "./ScheduleFields";
 
-export default function ScheduleTopbar({ topbar, refs, actions }) {
+export default function ScheduleTopbar({ topbar, refs, actions, hideLine = false }) {
   const { t } = useNativeScheduleI18n();
 
   return (
     <div className="dw-demo-topbar">
-      <WorkbenchDropdown
+      <div className="dw-departure-topbar-main">
+      {!hideLine ? <WorkbenchDropdown
         label={t("nativeSchedule.topbar.line")}
         value={getLocalizedLineName(topbar.selectedLine, t)}
         options={sortLineOptions(topbar.lineOptions, t).map((line) => ({
@@ -27,7 +28,7 @@ export default function ScheduleTopbar({ topbar, refs, actions }) {
         variant="field"
         positioning="portal"
         portalHostRef={refs.dropdownPortalHostRef}
-      />
+      /> : null}
 
       {topbar.supportsExpress ? (
         <div className="dw-demo-field is-kind">
@@ -37,6 +38,7 @@ export default function ScheduleTopbar({ topbar, refs, actions }) {
               type="button"
               className={`dw-demo-toggle ${topbar.selectedLineType === "local" ? "is-active" : ""}`}
               onClick={() => actions.selectLineType("local")}
+              disabled={topbar.editDisabled}
             >
               {t("nativeSchedule.type.local")}
             </button>
@@ -44,6 +46,7 @@ export default function ScheduleTopbar({ topbar, refs, actions }) {
               type="button"
               className={`dw-demo-toggle ${topbar.selectedLineType === "express" ? "is-active is-express" : ""}`}
               onClick={() => actions.selectLineType("express")}
+              disabled={topbar.editDisabled}
             >
               {t("nativeSchedule.type.express")}
             </button>
@@ -57,6 +60,7 @@ export default function ScheduleTopbar({ topbar, refs, actions }) {
               type="button"
               className={`dw-demo-toggle ${!topbar.signalPriorityEnabled ? "is-active" : ""}`}
               onClick={() => actions.selectSignalPriority(false)}
+              disabled={topbar.editDisabled}
             >
               {t("nativeSchedule.signalPriority.off")}
             </button>
@@ -64,6 +68,7 @@ export default function ScheduleTopbar({ topbar, refs, actions }) {
               type="button"
               className={`dw-demo-toggle ${topbar.signalPriorityEnabled ? "is-active" : ""}`}
               onClick={() => actions.selectSignalPriority(true)}
+              disabled={topbar.editDisabled}
             >
               {t("nativeSchedule.signalPriority.on")}
             </button>
@@ -96,15 +101,19 @@ export default function ScheduleTopbar({ topbar, refs, actions }) {
           }))
         ]}
         onSelect={actions.changeDepot}
+        disabled={topbar.editDisabled}
         onOpen={actions.refreshNames}
         className="is-depot"
         variant="field"
         positioning="portal"
         portalHostRef={refs.dropdownPortalHostRef}
       />
+      </div>
 
-      <DemoTextField label={topbar.holdMinutesTooSmall ? t("nativeSchedule.topbar.minimumMinutes", { minutes: topbar.minimumScheduleMinutes }) : t("nativeSchedule.topbar.holdMinutes")} value={topbar.holdMinutes} onCommit={actions.changeHoldMinutes} onDraftChange={actions.changeHoldMinutes} className={`is-hold${topbar.holdMinutesTooSmall ? " is-error" : ""}`} suffix={t("nativeSchedule.unit.minutes")} />
-      <DemoTextField label={topbar.dwellMinutesTooSmall ? t("nativeSchedule.topbar.minimumMinutes", { minutes: topbar.minimumScheduleMinutes }) : t("nativeSchedule.topbar.dwellMinutes")} value={topbar.dwellMinutes} onCommit={actions.changeDwellMinutes} onDraftChange={actions.changeDwellMinutes} className={`is-dwell${topbar.dwellMinutesTooSmall ? " is-error" : ""}`} suffix={t("nativeSchedule.unit.minutes")} />
+      <div className="dw-departure-topbar-limits">
+      <DemoTextField readOnly={topbar.editDisabled} label={t("nativeSchedule.topbar.holdMinutes")} labelTooltip={t("nativeSchedule.topbar.holdMinutes.tooltip")} value={topbar.holdMinutes} onCommit={actions.changeHoldMinutes} onDraftChange={actions.changeHoldMinutes} className={`is-hold${topbar.holdMinutesTooSmall ? " is-error" : ""}`} suffix={t("nativeSchedule.unit.minutes")} />
+      <DemoTextField readOnly={topbar.editDisabled} label={t("nativeSchedule.topbar.dwellMinutes")} labelTooltip={t("nativeSchedule.topbar.dwellMinutes.tooltip")} value={topbar.dwellMinutes} onCommit={actions.changeDwellMinutes} onDraftChange={actions.changeDwellMinutes} className={`is-dwell${topbar.dwellMinutesTooSmall ? " is-error" : ""}`} suffix={t("nativeSchedule.unit.minutes")} />
+      </div>
     </div>
   );
 }

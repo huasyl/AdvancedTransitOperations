@@ -170,7 +170,7 @@ export function formatConflictReason(kind, t, variant = "regular", values = {}) 
   return t(`nativeSchedule.conflict.${kind}${suffix}`, values);
 }
 
-export function buildPreviewMetaText(preview, hasKindConflict = false, t, { detailedSkipReason = false } = {}) {
+export function buildPreviewMetaText(preview, hasKindConflict = false, t, { detailedSkipReason = false, minimumScheduleMinutes } = {}) {
   if (hasKindConflict) {
     return t("nativeSchedule.preview.meta.kindConflict");
   }
@@ -200,12 +200,12 @@ export function buildPreviewMetaText(preview, hasKindConflict = false, t, { deta
 
     const reasons = Array.isArray(preview.skipReasons) ? preview.skipReasons : [];
     const reasonText = reasons
-      .map((reason) => t(`nativeSchedule.preview.reason.${reason}`))
+      .map((reason) => t(`nativeSchedule.preview.reason.${reason}`, { minutes: minimumScheduleMinutes }))
       .filter(Boolean)
       .join(" / ");
     return t("nativeSchedule.preview.meta.skippedDetailed", {
       count: preview.skippedCount,
-      reason: reasonText || t("nativeSchedule.preview.reason.gap")
+      reason: reasonText || t("nativeSchedule.preview.reason.gap", { minutes: minimumScheduleMinutes })
     });
   }
 

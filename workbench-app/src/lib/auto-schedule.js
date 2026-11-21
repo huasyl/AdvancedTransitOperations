@@ -411,7 +411,7 @@ export function getQuickAddSegmentCapacity(start, end, minGapMinutes = MIN_DEPAR
   return Math.max(0, Math.floor((endMinute - startMinute) / gap));
 }
 
-export function enumerateQuickAddMinutes(start, end, count) {
+export function enumerateQuickAddMinutes(start, end, count, fixedMinutes = []) {
   const startMinute = Number(start);
   const endMinute = Number(end);
   const targetCount = Math.max(0, Math.trunc(Number(count) || 0));
@@ -420,9 +420,47 @@ export function enumerateQuickAddMinutes(start, end, count) {
   }
 
   const duration = endMinute - startMinute;
-  return Array.from({ length: targetCount }, (_, index) => (
-    Math.round(startMinute + (index * duration) / targetCount)
-  )).filter((minute) => minute >= startMinute && minute < endMinute);
+  const fixed = [...new Set(fixedMinutes.filter((minute) => minute >= startMinute && minute < endMinute))]
+    .sort((left, right) => left - right);
+  if (fixed.length === 0) {
+    return Array.from({ length: targetCount }, (_, index) => (
+      Math.round(startMinute + (index * duration) / targetCount)
+    )).filter((minute) => minute >= startMinute && minute < endMinute);
+  }
+
+  const gaps = [
+    ...(fixed[0] === startMinute ? [] : [{ left: startMinute, anchored: false }]),
+    ...fixed.map((minute) => ({ left: minute, anchored: true }))
+  ].map((gap, index, all) => ({ ...gap, length: (all[index + 1]?.left ?? endMinute) - gap.left, placed: 0 }));
+  const currentInterval = (gap) => gap.length / (gap.anchored ? gap.placed + 1 : Math.max(1, gap.placed));
+  for (let round = 0; round < targetCount; round += 1) {
+    let widest = gaps[0];
+    gaps.forEach((gap) => {
+      if (currentInterval(gap) > currentInterval(widest)) {
+        widest = gap;
+      }
+    });
+    widest.placed += 1;
+  }
+
+  return gaps.flatMap((gap) => Array.from({ length: gap.placed }, (_, index) => (
+    Math.round(gap.anchored
+      ? gap.left + ((index + 1) * gap.length) / (gap.placed + 1)
+      : gap.left + (index * gap.length) / gap.placed)
+  ))).filter((minute) => minute >= startMinute && minute < endMinute);
+}
+
+export function pickMostCrowdedMinute(candidateMinutes, lineMinutes) {
+  let picked = null;
+  let pickedGap = Infinity;
+  candidateMinutes.forEach((minute) => {
+    const gap = Math.min(...lineMinutes.filter((other) => other !== minute).map((other) => Math.abs(other - minute)));
+    if (picked === null || gap < pickedGap || (gap === pickedGap && minute > picked)) {
+      picked = minute;
+      pickedGap = gap;
+    }
+  });
+  return picked;
 }
 
 function isRowForLine(row, lineId) {
@@ -435,7 +473,8 @@ export function buildQuickAddPlan({
   currentRows = [],
   selectedLineId = "",
   originStationId = "",
-  kind = "local"
+  kind = "local",
+  fixedMinutes = []
 }) {
   const sourceSegments = Array.isArray(segments) ? segments : [];
   const occupiedRows = (Array.isArray(currentRows) ? currentRows : [])
@@ -444,7 +483,8 @@ export function buildQuickAddPlan({
       minute: timeToMinutes(row?.time),
       originStationId: row?.originStationId || ""
     }))
-    .filter((row) => row.minute !== null);
+    .filter((row) => row.minute !== null)
+    .concat(fixedMinutes.map((minute) => ({ minute, originStationId })));
   const plannedRows = [];
   const previews = [];
   let skippedCount = 0;
@@ -453,7 +493,7 @@ export function buildQuickAddPlan({
     const start = Number(segment?.start);
     const end = Number(segment?.end);
     const targetCount = Math.max(0, Math.trunc(Number(segment?.count) || 0));
-    const baseMinutes = enumerateQuickAddMinutes(start, end, targetCount);
+    const baseMinutes = enumerateQuickAddMinutes(start, end, targetCount, fixedMinutes);
     const preview = {
       ...segment,
       index: segmentIndex,

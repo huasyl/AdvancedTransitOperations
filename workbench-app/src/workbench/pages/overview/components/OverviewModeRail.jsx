@@ -1,4 +1,12 @@
+import { useState } from "react";
 import { useNativeScheduleI18n } from "../../../shared/workbench-i18n";
+
+const NATIVE_MODE_ICONS = {
+  Subway: "Media/Game/Icons/Subway.svg",
+  Train: "Media/Game/Icons/Train.svg",
+  Tram: "Media/Game/Icons/Tram.svg",
+  Bus: "Media/Game/Icons/Bus.svg"
+};
 
 // Overview rail icons are adapted from Lucide Icons under the ISC license.
 // See THIRD_PARTY_NOTICES.txt at the repository root.
@@ -67,7 +75,16 @@ function getModeIcon(mode, label) {
   return label.slice(0, 1);
 }
 
-export default function OverviewModeRail({ modes, activeMode, onModeChange }) {
+function ModeIcon({ mode, label }) {
+  const [nativeFailed, setNativeFailed] = useState(false);
+  const nativeSrc = NATIVE_MODE_ICONS[mode];
+  if (nativeSrc && !nativeFailed) {
+    return <img className="rtw-overview-mode-native" src={nativeSrc} alt="" onError={() => setNativeFailed(true)} />;
+  }
+  return getModeIcon(mode, label);
+}
+
+export default function OverviewModeRail({ modes, activeMode, onModeChange, showMetrics = true, compact = false }) {
   const { t } = useNativeScheduleI18n();
 
   return (
@@ -79,12 +96,13 @@ export default function OverviewModeRail({ modes, activeMode, onModeChange }) {
             key={mode.mode}
             type="button"
             className={`rtw-overview-mode-button ${activeMode === mode.mode ? "is-active" : ""}`}
+            aria-label={compact ? mode.label : undefined}
             onClick={() => onModeChange(mode.mode)}
           >
-            <span className="rtw-overview-mode-icon">{getModeIcon(mode.mode, mode.label)}</span>
+            <span className="rtw-overview-mode-icon"><ModeIcon mode={mode.mode} label={mode.label} /></span>
             <span className="rtw-overview-mode-main">
               <span className="rtw-overview-mode-name">{mode.label}</span>
-              <span className="rtw-overview-mode-meta">{t("nativeWorkbench.overview.mode.meta", { lineCount: mode.lineCount, appliedDepartureCount: mode.appliedDepartureCount })}</span>
+              {showMetrics ? <span className="rtw-overview-mode-meta">{t("nativeWorkbench.overview.mode.meta", { lineCount: mode.lineCount, appliedDepartureCount: mode.appliedDepartureCount })}</span> : null}
             </span>
           </button>
         ))}

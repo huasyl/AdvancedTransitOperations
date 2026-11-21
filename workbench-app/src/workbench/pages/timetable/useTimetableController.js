@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getWorkbenchApi } from "../../shared/workbench-api";
 import { minutesToTime, timeToMinutes } from "./timetable-data";
 import { isValidTimeValue } from "../schedule/schedule-normalize";
+import { sortLineOptions } from "../schedule/schedule-catalog";
 
 const EMPTY_SNAPSHOT = {
   lines: [],
@@ -565,7 +566,7 @@ function buildLines(snapshot, section, directory, runtimes, runtimeSources, layo
   const coverageIds = new Set(asArray(section?.coverages).map((coverage) => coverage.lineId));
   let targetRowCount = 0;
   let targetStopCount = 0;
-  const result = asArray(snapshot.lines)
+  const result = sortLineOptions(asArray(snapshot.lines))
     .filter((line) => coverageIds.size === 0 || coverageIds.has(line.id))
     .map((line) => {
       const runtime = lineRuntime(runtimes, runtimeSources, line.id);
@@ -622,10 +623,12 @@ function buildLines(snapshot, section, directory, runtimes, runtimeSources, layo
   return result;
 }
 
-export default function useTimetableController({ activeTransportMode, isActive, sharedSnapshot }) {
+export default function useTimetableController({ activeTransportMode, isActive, sharedSnapshot, onSaved }) {
   const api = useMemo(() => getWorkbenchApi(), []);
   const sharedSnapshotRef = useRef(sharedSnapshot);
   sharedSnapshotRef.current = sharedSnapshot;
+  const onSavedRef = useRef(onSaved);
+  onSavedRef.current = onSaved;
   const editorIdRef = useRef(createEditorId());
   const directoryRetryRef = useRef(null);
   const directoryGenerationRef = useRef(0);
@@ -700,7 +703,10 @@ export default function useTimetableController({ activeTransportMode, isActive, 
     });
 
   const selectedSection = sections.find((section) => section.sectionId === sectionId) || sections[0] || null;
-  const lineDirectory = snapshotReady ? asArray(snapshot.lines) : [];
+  const lineDirectory = useMemo(
+    () => snapshotReady ? sortLineOptions(asArray(snapshot.lines)) : [],
+    [snapshot.lines, snapshotReady]
+  );
   const lines = useMemo(
     () => snapshotReady
       ? buildLines(snapshot, selectedSection, directory, runtimes, runtimeSources, layouts, layoutTimingRef.current)
@@ -2127,7 +2133,9 @@ export default function useTimetableController({ activeTransportMode, isActive, 
         setSaveError(asArray(result?.errors).join("；") || "schedule-batch-save-failed");
         return;
       }
-      setSnapshot(useAppliedRows(result.snapshot, dirtyLineIds));
+      const applied = useAppliedRows(result.snapshot, dirtyLineIds);
+      setSnapshot(applied);
+      onSavedRef.current?.(applied, dirtyLineIds);
       setDirtyLineIds([]);
       setSaveState("applied");
     } catch (error) {

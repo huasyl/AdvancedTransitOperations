@@ -1,0 +1,3 @@
+.rtw-route-transition { overflow: hidden; }
+.rtw-route-transition.is-moving { pointer-events: none; }
+.rtw-route-clip { overflow: hidden; }

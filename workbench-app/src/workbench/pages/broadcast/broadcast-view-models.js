@@ -1,6 +1,8 @@
+import { sortLineOptions } from "../schedule/schedule-catalog";
+
 function extractBackendLineOptions(snapshot) {
   const sourceLines = Array.isArray(snapshot?.lines) ? snapshot.lines : [];
-  return sourceLines
+  return sortLineOptions(sourceLines)
     .filter((line) => line && typeof line.id === "string" && line.id)
     .map((line) => ({
       id: line.id,

@@ -18,9 +18,6 @@
 .rtw-passenger-dashboard .rtw-passenger-line-tab.is-active { border-color: #81d4d4; background: rgba(129,212,212,.14); color: #fff; }
 .rtw-passenger-dashboard .rtw-passenger-line-dot { width: 8rem; height: 8rem; margin-right: 8rem; border-radius: 0; }
 .rtw-passenger-dashboard .route-block + .route-block { margin-top: 24rem; }
-.rtw-passenger-dashboard .passenger-route-transition { overflow: hidden; }
-.rtw-passenger-dashboard .passenger-route-transition.is-moving { pointer-events: none; }
-.rtw-passenger-dashboard .passenger-route-clip { overflow: hidden; }
 .rtw-passenger-dashboard .comparison-section { padding: 24rem 0; border-bottom: 1rem solid rgba(211,235,219,.15); }
 .rtw-passenger-dashboard .comparison-section .section-heading { flex-wrap: wrap; margin-bottom: 24rem; }
 .rtw-passenger-dashboard .comparison-legend { display: flex; flex-wrap: wrap; color: #e8f0f8; font-size: 14rem; }
@@ -126,7 +123,7 @@
 .rtw-passenger-dashboard.is-detail-moving { pointer-events: none; }
 .rtw-passenger-dashboard.passenger-detail-flight { position: absolute; padding: 0; overflow: hidden; pointer-events: none; z-index: 5; opacity: 0; }
 .rtw-passenger-dashboard .passenger-flight-heading { position: absolute; transform: translate(0px, 0px); }
-.rtw-passenger-dashboard .passenger-flight-heading.is-moving { transition-property: transform; transition-duration: var(--passenger-heading-duration); transition-timing-function: cubic-bezier(0.4, 0, 0.6, 1); }
+.rtw-passenger-dashboard .passenger-flight-heading.is-moving { transition-property: transform; transition-duration: var(--passenger-heading-duration); transition-timing-function: cubic-bezier(0.2, 0, 0, 1); }
 .rtw-passenger-dashboard .passenger-flight-heading h2 { white-space: nowrap; flex: 0 0 auto; }
 .rtw-passenger-dashboard [data-motion-heading], .rtw-passenger-dashboard .section-loads .section-heading .quiet-button { white-space: nowrap; }
 .rtw-passenger-dashboard .passenger-motion-mask { overflow: visible; }

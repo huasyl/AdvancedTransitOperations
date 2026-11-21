@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { trigger } from "cs2/api";
+import { ActiveFocusDiv, InputActionConsumer } from "cs2/input";
 import React from "react";
 import { COLORS } from "../selection/selectionStyles";
 
@@ -11,6 +12,9 @@ const NATIVE_WORKBENCH_SCHEDULE_GLOBAL = "RTDispatchWorkbenchNativeSchedule";
 const NATIVE_WORKBENCH_PAGE_GLOBAL = "__RT_NATIVE_WORKBENCH_PAGE__";
 const NATIVE_WORKBENCH_PAGE_EVENT = "rt-native-workbench-pagechange";
 const NATIVE_WORKBENCH_DEBUG_FLAGS_EVENT = "rt-native-workbench-debug-flags";
+const NATIVE_WORKBENCH_OPEN_DURATION_MS = 250;
+const NATIVE_WORKBENCH_CLOSE_DURATION_MS = 150;
+const NATIVE_WORKBENCH_NAVIGATE_EVENT = "rt-native-workbench-navigate";
 
 let nativeWorkbenchTraceSeq = 0;
 let nativeWorkbenchTraceLifecycleRegistered = false;
@@ -20,19 +24,22 @@ let nativeWorkbenchPersistentHostElement = null;
 let nativeWorkbenchPersistentBundleHandle = null;
 let nativeWorkbenchPersistentBundlePromise = null;
 let nativeWorkbenchParkingLotElement = null;
-let nativeWorkbenchParkingHideTimer = 0;
-let nativeWorkbenchParkingShowRaf = 0;
-let nativeWorkbenchSlotSyncRaf = 0;
-let nativeWorkbenchSlotSyncUntil = 0;
-let nativeWorkbenchTrackedSlotElement = null;
-let nativeWorkbenchSlotResizeObserver = null;
-let nativeWorkbenchLastSyncedRect = null;
-let nativeWorkbenchParkingBaseScale = 1;
-let nativeWorkbenchParkingCurrentScale = 1;
-let nativeWorkbenchParkingCurrentOpacity = 1;
-let nativeWorkbenchParkingCurrentInteractive = false;
-let nativeWorkbenchParkingCurrentShellRect = null;
-let nativeWorkbenchOpenToken = 0;
+let nativeWorkbenchShellFrameElement = null;
+let nativeWorkbenchShellFrameListener = null;
+let nativeWorkbenchContentShown = false;
+
+function setNativeWorkbenchShellFrame(element) {
+  nativeWorkbenchShellFrameElement = element;
+  if (nativeWorkbenchShellFrameListener) {
+    nativeWorkbenchShellFrameListener(element);
+  }
+}
+
+export function requestNativeWorkbenchNavigation() {
+  if (nativeWorkbenchContentShown) {
+    window.dispatchEvent(new CustomEvent(NATIVE_WORKBENCH_NAVIGATE_EVENT));
+  }
+}
 
 function getNativeWorkbenchDebugToolsEnabled() {
   return typeof window !== "undefined" && window.__RT_DEBUG_TOOLS__ === true;
@@ -147,6 +154,7 @@ function traceNativeWorkbench(eventName, details) {
 if (typeof window !== "undefined") {
   window.__RT_DEBUG_TOOLS__ = false;
   window.__RT_VERBOSE_LOGS__ = false;
+  window.__RT_NATIVE_WORKBENCH_CLOSE__ = () => trigger("game", "closePanel", NATIVE_WORKBENCH_PANEL_ID);
   loadNativeWorkbenchBuildFlavor();
 }
 
@@ -179,23 +187,6 @@ export function setNativeWorkbenchPage(nextPage) {
       page: resolvedPage
     }
   }));
-}
-
-function setNativeWorkbenchCloseHandler(handler) {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  if (typeof handler === "function") {
-    window.__RT_NATIVE_WORKBENCH_CLOSE__ = handler;
-    return;
-  }
-
-  try {
-    delete window.__RT_NATIVE_WORKBENCH_CLOSE__;
-  } catch (error) {
-    window.__RT_NATIVE_WORKBENCH_CLOSE__ = undefined;
-  }
 }
 
 function resetNativeWorkbenchScheduleLoader() {
@@ -315,14 +306,7 @@ function ensureNativeWorkbenchParkingLot() {
   parkingLot.style.height = "980px";
   parkingLot.style.overflow = "hidden";
   parkingLot.style.pointerEvents = "none";
-  parkingLot.style.opacity = "0";
   parkingLot.style.visibility = "hidden";
-  parkingLot.style.zIndex = "100";
-  parkingLot.style.transitionProperty = "opacity, transform";
-  parkingLot.style.transitionTimingFunction = "ease";
-  parkingLot.style.transitionDuration = "150ms";
-  parkingLot.style.transformOrigin = "top left";
-  parkingLot.style.transform = "translate(0px, 0px) scale(1)";
   document.body.appendChild(parkingLot);
   nativeWorkbenchParkingLotElement = parkingLot;
   traceNativeWorkbench("parking.create");
@@ -343,257 +327,6 @@ function ensureNativeWorkbenchPersistentHostElement() {
   ensureNativeWorkbenchParkingLot().appendChild(hostElement);
   nativeWorkbenchPersistentHostElement = hostElement;
   traceNativeWorkbench("host.create");
-  return hostElement;
-}
-
-function syncNativeWorkbenchParkingLotToTarget(targetElement) {
-  if (!(targetElement instanceof HTMLElement)) {
-    return false;
-  }
-
-  const rect = targetElement.getBoundingClientRect();
-  if (!(rect.width > 0) || !(rect.height > 0)) {
-    return false;
-  }
-
-  const nextRect = {
-    left: rect.left,
-    top: rect.top,
-    width: rect.width,
-    height: rect.height
-  };
-
-  if (nativeWorkbenchLastSyncedRect) {
-    const threshold = 0.75;
-    const rectChangedEnough = Math.abs(nativeWorkbenchLastSyncedRect.left - nextRect.left) >= threshold
-      || Math.abs(nativeWorkbenchLastSyncedRect.top - nextRect.top) >= threshold
-      || Math.abs(nativeWorkbenchLastSyncedRect.width - nextRect.width) >= threshold
-      || Math.abs(nativeWorkbenchLastSyncedRect.height - nextRect.height) >= threshold;
-
-    if (!rectChangedEnough) {
-      return true;
-    }
-  }
-
-  const parkingLot = ensureNativeWorkbenchParkingLot();
-  parkingLot.style.left = nextRect.left.toString() + "px";
-  parkingLot.style.top = nextRect.top.toString() + "px";
-  parkingLot.style.width = nextRect.width.toString() + "px";
-  parkingLot.style.height = nextRect.height.toString() + "px";
-  nativeWorkbenchLastSyncedRect = nextRect;
-  nativeWorkbenchParkingBaseScale = nativeWorkbenchParkingCurrentScale > 0
-    ? nativeWorkbenchParkingCurrentScale
-    : 1;
-  applyNativeWorkbenchPersistentHostVisualState({
-    durationMs: 0
-  });
-  return true;
-}
-
-function stopNativeWorkbenchSlotTracking(options) {
-  const settings = options || {};
-  if (nativeWorkbenchSlotSyncRaf) {
-    window.cancelAnimationFrame(nativeWorkbenchSlotSyncRaf);
-    nativeWorkbenchSlotSyncRaf = 0;
-  }
-  nativeWorkbenchSlotSyncUntil = 0;
-  nativeWorkbenchTrackedSlotElement = null;
-  if (settings.preserveRect !== true) {
-    nativeWorkbenchLastSyncedRect = null;
-  }
-  if (nativeWorkbenchSlotResizeObserver) {
-    nativeWorkbenchSlotResizeObserver.disconnect();
-    nativeWorkbenchSlotResizeObserver = null;
-  }
-}
-
-function scheduleNativeWorkbenchSlotSync() {
-  if (nativeWorkbenchSlotSyncRaf || !(nativeWorkbenchTrackedSlotElement instanceof HTMLElement)) {
-    return;
-  }
-
-  nativeWorkbenchSlotSyncRaf = window.requestAnimationFrame(() => {
-    nativeWorkbenchSlotSyncRaf = 0;
-    syncNativeWorkbenchParkingLotToTarget(nativeWorkbenchTrackedSlotElement);
-    const now = typeof performance !== "undefined" && typeof performance.now === "function"
-      ? performance.now()
-      : Date.now();
-    if (now < nativeWorkbenchSlotSyncUntil) {
-      scheduleNativeWorkbenchSlotSync();
-    }
-  });
-}
-
-function startNativeWorkbenchSlotTracking(targetElement) {
-  if (!(targetElement instanceof HTMLElement)) {
-    return;
-  }
-
-  nativeWorkbenchTrackedSlotElement = targetElement;
-  nativeWorkbenchSlotSyncUntil = (typeof performance !== "undefined" && typeof performance.now === "function"
-    ? performance.now()
-    : Date.now()) + 280;
-  scheduleNativeWorkbenchSlotSync();
-}
-
-function applyNativeWorkbenchPersistentHostVisualState(options) {
-  const settings = options || {};
-  const parkingLot = ensureNativeWorkbenchParkingLot();
-  const nextScale = typeof settings.scale === "number" && settings.scale > 0
-    ? settings.scale
-    : nativeWorkbenchParkingCurrentScale;
-  const nextOpacity = typeof settings.opacity === "number"
-    ? settings.opacity
-    : nativeWorkbenchParkingCurrentOpacity;
-  const nextInteractive = typeof settings.interactive === "boolean"
-    ? settings.interactive
-    : nativeWorkbenchParkingCurrentInteractive;
-  const nextShellRect = settings.shellRect && typeof settings.shellRect === "object"
-    ? {
-        left: settings.shellRect.left,
-        top: settings.shellRect.top,
-        width: settings.shellRect.width,
-        height: settings.shellRect.height
-      }
-    : nativeWorkbenchParkingCurrentShellRect;
-
-  nativeWorkbenchParkingCurrentScale = nextScale;
-  nativeWorkbenchParkingCurrentOpacity = nextOpacity;
-  nativeWorkbenchParkingCurrentInteractive = nextInteractive;
-  nativeWorkbenchParkingCurrentShellRect = nextShellRect;
-
-  if (typeof settings.durationMs === "number") {
-    parkingLot.style.transitionDuration = settings.durationMs.toString() + "ms";
-  }
-  if (typeof settings.timingFunction === "string" && settings.timingFunction.length > 0) {
-    parkingLot.style.transitionTimingFunction = settings.timingFunction;
-  }
-
-  parkingLot.style.visibility = "visible";
-  parkingLot.style.opacity = nextOpacity.toString();
-  parkingLot.style.pointerEvents = nextInteractive ? "auto" : "none";
-
-  if (!nativeWorkbenchLastSyncedRect || !nextShellRect) {
-    parkingLot.style.transform = "translate(0px, 0px) scale(1)";
-    return;
-  }
-
-  const baseScale = nativeWorkbenchParkingBaseScale > 0 ? nativeWorkbenchParkingBaseScale : 1;
-  const relativeScale = nextScale / baseScale;
-  const shellCenterX = nextShellRect.left + nextShellRect.width / 2;
-  const shellCenterY = nextShellRect.top + nextShellRect.height / 2;
-  const dx = (nativeWorkbenchLastSyncedRect.left - shellCenterX) * (relativeScale - 1);
-  const dy = (nativeWorkbenchLastSyncedRect.top - shellCenterY) * (relativeScale - 1);
-
-  parkingLot.style.transform = "translate(" + dx.toFixed(3) + "px, " + dy.toFixed(3) + "px) scale(" + relativeScale.toFixed(5) + ")";
-}
-
-function showNativeWorkbenchPersistentHostAnimated(options) {
-  if (nativeWorkbenchParkingShowRaf) {
-    window.cancelAnimationFrame(nativeWorkbenchParkingShowRaf);
-    nativeWorkbenchParkingShowRaf = 0;
-  }
-  if (nativeWorkbenchParkingHideTimer) {
-    window.clearTimeout(nativeWorkbenchParkingHideTimer);
-    nativeWorkbenchParkingHideTimer = 0;
-  }
-  const settings = options || {};
-  const parkingLot = ensureNativeWorkbenchParkingLot();
-  parkingLot.style.visibility = "visible";
-  if (typeof settings.durationMs === "number") {
-    parkingLot.style.transitionDuration = settings.durationMs.toString() + "ms";
-  }
-  nativeWorkbenchParkingShowRaf = window.requestAnimationFrame(() => {
-    nativeWorkbenchParkingShowRaf = 0;
-    applyNativeWorkbenchPersistentHostVisualState({
-      durationMs: 0,
-      opacity: typeof settings.opacity === "number" ? settings.opacity : nativeWorkbenchParkingCurrentOpacity,
-      scale: typeof settings.scale === "number" ? settings.scale : nativeWorkbenchParkingCurrentScale,
-      interactive: typeof settings.interactive === "boolean" ? settings.interactive : nativeWorkbenchParkingCurrentInteractive
-    });
-  });
-}
-
-function resetNativeWorkbenchParkingLotBounds(parkingLot) {
-  if (!(parkingLot instanceof HTMLElement)) {
-    return;
-  }
-
-  parkingLot.style.left = "-99999px";
-  parkingLot.style.top = "0";
-  parkingLot.style.width = "1520px";
-  parkingLot.style.height = "980px";
-  parkingLot.style.transform = "translate(0px, 0px) scale(1)";
-}
-
-function parkNativeWorkbenchPersistentHost() {
-  nativeWorkbenchOpenToken += 1;
-  traceNativeWorkbench("parking.park", { openToken: nativeWorkbenchOpenToken });
-  reportNativeWorkbenchHostState("parked");
-  stopNativeWorkbenchSlotTracking();
-  const parkingLot = ensureNativeWorkbenchParkingLot();
-  if (nativeWorkbenchParkingShowRaf) {
-    window.cancelAnimationFrame(nativeWorkbenchParkingShowRaf);
-    nativeWorkbenchParkingShowRaf = 0;
-  }
-  if (nativeWorkbenchParkingHideTimer) {
-    window.clearTimeout(nativeWorkbenchParkingHideTimer);
-    nativeWorkbenchParkingHideTimer = 0;
-  }
-
-  nativeWorkbenchParkingCurrentInteractive = false;
-  nativeWorkbenchParkingCurrentOpacity = 0;
-  nativeWorkbenchParkingCurrentScale = 1;
-  nativeWorkbenchParkingCurrentShellRect = null;
-  nativeWorkbenchParkingBaseScale = 1;
-  parkingLot.style.pointerEvents = "none";
-  parkingLot.style.transitionDuration = "0ms";
-  parkingLot.style.opacity = "0";
-  parkingLot.style.visibility = "hidden";
-  resetNativeWorkbenchParkingLotBounds(parkingLot);
-}
-
-function attachNativeWorkbenchPersistentHost(targetElement, options) {
-  if (!(targetElement instanceof HTMLElement)) {
-    throw new Error("Native workbench host slot is unavailable.");
-  }
-
-  const settings = options || {};
-  traceNativeWorkbench("parking.attach", {
-    deferShow: settings.deferShow === true,
-    track: settings.track !== false,
-    interactive: settings.interactive === true
-  });
-  const hostElement = ensureNativeWorkbenchPersistentHostElement();
-  const parkingLot = ensureNativeWorkbenchParkingLot();
-  if (nativeWorkbenchParkingHideTimer) {
-    window.clearTimeout(nativeWorkbenchParkingHideTimer);
-    nativeWorkbenchParkingHideTimer = 0;
-  }
-  if (nativeWorkbenchParkingShowRaf) {
-    window.cancelAnimationFrame(nativeWorkbenchParkingShowRaf);
-    nativeWorkbenchParkingShowRaf = 0;
-  }
-  syncNativeWorkbenchParkingLotToTarget(targetElement);
-  if (settings.track !== false) {
-    startNativeWorkbenchSlotTracking(targetElement);
-  } else {
-    stopNativeWorkbenchSlotTracking({
-      preserveRect: true
-    });
-  }
-  parkingLot.style.visibility = "visible";
-  parkingLot.style.transitionDuration = "0ms";
-  parkingLot.style.opacity = "0";
-  parkingLot.style.pointerEvents = settings.interactive === true ? "auto" : "none";
-  if (settings.deferShow !== true) {
-    showNativeWorkbenchPersistentHostAnimated({
-      durationMs: typeof settings.durationMs === "number" ? settings.durationMs : 0,
-      interactive: settings.interactive === true,
-      opacity: typeof settings.opacity === "number" ? settings.opacity : nativeWorkbenchParkingCurrentOpacity,
-      scale: typeof settings.scale === "number" ? settings.scale : nativeWorkbenchParkingCurrentScale
-    });
-  }
   return hostElement;
 }
 
@@ -788,6 +521,16 @@ function ensureNativeWorkbenchShadowSurface(hostElement) {
       "}",
       ".rt-native-schedule-mount > .dw-native-schedule-root {",
       "  height: 100%;",
+      "}",
+      ".rt-native-schedule-mount > .dw-native-schedule-root > * {",
+      "  opacity: 0;",
+      "  transition-property: opacity;",
+      "  transition-timing-function: ease;",
+      "  transition-duration: " + NATIVE_WORKBENCH_CLOSE_DURATION_MS + "ms;",
+      "}",
+      ".rt-native-schedule-surface[data-rt-shown=\"true\"] > .rt-native-schedule-mount > .dw-native-schedule-root > * {",
+      "  opacity: 1;",
+      "  transition-duration: " + NATIVE_WORKBENCH_OPEN_DURATION_MS + "ms;",
       "}"
     ].join("\n");
     shadowRoot.appendChild(baseStyle);
@@ -814,12 +557,6 @@ function ensureNativeWorkbenchShadowSurface(hostElement) {
     mountNode
   };
 }
-
-const NATIVE_WORKBENCH_OPEN_SCALE = 1;
-const NATIVE_WORKBENCH_CLOSED_SCALE = 0.95;
-const NATIVE_WORKBENCH_OPEN_DURATION_MS = 250;
-const NATIVE_WORKBENCH_CLOSE_DURATION_MS = 160;
-const NATIVE_WORKBENCH_OPEN_SETTLE_DELAY_MS = NATIVE_WORKBENCH_OPEN_DURATION_MS + 32;
 
 const RapidTransitWorkbenchBundleHost = (props) => {
   const hostSlotRef = props.hostSlotRef;
@@ -849,28 +586,6 @@ const RapidTransitWorkbenchBundleHost = (props) => {
     };
   }, []);
 
-  async function mountNativeWorkbenchBundle(forceReload, forceRemount) {
-    const slotElement = hostSlotRef.current;
-    const openToken = nativeWorkbenchOpenToken + 1;
-    nativeWorkbenchOpenToken = openToken;
-    traceNativeWorkbench("bundle.host.mount-request", { forceReload: forceReload === true, forceRemount: forceRemount === true, openToken });
-    attachNativeWorkbenchPersistentHost(slotElement, {
-      deferShow: true,
-      interactive: nativeWorkbenchParkingCurrentInteractive
-    });
-    await ensureNativeWorkbenchPersistentBundle({
-      forceReload: forceReload === true,
-      forceRemount: forceRemount === true
-    });
-    if (nativeWorkbenchOpenToken !== openToken) {
-      return;
-    }
-    syncNativeWorkbenchParkingLotToTarget(slotElement);
-    applyNativeWorkbenchPersistentHostVisualState({
-      durationMs: 0
-    });
-  }
-
   async function runBundleAction(action) {
     if (busyAction) {
       return;
@@ -890,18 +605,7 @@ const RapidTransitWorkbenchBundleHost = (props) => {
           forceReload: false,
           forceRemount: false
         });
-        attachNativeWorkbenchPersistentHost(hostSlotRef.current, {
-          interactive: nativeWorkbenchParkingCurrentInteractive
-        });
-        if (bundleState.handle && typeof bundleState.handle.refreshData === "function") {
-          await bundleState.handle.refreshData();
-        } else {
-          await mountNativeWorkbenchBundle(false, false);
-        }
-        syncNativeWorkbenchParkingLotToTarget(hostSlotRef.current);
-        applyNativeWorkbenchPersistentHostVisualState({
-          durationMs: 0
-        });
+        await bundleState.handle.refreshData();
         setStatus({
           tone: "success",
           text: "Refresh Data completed."
@@ -912,7 +616,10 @@ const RapidTransitWorkbenchBundleHost = (props) => {
 
       const isReload = action === "reload";
       const isRemount = action === "remount";
-      await mountNativeWorkbenchBundle(isReload, isRemount);
+      await ensureNativeWorkbenchPersistentBundle({
+        forceReload: isReload,
+        forceRemount: isRemount
+      });
       setStatus({
         tone: "success",
         text: isReload ? "Reload Bundle completed." : "Remount completed."
@@ -1105,307 +812,183 @@ const RapidTransitWorkbenchBundleHost = (props) => {
 };
 
 export const RapidTransitWorkbenchGamePanel = (props) => {
-  const shellFrameRef = React.useRef(null);
-  const hostSlotRef = React.useRef(null);
-  const mountTimerRef = React.useRef(0);
-  const openRafRef = React.useRef(0);
-  const settleTimerRef = React.useRef(0);
-  const closeTimerRef = React.useRef(0);
-  const disposedRef = React.useRef(false);
-  const closingRef = React.useRef(false);
-  const propsRef = React.useRef(props);
-  const shellOpenState = React.useState(false);
-  const shellOpen = shellOpenState[0];
-  const setShellOpen = shellOpenState[1];
-  const shellInteractiveState = React.useState(false);
-  const shellInteractive = shellInteractiveState[0];
-  const setShellInteractive = shellInteractiveState[1];
+  const frameRef = React.useRef(null);
+  const actions = React.useMemo(() => ({ Close: props.onClose }), [props.onClose]);
+
+  React.useLayoutEffect(() => {
+    setNativeWorkbenchPage("schedule");
+    setNativeWorkbenchShellFrame(frameRef.current);
+    return () => {
+      setNativeWorkbenchShellFrame(null);
+    };
+  }, []);
+
+  return React.createElement(
+    InputActionConsumer,
+    { actions },
+    React.createElement(
+      ActiveFocusDiv,
+      {
+        style: {
+          position: "absolute",
+          top: "10rem",
+          right: "68rem",
+          bottom: "6rem",
+          left: "68rem",
+          display: "flex",
+          alignItems: "flex-end",
+          justifyContent: "center",
+          pointerEvents: "none"
+        }
+      },
+      React.createElement("div", {
+        ref: frameRef,
+        style: {
+          width: "100%",
+          maxWidth: "1206rem",
+          height: "100%",
+          maxHeight: "900rem"
+        }
+      })
+    )
+  );
+};
+
+export const RapidTransitWorkbenchContentHost = () => {
+  const frameState = React.useState(null);
+  const frame = frameState[0];
+  const setFrame = frameState[1];
+  const phaseState = React.useState("hidden");
+  const phase = phaseState[0];
+  const setPhase = phaseState[1];
+  const rectState = React.useState(null);
+  const rect = rectState[0];
+  const setRect = rectState[1];
   const mountErrorState = React.useState("");
   const mountError = mountErrorState[0];
   const setMountError = mountErrorState[1];
-  propsRef.current = props;
+  const hostSlotRef = React.useRef(null);
+  const exitTimerRef = React.useRef(0);
 
-  function syncParkingVisualState(nextOpen, nextInteractive, durationMs) {
-    const shellElement = shellFrameRef.current;
-    const shellRect = shellElement instanceof HTMLElement
-      ? shellElement.getBoundingClientRect()
-      : null;
-    applyNativeWorkbenchPersistentHostVisualState({
-      shellRect,
-      scale: nextOpen ? NATIVE_WORKBENCH_OPEN_SCALE : NATIVE_WORKBENCH_CLOSED_SCALE,
-      opacity: nextOpen ? 1 : 0,
-      interactive: nextInteractive === true,
-      durationMs,
-      timingFunction: "ease"
-    });
-  }
-
-  function clearWorkbenchShellTimers() {
-    if (mountTimerRef.current) {
-      window.clearTimeout(mountTimerRef.current);
-      mountTimerRef.current = 0;
-    }
-    if (openRafRef.current) {
-      window.cancelAnimationFrame(openRafRef.current);
-      openRafRef.current = 0;
-    }
-    if (settleTimerRef.current) {
-      window.clearTimeout(settleTimerRef.current);
-      settleTimerRef.current = 0;
-    }
-    if (closeTimerRef.current) {
-      window.clearTimeout(closeTimerRef.current);
-      closeTimerRef.current = 0;
-    }
-  }
-
-  function finalizeWorkbenchOpen() {
-    const slotElement = hostSlotRef.current;
-    if (!(slotElement instanceof HTMLElement)) {
-      return;
+  React.useEffect(() => {
+    if (!frame) {
+      return undefined;
     }
 
-    traceNativeWorkbench("panel.open.finalize");
+    const hostElement = ensureNativeWorkbenchPersistentHostElement();
+    let entered = false;
+    let outerRaf = 0;
+    let innerRaf = 0;
+    const measure = () => {
+      const next = frame.getBoundingClientRect();
+      if (!(next.width > 0 && next.height > 0)) {
+        return;
+      }
+
+      setRect((current) => (
+        current
+          && Math.abs(current.left - next.left) < 0.5
+          && Math.abs(current.top - next.top) < 0.5
+          && Math.abs(current.width - next.width) < 0.5
+          && Math.abs(current.height - next.height) < 0.5
+          ? current
+          : { left: next.left, top: next.top, width: next.width, height: next.height }
+      ));
+      if (entered) {
+        return;
+      }
+
+      entered = true;
+      setPhase((current) => (current === "exiting" ? "shown" : "entering"));
+      outerRaf = window.requestAnimationFrame(() => {
+        innerRaf = window.requestAnimationFrame(() => setPhase("shown"));
+      });
+    };
+
+    window.clearTimeout(exitTimerRef.current);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(frame);
+    window.addEventListener("resize", measure);
     reportNativeWorkbenchHostState("visible");
-    syncNativeWorkbenchParkingLotToTarget(slotElement);
-    startNativeWorkbenchSlotTracking(slotElement);
-    syncParkingVisualState(true, true, 0);
-  }
-
-  const closeWorkbenchPanel = () => {
-    if (closingRef.current) {
-      return;
-    }
-
-    traceNativeWorkbench("panel.close.begin");
-    reportNativeWorkbenchHostState("closing");
-    closingRef.current = true;
-    setNativeWorkbenchCloseHandler(null);
-    stopNativeWorkbenchSlotTracking({
-      preserveRect: true
-    });
-    clearWorkbenchShellTimers();
-    setShellInteractive(false);
-    setShellOpen(false);
-    closeTimerRef.current = window.setTimeout(() => {
-      closeTimerRef.current = 0;
-      try {
-        const currentProps = propsRef.current;
-        if (currentProps && typeof currentProps.onClose === "function") {
-          currentProps.onClose();
-        } else {
-          trigger("game", "togglePanel", NATIVE_WORKBENCH_PANEL_ID);
-        }
-        traceNativeWorkbench("panel.close.triggered");
-      } catch (error) {
-        closingRef.current = false;
-        setNativeWorkbenchCloseHandler(closeWorkbenchPanel);
-        setShellOpen(true);
-        setShellInteractive(true);
-        settleTimerRef.current = window.setTimeout(() => {
-          settleTimerRef.current = 0;
-          if (!disposedRef.current && !closingRef.current) {
-            finalizeWorkbenchOpen();
-          }
-        }, NATIVE_WORKBENCH_OPEN_SETTLE_DELAY_MS);
-        console.error("RapidTransit native workbench close failed", error);
-      }
-    }, NATIVE_WORKBENCH_CLOSE_DURATION_MS);
-  };
-
-  React.useEffect(() => {
-    syncParkingVisualState(
-      shellOpen,
-      shellOpen && shellInteractive && !closingRef.current,
-      shellOpen ? NATIVE_WORKBENCH_OPEN_DURATION_MS : NATIVE_WORKBENCH_CLOSE_DURATION_MS
-    );
-  }, [shellInteractive, shellOpen]);
-
-  React.useEffect(() => {
-    traceNativeWorkbench("panel.effect.mount");
-    disposedRef.current = false;
-    closingRef.current = false;
-    setMountError("");
-    setShellOpen(false);
-    setShellInteractive(false);
-    setNativeWorkbenchCloseHandler(closeWorkbenchPanel);
-    setNativeWorkbenchPage("schedule");
-    const handleKeyDown = (event) => {
-      if (!event || event.defaultPrevented) {
-        return;
-      }
-      if (event.key === "Escape" || event.key === "Esc") {
-        event.preventDefault();
-        closeWorkbenchPanel();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    const launchMount = () => {
-      traceNativeWorkbench("panel.launch-mount");
-      mountTimerRef.current = 0;
-      const slotElement = hostSlotRef.current;
-      if (!(slotElement instanceof HTMLElement)) {
-        setMountError("Initial mount failed: Native workbench host slot is unavailable.");
-        return;
-      }
-
-      applyNativeWorkbenchPersistentHostVisualState({
-        scale: NATIVE_WORKBENCH_CLOSED_SCALE,
-        opacity: 0,
-        interactive: false,
-        durationMs: 0
-      });
-
-      try {
-        attachNativeWorkbenchPersistentHost(slotElement, {
-          deferShow: true,
-          track: false,
-          interactive: false,
-          durationMs: 0
-        });
-      } catch (error) {
-        setMountError("Initial mount failed: " + formatProbeError(error));
-        console.error("RapidTransit native workbench initial attach failed", error);
-        return;
-      }
-
-      const openToken = nativeWorkbenchOpenToken + 1;
-      nativeWorkbenchOpenToken = openToken;
-      reportNativeWorkbenchHostState("opening");
-      ensureNativeWorkbenchPersistentBundle({
-        forceReload: false,
-        forceRemount: false
-      }).then(() => {
-        traceNativeWorkbench("panel.bundle.ready");
-        if (disposedRef.current || closingRef.current || nativeWorkbenchOpenToken !== openToken) {
-          return;
-        }
-
-        syncParkingVisualState(false, false, 0);
-        openRafRef.current = window.requestAnimationFrame(() => {
-          openRafRef.current = 0;
-          if (disposedRef.current || closingRef.current) {
-            return;
-          }
-
-          setShellOpen(true);
-          setShellInteractive(true);
-          settleTimerRef.current = window.setTimeout(() => {
-            settleTimerRef.current = 0;
-            if (!disposedRef.current && !closingRef.current) {
-              finalizeWorkbenchOpen();
-            }
-          }, NATIVE_WORKBENCH_OPEN_SETTLE_DELAY_MS);
-        });
-      }).catch((error) => {
-        if (!disposedRef.current) {
-          traceNativeWorkbench("panel.bundle.error", { message: error && error.message ? error.message : error });
-          setMountError("Initial mount failed: " + formatProbeError(error));
-          console.error("RapidTransit native workbench initial mount failed", error);
-        }
-      });
-    };
-
-    if (nativeWorkbenchPersistentBundleHandle || nativeWorkbenchPersistentBundlePromise) {
-      launchMount();
-    } else {
-      mountTimerRef.current = window.setTimeout(launchMount, 120);
-    }
 
     return () => {
-      traceNativeWorkbench("panel.effect.unmount");
-      window.removeEventListener("keydown", handleKeyDown);
-      disposedRef.current = true;
-      clearWorkbenchShellTimers();
-      stopNativeWorkbenchSlotTracking();
-      closingRef.current = false;
-      setNativeWorkbenchCloseHandler(null);
-      parkNativeWorkbenchPersistentHost();
+      window.cancelAnimationFrame(outerRaf);
+      window.cancelAnimationFrame(innerRaf);
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+      const focused = hostElement.shadowRoot.activeElement;
+      if (focused) {
+        focused.blur();
+      }
+      reportNativeWorkbenchHostState("parked");
+      setPhase("exiting");
+      exitTimerRef.current = window.setTimeout(() => setPhase("hidden"), NATIVE_WORKBENCH_CLOSE_DURATION_MS);
+    };
+  }, [frame]);
+
+  React.useEffect(() => {
+    nativeWorkbenchShellFrameListener = setFrame;
+    setFrame(nativeWorkbenchShellFrameElement);
+    const hostElement = ensureNativeWorkbenchPersistentHostElement();
+    hostSlotRef.current.appendChild(hostElement);
+    ensureNativeWorkbenchPersistentBundle({
+      forceReload: false,
+      forceRemount: false
+    }).catch((error) => {
+      setMountError("Initial mount failed: " + formatProbeError(error));
+      console.error("RapidTransit native workbench initial mount failed", error);
+    });
+
+    return () => {
+      nativeWorkbenchShellFrameListener = null;
+      window.clearTimeout(exitTimerRef.current);
+      ensureNativeWorkbenchParkingLot().appendChild(hostElement);
     };
   }, []);
+
+  React.useEffect(() => {
+    nativeWorkbenchContentShown = phase === "shown";
+    const shownRaf = window.requestAnimationFrame(() => {
+      ensureNativeWorkbenchPersistentHostElement().shadowRoot
+        .querySelector(".rt-native-schedule-surface")
+        .setAttribute("data-rt-shown", phase === "shown" ? "true" : "false");
+    });
+    if (phase === "shown") {
+      window.dispatchEvent(new CustomEvent(NATIVE_WORKBENCH_NAVIGATE_EVENT));
+    }
+    return () => {
+      window.cancelAnimationFrame(shownRaf);
+      nativeWorkbenchContentShown = false;
+    };
+  }, [phase]);
 
   return React.createElement(
     "div",
     {
       style: {
+        position: "fixed",
+        left: phase === "hidden" ? "-99999px" : rect.left.toString() + "px",
+        top: rect ? rect.top.toString() + "px" : "0px",
+        width: rect ? rect.width.toString() + "px" : "1520px",
+        height: rect ? rect.height.toString() + "px" : "980px",
         display: "flex",
-        alignItems: "flex-end",
-        justifyContent: "center",
-        width: "100%",
-        height: "100%",
-        minHeight: "calc(100vh - 42rem)",
-        paddingTop: "6rem",
-        paddingRight: "68rem",
-        paddingBottom: "102rem",
-        paddingLeft: "68rem",
-        boxSizing: "border-box",
-        pointerEvents: "none"
+        flexDirection: "column",
+        visibility: phase === "hidden" ? "hidden" : "visible",
+        transform: phase === "shown" ? "scale(1)" : "scale(0.95)",
+        transformOrigin: "center center",
+        transitionProperty: "transform",
+        transitionTimingFunction: "ease",
+        transitionDuration: phase === "entering" || phase === "shown"
+          ? NATIVE_WORKBENCH_OPEN_DURATION_MS.toString() + "ms"
+          : NATIVE_WORKBENCH_CLOSE_DURATION_MS.toString() + "ms",
+        pointerEvents: phase === "shown" ? "auto" : "none"
       }
     },
-    React.createElement(
-      "div",
-      {
-        ref: shellFrameRef,
-        style: {
-          width: "100%",
-          maxWidth: "1140rem",
-          minWidth: "1035rem",
-          height: "100%",
-          maxHeight: "846rem",
-          minHeight: "0",
-          display: "flex",
-          flexDirection: "column",
-          opacity: shellOpen ? "1" : "0",
-          transform: shellOpen ? "scale(1)" : "scale(0.95)",
-          transformOrigin: "center center",
-          transitionProperty: "opacity, transform",
-          transitionDuration: shellOpen
-            ? NATIVE_WORKBENCH_OPEN_DURATION_MS.toString() + "ms"
-            : NATIVE_WORKBENCH_CLOSE_DURATION_MS.toString() + "ms",
-          transitionTimingFunction: "ease",
-          pointerEvents: shellInteractive ? "auto" : "none"
-        }
-      },
-      React.createElement(
-        "div",
-        {
-          style: {
-            width: "100%",
-            height: "100%",
-            maxWidth: "100%",
-            minWidth: "0",
-            maxHeight: "100%",
-            minHeight: "0",
-            display: "flex",
-            flexDirection: "column",
-            backgroundColor: "transparent"
-          }
-        },
-        React.createElement(
-          "div",
-          {
-            className: "child-opacity-transition_nkS",
-            style: {
-              display: "flex",
-              flexDirection: "column",
-              padding: "0",
-              width: "100%",
-              height: "100%",
-              minHeight: "0",
-              "--childOpacityTransitionDuration": shellOpen
-                ? NATIVE_WORKBENCH_OPEN_DURATION_MS.toString() + "ms"
-                : NATIVE_WORKBENCH_CLOSE_DURATION_MS.toString() + "ms",
-              "--childOpacityTransitionDelay": "0ms",
-              "--childOpacityTransitionTimingFunction": "ease"
-            }
-          },
-          React.createElement(RapidTransitWorkbenchBundleHost, {
-            hostSlotRef,
-            mountError
-          })
-        )
-      )
-    )
+    React.createElement(RapidTransitWorkbenchBundleHost, {
+      hostSlotRef,
+      mountError
+    })
   );
 };
 

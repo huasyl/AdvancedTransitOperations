@@ -3,7 +3,7 @@ import "./LineRoute.css";
 
 const EMPTY = [];
 const rem = (value) => `${value}rem`;
-const nameOffset = 16;
+const nameOffset = 12;
 const textWidth = (name, size = 14) => Array.from(String(name || "")).reduce((width, character) =>
   width + (character.charCodeAt(0) <= 255 ? .6 : 1), 0) * size;
 const nameTokens = (name) => String(name || "").match(/[A-Za-z0-9\u00c0-\u024f]+(?:['’-][A-Za-z0-9\u00c0-\u024f]+)*|\s+|[^\s]/gu) || [];
@@ -40,8 +40,6 @@ export function routeLayout(stops, availableWidth, sectionMap, getSectionText, m
   const counts = [Math.ceil(horizontal / 2), stops.length >= 4 ? 1 : 0,
     Math.floor(horizontal / 2), stops.length >= 4 ? 1 : 0];
   const width = availableWidth;
-  const sideInset = Math.min(160, width / 4);
-  const railWidth = width - sideInset * 2;
   const gap = 16;
   let cursor = 0;
   const sides = [[], [], [], []];
@@ -54,7 +52,7 @@ export function routeLayout(stops, availableWidth, sectionMap, getSectionText, m
     node.labelWidth = Math.min(labelWidth, Math.max(node.index === 0 ? originWidth : 24,
       ...node.nameLines.map((line) => measure(line) + 8), ...node.detailLines.map((line) => measure(line, 12) + 8)));
     node.labelHeight = node.nameLines.length * 18 + node.detailLines.length * 16 +
-      (node.detailLines.length ? 8 : 0) + (node.index === 0 && originText ? 18 : 0);
+      (node.detailLines.length ? 4 : 0) + (node.index === 0 && originText ? 18 : 0);
   }
   (stops.length >= 4 ? [3, 0, 1, 2] : [0, 1, 2, 3]).forEach((side) => {
     sides[side] = Array.from({ length: counts[side] }, (_, index) => {
@@ -62,13 +60,20 @@ export function routeLayout(stops, availableWidth, sectionMap, getSectionText, m
     const parts = rowsOfDetail(stop.detail);
     const wantedWidth = Math.max(cursor === 0 ? originWidth : 24, measure(stop.stationName || stop.stopName || stop.stationId) + 8,
       ...parts.map((part) => measure(part, 12) + 8));
-    const node = { stop, index: cursor++, side, sideIndex: index, wantedWidth };
-    sizeLabel(node, side % 2 ? Math.min(wantedWidth, Math.max(24, sideInset - gap)) : wantedWidth);
-    return node;
+    return { stop, index: cursor++, side, sideIndex: index, wantedWidth };
     });
   });
-  const railHeight = Math.max(72, ...sides[1].map((node) => node.labelHeight + 16),
-    ...sides[3].map((node) => node.labelHeight + 16));
+  const sideInset = Math.min(160, width / 4, Math.max(24, ...[...sides[1], ...sides[3]].map((node) => gap + node.wantedWidth)));
+  const railWidth = width - sideInset * 2;
+  sides.forEach((sideNodes) => sideNodes.forEach((node) =>
+    sizeLabel(node, node.side % 2 ? Math.min(node.wantedWidth, Math.max(24, sideInset - gap)) : node.wantedWidth)));
+  const sectionLabels = (stops.length > 1 ? stops : []).map((stop, index) => {
+    const next = stops[(index + 1) % stops.length];
+    const lines = rowsOfDetail(getSectionText?.(sectionMap.get(`${stop.stationId}\u0000${next.stationId}`), stop, next));
+    return { lines, width: Math.max(42, ...lines.map((line) => line.length * 8 + 12)), height: 8 + 16 * lines.length };
+  });
+  const railHeight = Math.max(72, ...sectionLabels.map((label) => 2 * label.height + 16),
+    ...sides[1].map((node) => node.labelHeight + 16), ...sides[3].map((node) => node.labelHeight + 16));
   const radiusX = Math.min(railHeight / 2, railWidth / 4), radiusY = railHeight / 2;
   const straight = railWidth - radiusX * 2;
   [sides[0], [...sides[2]].reverse()].forEach((row) => {
@@ -136,15 +141,13 @@ export function routeLayout(stops, availableWidth, sectionMap, getSectionText, m
       previous = distance;
     });
     const middle = pointAt((node.distance + nextDistance) / 2);
-    const section = sectionMap.get(`${node.stop.stationId}\u0000${next.stop.stationId}`);
-    const label = getSectionText?.(section) || "—";
-    const labelWidth = Math.max(42, label.length * 8 + 12);
-    const inset = Math.abs(middle.nx) * labelWidth / 2 + Math.abs(middle.ny) * 12;
+    const label = sectionLabels[node.index];
+    const inset = Math.abs(middle.nx) * label.width / 2 + Math.abs(middle.ny) * label.height / 2;
     const labelX = middle.x + middle.nx * inset;
-    const labelY = middle.y + middle.ny * inset - 12;
+    const labelY = middle.y + middle.ny * inset - label.height / 2;
     return { index: node.index, from: node.stop, to: next.stop,
       path,
-      labelX, labelY, labelWidth, side: middle.side };
+      labelX, labelY, labelWidth: label.width, labelHeight: label.height, labelLines: label.lines, side: middle.side };
   });
   return { width, height: top + railHeight + bottomHeight + nameOffset, nodes, edges };
 }
@@ -183,7 +186,7 @@ export default function LineRoute({ stops = EMPTY, sections = EMPTY, color, sele
     ?? nameTokens(text).reduce((total, token) => total + (metrics.get(`${size}:${token}`) ?? textWidth(token, size)), 0), [metrics]);
   const layout = useMemo(() => routeLayout(stops, width || 750, sectionMap, getSectionText, measureText, originText),
     [stops, width, sectionMap, getSectionText, measureText, originText]);
-  return <div className="rtw-line-route" ref={rootRef} style={{ color: color || "#81d4d4", visibility: measureBeforeShow && !width ? "hidden" : undefined }}>
+  return <div className={`rtw-line-route${onStation || onSection ? "" : " is-static"}`} ref={rootRef} style={{ color: color || "#81d4d4", visibility: measureBeforeShow && !width ? "hidden" : undefined }}>
     <span className="rtw-line-route-unit" ref={unitRef} aria-hidden="true" />
     <div className="rtw-line-route-measure" ref={measureRef} aria-hidden="true">{samples.map((sample) =>
       <span key={sample.key} style={{ fontSize: rem(sample.size) }}>{sample.text}</span>)}</div>
@@ -195,7 +198,7 @@ export default function LineRoute({ stops = EMPTY, sections = EMPTY, color, sele
             const key = `${edge.from.stationId}\u0000${edge.to.stationId}`;
             const section = sectionMap.get(key);
             return <g key={`${edge.from.waypointIndex}:${edge.index}`}>
-              <path d={edge.path} stroke={getSectionColor?.(section) || color || "#82939a"} strokeWidth="4" fill="none" />
+              <path d={edge.path} stroke={getSectionColor?.(section, edge.from, edge.to) || color || "#82939a"} strokeWidth="4" fill="none" />
               <path className="rtw-line-route-hit" d={edge.path} stroke="transparent" strokeWidth="20" fill="none"
                 onClick={() => onSection?.(edge.from, edge.to, section)} />
             </g>;
@@ -203,11 +206,10 @@ export default function LineRoute({ stops = EMPTY, sections = EMPTY, color, sele
         </svg>
         {layout.edges.map((edge) => {
           const section = sectionMap.get(`${edge.from.stationId}\u0000${edge.to.stationId}`);
-          const label = getSectionText?.(section) || "—";
-          return <button key={`label:${edge.index}`} type="button"
+          return edge.labelLines.length ? <button key={`label:${edge.index}`} type="button"
             className={`rtw-line-route-edge${selectedSection === `${edge.from.stationId}\u0000${edge.to.stationId}` ? " is-selected" : ""}`}
-            style={{ left: rem(edge.labelX), top: rem(edge.labelY), width: rem(edge.labelWidth) }}
-            onClick={() => onSection?.(edge.from, edge.to, section)}>{label}</button>;
+            style={{ left: rem(edge.labelX), top: rem(edge.labelY), width: rem(edge.labelWidth), height: rem(edge.labelHeight) }}
+            onClick={() => onSection?.(edge.from, edge.to, section)}>{edge.labelLines.map((part, index) => <span key={index}>{part}</span>)}</button> : null;
         })}
         {layout.nodes.map((node) => <Fragment key={`${node.stop.stationId}:${node.stop.waypointIndex}:${node.stop.stationOccurrence}:${node.index}`}>
           <button type="button" className={`rtw-line-route-dot${(isStationSelected ? isStationSelected(node.stop) : selectedStationId === node.stop.stationId) ? " is-selected" : ""}`}

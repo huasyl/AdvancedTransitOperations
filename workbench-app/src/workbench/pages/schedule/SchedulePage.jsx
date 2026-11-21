@@ -1,29 +1,42 @@
 import { memo } from "react";
 import { useNativeScheduleI18n } from "../../shared/workbench-i18n";
-import useScheduleController from "./useScheduleController";
-import AutoRuleSection from "./components/AutoRuleSection";
-import CopyLineSection from "./components/CopyLineSection";
-import ManualDraftSection from "./components/ManualDraftSection";
+import { NoLineIcon } from "./components/ScheduleIcons";
+import ScheduleLineView from "./components/ScheduleLineView";
 import ScheduleTopbar from "./components/ScheduleTopbar";
 import SummarySection from "./components/SummarySection";
+import useDepartureData from "./useDepartureData";
+import useDepartureLoads from "./useDepartureLoads";
+import useDepartureRecords from "./useDepartureRecords";
 
-function SchedulePage({ registerHostActions, activeTransportMode = "train", isActive = false, onSnapshot, readServicePeriods, writeServicePeriods }) {
+function SchedulePage({ controller, activeTransportMode = "train", isActive = false, onOpenRecord }) {
   const { t } = useNativeScheduleI18n();
-  const { topbar, summary, auto, manual, copy, refs, actions } = useScheduleController({
-    registerHostActions,
-    activeTransportMode,
-    isActive,
-    onSnapshot,
-    readServicePeriods,
-    writeServicePeriods
+  const { topbar, summary, line, refs, actions } = controller;
+  const period = controller.auto.quickSegments[line.selectedSegment];
+  const noLines = line.ready && topbar.lineOptions.length === 0;
+  const lineActive = isActive && line.ready && !noLines && line.view === "line";
+  const diagram = useDepartureData({
+    mode: activeTransportMode,
+    lineId: topbar.selectedLineId,
+    isActive: lineActive,
+    catalogRevision: line.catalogRevision,
+    fromMinute: period?.start,
+    toMinute: period?.end
   });
+  const loads = useDepartureLoads({ mode: activeTransportMode, lineId: topbar.selectedLineId, isActive: lineActive });
+  const records = useDepartureRecords({ lineId: topbar.selectedLineId, isActive: lineActive });
 
   return (
     <div className="dw-demo-page-root">
-      <div className="dw-demo-shell">
-        <ScheduleTopbar topbar={topbar} refs={refs} actions={actions} />
+      <div className="dw-demo-shell dw-departure-shell">
+        <div className="dw-departure-workspace">
+        <ScheduleTopbar topbar={topbar} refs={refs} actions={actions} hideLine={line.view !== "all"} />
         <div className="dw-demo-main">
+          {noLines ? <div className="dw-departure-empty">
+            <div className="dw-departure-empty-icon-wrap"><NoLineIcon /></div>
+            <div className="dw-departure-empty-title">{t("nativeSchedule.line.noLines")}</div>
+          </div> : line.view === "all" ? <div className="dw-departure-summary-view">
           <SummarySection
+            editingLineId={summary.editingLineId}
             summaryStateLabel={summary.summaryStateLabel}
             hasAppliedSchedule={summary.hasAppliedSchedule}
             summaryRows={summary.rows}
@@ -42,98 +55,10 @@ function SchedulePage({ registerHostActions, activeTransportMode = "train", isAc
             footerNote={summary.footerNote}
             dropdownPortalHostRef={refs.dropdownPortalHostRef}
           />
+          </div> : <ScheduleLineView controller={controller} diagram={diagram} loads={loads} records={records} isActive={isActive} onOpenRecord={onOpenRecord} />}
 
-          <section className="dw-demo-right">
-            <div className="dw-demo-tabs">
-              <button
-                type="button"
-                className={`dw-demo-tab ${auto.activeRightTab === "auto" ? "is-active" : ""}`}
-                onClick={() => actions.setActiveRightTab("auto")}
-              >
-                {t("nativeSchedule.tab.auto")}
-              </button>
-              <button
-                type="button"
-                className={`dw-demo-tab ${manual.activeRightTab === "manual" ? "is-active" : ""}`}
-                onClick={() => actions.setActiveRightTab("manual")}
-              >
-                {t("nativeSchedule.tab.manual")}
-              </button>
-              <button
-                type="button"
-                className={`dw-demo-tab ${copy.activeRightTab === "copy" ? "is-active" : ""}`}
-                onClick={() => actions.setActiveRightTab("copy")}
-              >
-                {t("nativeSchedule.tab.copy")}
-              </button>
-            </div>
-
-            {auto.activeRightTab === "auto" ? (
-              <AutoRuleSection
-                autoSubMode={auto.autoSubMode}
-                quickSegments={auto.quickSegments}
-                quickFooterNote={auto.quickFooterNote}
-                quickImportDisabled={auto.quickImportDisabled}
-                quickImported={auto.quickImported}
-                editorStart={auto.editorStart}
-                editorEnd={auto.editorEnd}
-                autoFrequencyText={auto.autoFrequencyText}
-                autoFrequencyPerHour={auto.autoFrequencyPerHour}
-                selectedLineType={auto.selectedLineType}
-                supportsExpress={auto.supportsExpress}
-                autoOffsetDirection={auto.autoOffsetDirection}
-                autoOffsetMinutesText={auto.autoOffsetMinutesText}
-                liveAutoPreview={auto.liveAutoPreview}
-                autoRules={auto.autoRules}
-                footerNote={auto.footerNote}
-                editorEndInputRef={refs.editorEndInputRef}
-                frequencyInputRef={refs.frequencyInputRef}
-                onEditorStartChange={actions.changeEditorStart}
-                onEditorEndChange={actions.changeEditorEnd}
-                onChangeAutoSubMode={actions.setAutoSubMode}
-                onAutoFrequencyChange={actions.changeAutoFrequency}
-                onAutoOffsetDirectionChange={actions.changeAutoOffsetDirection}
-                onAutoOffsetMinutesChange={actions.changeAutoOffsetMinutes}
-                onAddAutoRule={actions.addAutoRule}
-                onRemoveAutoRule={actions.removeAutoRule}
-                onImportAutoToSummary={actions.importAutoToSummary}
-                onChangeQuickBoundary={actions.changeQuickBoundary}
-                onChangeQuickCount={actions.changeQuickCount}
-                onImportQuickToSummary={actions.importQuickToSummary}
-              />
-            ) : manual.activeRightTab === "manual" ? (
-              <ManualDraftSection
-                manualInput={manual.manualInput}
-                manualInputRef={refs.manualInputRef}
-                manualDrafts={manual.manualDrafts}
-                manualInputError={manual.manualInputError}
-                isAddManualDisabled={manual.isAddManualDisabled}
-                footerNote={manual.footerNote}
-                onManualInputChange={actions.changeManualInput}
-                onAddManualDraft={actions.addManualDraft}
-                onRemoveManualDraft={actions.removeManualDraft}
-                onImportManualToSummary={actions.importManualToSummary}
-              />
-            ) : (
-              <CopyLineSection
-                copySourceLineId={copy.copySourceLineId}
-                copySourceLabel={copy.copySourceLabel}
-                copySourceOptions={copy.copySourceOptions}
-                copyPreviewText={copy.copyPreviewText}
-                copyEmptyText={copy.copyEmptyText}
-                copyRows={copy.copyRows}
-                copyImportDisabled={copy.copyImportDisabled}
-                copyImported={copy.copyImported}
-                footerNote={copy.footerNote}
-                dropdownPortalHostRef={refs.dropdownPortalHostRef}
-                onCopySourceChange={actions.changeCopySource}
-                onRefreshNames={actions.refreshNames}
-                onImportCopyToSummary={actions.importCopyToSummary}
-                onRemoveCopyRow={actions.removeCopySourceRow}
-              />
-            )}
-          </section>
         </div>
+      </div>
       </div>
       <div ref={refs.dropdownPortalHostRef} className="dw-demo-dropdown-portal-layer" />
     </div>

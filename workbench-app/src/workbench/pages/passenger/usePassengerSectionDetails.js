@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-const MOTION = { exit: 400, headingLag: 120, headings: 360, headingMax: 620, enter: 520, stagger: 55, limit: 280 };
+const MOTION = { exit: 400, headingLag: 120, headings: 220, headingMax: 760, enter: 520, stagger: 55, limit: 280 };
 const motionStyle = {
   "--passenger-exit-duration": `${MOTION.exit}ms`,
   "--passenger-enter-duration": `${MOTION.enter}ms`
@@ -70,7 +70,7 @@ export default function usePassengerSectionDetails({ scrollRef, selectionKey, is
       const target = state.targets[index].rect;
       return Math.hypot(target.left - rect.left, target.top - rect.top);
     }));
-    const duration = Math.round(Math.min(MOTION.headingMax, MOTION.headings + distance * 0.35));
+    const duration = Math.round(Math.min(MOTION.headingMax, MOTION.headings + 17 * Math.sqrt(distance)));
     state.layer.style.setProperty("--passenger-heading-duration", `${duration}ms`);
     state.titles.forEach(({ box, rect }, index) => {
       const target = state.targets[index].rect;

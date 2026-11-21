@@ -2,15 +2,16 @@ import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import PlannerPage from "./pages/planner/PlannerPage";
 import BroadcastPage from "./pages/broadcast/BroadcastPage";
 import { useNativeScheduleI18n } from "./shared/workbench-i18n";
-import OverviewPage from "./pages/overview/OverviewPage";
 import PassengerFlowPage from "./pages/passenger/PassengerFlowPage";
 import SchedulePage from "./pages/schedule/SchedulePage";
+import ScheduleSidebar from "./pages/schedule/components/ScheduleSidebar";
+import useScheduleController from "./pages/schedule/useScheduleController";
 import TimetablePage from "./pages/timetable/TimetablePage";
 import { setWorkbenchApiTransportMode } from "../lib/workbench-api";
 import { traceWorkbench } from "./shared/workbench-trace";
 import { DEFAULT_SERVICE_PERIODS } from "../lib/service-periods";
 
-const DEFAULT_NATIVE_WORKBENCH_PAGE = "overview";
+const DEFAULT_NATIVE_WORKBENCH_PAGE = "schedule";
 const WORKBENCH_PAGE_TRANSITION_MS = 220;
 const DEFAULT_TRANSPORT_MODE = "train";
 const WORKBENCH_DEBUG_FLAGS_EVENT = "rt-native-workbench-debug-flags";
@@ -47,7 +48,6 @@ export default function WorkbenchApp({ registerHostActions }) {
     timetable: DEFAULT_TRANSPORT_MODE,
     planner: DEFAULT_TRANSPORT_MODE,
     broadcast: DEFAULT_TRANSPORT_MODE,
-    overview: DEFAULT_TRANSPORT_MODE,
     passenger: DEFAULT_TRANSPORT_MODE
   });
   const [pageStage, setPageStage] = useState("entered");
@@ -55,6 +55,11 @@ export default function WorkbenchApp({ registerHostActions }) {
   const [broadcastEnterSequence, setBroadcastEnterSequence] = useState(0);
   const [debugToolsEnabled, setDebugToolsEnabled] = useState(getWorkbenchDebugToolsEnabled);
   const [snapshotsByMode, setSnapshotsByMode] = useState({});
+  const [recordFocus, setRecordFocus] = useState(null);
+  const openRecord = useCallback((lineId, tripKey) => {
+    setRecordFocus({ lineId, tripKey, token: Date.now() });
+    setActivePage("timetable");
+  }, []);
   const servicePeriodsRef = useRef({});
   const readServicePeriods = useCallback((mode, lineId) =>
     servicePeriodsRef.current[mode]?.[lineId] || DEFAULT_SERVICE_PERIODS, []);
@@ -64,13 +69,11 @@ export default function WorkbenchApp({ registerHostActions }) {
       ({ id, labelKey, start, end })) };
   }, []);
   const [stickyPages, setStickyPages] = useState({
-    overview: false,
     passenger: false
   });
   const pageTabs = useMemo(
     () => {
       const tabs = [
-        { key: "overview", label: t("nativeWorkbench.tab.overview") },
         { key: "schedule", label: t("nativeWorkbench.tab.schedule") },
         { key: "timetable", label: t("timetable.page.tab") }
       ];
@@ -183,7 +186,7 @@ export default function WorkbenchApp({ registerHostActions }) {
   }, [pageStage, renderedPage]);
 
   useLayoutEffect(() => {
-    if (renderedPage !== "overview" && renderedPage !== "passenger") {
+    if (renderedPage !== "passenger") {
       return;
     }
 
@@ -197,7 +200,6 @@ export default function WorkbenchApp({ registerHostActions }) {
     ));
   }, [renderedPage]);
 
-  const shouldMountOverview = stickyPages.overview || renderedPage === "overview";
   const shouldMountPassenger = stickyPages.passenger || renderedPage === "passenger";
   const modeForPage = (pageKey) => (
     activePage === pageKey || renderedPage === pageKey
@@ -233,6 +235,14 @@ export default function WorkbenchApp({ registerHostActions }) {
       ? current
       : { ...current, [mode]: snapshot });
   }, []);
+  const scheduleController = useScheduleController({
+    registerHostActions,
+    activeTransportMode,
+    isActive: renderedPage === "schedule",
+    onSnapshot: shareSnapshot,
+    readServicePeriods,
+    writeServicePeriods
+  });
 
   function pageClassName(pageKey) {
     if (renderedPage === pageKey) {
@@ -287,18 +297,18 @@ export default function WorkbenchApp({ registerHostActions }) {
         </div>
       </div>
 
+      <div className="dw-native-workbench-body">
+      <ScheduleSidebar controller={scheduleController} activeTransportMode={activeTransportMode} onTransportModeChange={setActiveTransportMode} compact={(pageStage === "armed" && previousPage ? previousPage : renderedPage) !== "schedule"} />
       <div className="dw-native-workbench-pages">
         <div
           className={pageClassName("schedule")}
           data-workbench-page="schedule"
         >
           <SchedulePage
-            registerHostActions={registerHostActions}
+            controller={scheduleController}
             activeTransportMode={modeForPage("schedule")}
             isActive={renderedPage === "schedule"}
-            onSnapshot={shareSnapshot}
-            readServicePeriods={readServicePeriods}
-            writeServicePeriods={writeServicePeriods}
+            onOpenRecord={openRecord}
           />
         </div>
         <div
@@ -310,6 +320,8 @@ export default function WorkbenchApp({ registerHostActions }) {
             isActive={renderedPage === "timetable"}
             sharedSnapshot={snapshotsByMode[modeForPage("timetable")] || null}
             debugToolsEnabled={debugToolsEnabled}
+            onSaved={scheduleController.actions.acceptAppliedLines}
+            recordFocus={recordFocus}
           />
         </div>
         <div
@@ -331,19 +343,6 @@ export default function WorkbenchApp({ registerHostActions }) {
           <BroadcastPage pageEnterSequence={broadcastEnterSequence} activeTransportMode={modeForPage("broadcast")} />
         </div>
         <div
-          className={pageClassName("overview")}
-          data-workbench-page="overview"
-        >
-          {shouldMountOverview ? (
-            <OverviewPage
-              activeTransportMode={modeForPage("overview")}
-              isActive={renderedPage === "overview"}
-              registerHostActions={registerHostActions}
-              onTransportModeChange={setActiveTransportMode}
-            />
-          ) : null}
-        </div>
-        <div
           className={pageClassName("passenger")}
           data-workbench-page="passenger"
         >
@@ -357,6 +356,7 @@ export default function WorkbenchApp({ registerHostActions }) {
             />
           ) : null}
         </div>
+      </div>
       </div>
     </div>
   );

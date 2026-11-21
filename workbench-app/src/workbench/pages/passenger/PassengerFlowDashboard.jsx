@@ -6,7 +6,7 @@ import PassengerLineTabs from "./components/PassengerLineTabs";
 import PassengerOdFlowDiagram from "./components/PassengerOdFlowDiagram";
 import PassengerTimeline from "./components/PassengerTimeline";
 import PassengerComparisonChart from "./components/PassengerComparisonChart";
-import PassengerRouteTransition from "./components/PassengerRouteTransition";
+import RouteTransition from "../../shared/RouteTransition";
 import usePassengerSectionDetails from "./usePassengerSectionDetails";
 import { buildBuckets, formatPassengerNumber, lineTextColor, lineTrend, matchingLine, odRanking, PURPOSE_COLORS,
   purposeValues, rangeLabel, sectionColor, stationCatalog, stationName,
@@ -255,7 +255,7 @@ export default function PassengerFlowDashboard({ mode, isActive, context, analys
         <div data-motion-overview="true" style={{ display: details.overviewVisible ? "block" : "none" }}><Motion>
         {lineId !== "ALL" ? <section className="routes-section">{lines.filter((line) => line.id === lineId).map((line) => {
           const stops = lineStops.filter((stop) => stop.lineId === line.id);
-          return <PassengerRouteTransition routeKey={`${mode}:${line.id}`} key="passenger-route" isActive={isActive && !details.detail}>
+          return <RouteTransition routeKey={`${mode}:${line.id}`} key="passenger-route" isActive={isActive && !details.detail}>
             <LineRoute stops={stops} sections={sectionRows.filter((row) => row.lineId === line.id)} color={line.color} isActive={isActive} measureBeforeShow
               emptyText={t("passengerFlow.routeMissing")} originText={t("passengerFlow.origin")}
               getSectionColor={(section) => sectionColor(section?.loadRatio)}
@@ -266,7 +266,7 @@ export default function PassengerFlowDashboard({ mode, isActive, context, analys
                   memberStationIds: rows(context?.stationGroups).find((group) => group.stationGroupId === id)?.memberStationIds || [stop.stationId] }); }}
               onSection={(from, to, row) => { const key = `${line.id}\u0000${from.stationId}\u0000${to.stationId}`;
                 setFocus(focus.kind === "section" && focus.key === key ? { kind: "line" } : { kind: "section", key,
-                  row: row || { lineId: line.id, fromStationId: from.stationId, toStationId: to.stationId } }); }} /></PassengerRouteTransition>;
+                  row: row || { lineId: line.id, fromStationId: from.stationId, toStationId: to.stationId } }); }} /></RouteTransition>;
         })}<div className="route-footer"><div className="load-legend"><span>{t("passengerFlow.loadRatio")}</span>
           {["low", "medium", "high", "missing"].map((key, index) => <span key={key}><i style={{ backgroundColor: sectionColor([0, .3, .8, null][index]) }} />{t(`passengerFlow.${key}`)}</span>)}</div>
           {focus.kind === "station" ? <QuietButton onClick={() => onPageChange("station")}>{t("passengerFlow.stationPage")} {stationName(catalog, focus.stationId)} →</QuietButton> : null}

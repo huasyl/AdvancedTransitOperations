@@ -9,18 +9,7 @@ export function RapidTransitTopButton() {
   const open = useLocalPanelOpen();
   const t = useT();
   const toggleWorkbench = () => {
-    try {
-      const closeHandler = typeof window !== "undefined"
-        ? window.__RT_NATIVE_WORKBENCH_CLOSE__
-        : null;
-      if (typeof closeHandler === "function") {
-        closeHandler();
-        return;
-      }
-      trigger("game", "togglePanel", NATIVE_WORKBENCH_PANEL_ID);
-    } catch (error) {
-      console.error("RapidTransit native workbench toggle failed", error);
-    }
+    trigger("game", "togglePanel", NATIVE_WORKBENCH_PANEL_ID);
   };
 
   return (

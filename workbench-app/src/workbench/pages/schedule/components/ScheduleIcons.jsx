@@ -13,6 +13,18 @@ export function DemoEmptyScheduleIcon() {
   );
 }
 
+export function NoLineIcon() {
+  return (
+    <svg viewBox="0 0 56 48" className="dw-departure-empty-icon">
+      <path d="M14 24h7" fill="none" stroke="#e6ecf0" strokeWidth="2.6" strokeLinecap="round" />
+      <path d="M35 24h7" fill="none" stroke="#e6ecf0" strokeWidth="2.6" strokeLinecap="round" />
+      <circle cx="10" cy="24" r="3.4" fill="none" stroke="#e6ecf0" strokeWidth="2.6" />
+      <circle cx="28" cy="24" r="3.4" fill="none" stroke="#e6ecf0" strokeWidth="2.6" opacity="0.4" />
+      <circle cx="46" cy="24" r="3.4" fill="none" stroke="#e6ecf0" strokeWidth="2.6" />
+    </svg>
+  );
+}
+
 export function DemoPlayIcon() {
   return (
     <svg viewBox="0 0 24 24" className="dw-demo-button-icon is-play" aria-hidden="true">
@@ -45,5 +57,15 @@ export function DemoImportLeftIcon() {
       <path d="M11 7 7 12l4 5" fill="none" stroke="#5ab4c5" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M17 7 13 12l4 5" fill="none" stroke="#5ab4c5" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" opacity="0.92" />
     </svg>
+  );
+}
+
+export function ChevronDownIcon({ className = "" }) {
+  return (
+    <span className={`dw-departure-chevron ${className}`} aria-hidden="true">
+      <svg viewBox="0 0 16 16" className="dw-departure-chevron-icon">
+        <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </span>
   );
 }

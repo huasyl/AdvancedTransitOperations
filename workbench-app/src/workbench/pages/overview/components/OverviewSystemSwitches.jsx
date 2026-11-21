@@ -1,6 +1,6 @@
 import { useNativeScheduleI18n } from "../../../shared/workbench-i18n";
 
-export default function OverviewSystemSwitches({ systems, onSystemToggle }) {
+export default function OverviewSystemSwitches({ systems, onSystemToggle, disabled = false }) {
   const { t } = useNativeScheduleI18n();
 
   return (
@@ -11,6 +11,7 @@ export default function OverviewSystemSwitches({ systems, onSystemToggle }) {
           key={system.key}
           type="button"
           className={`rtw-overview-switch-row ${system.enabled ? "is-on" : "is-off"}`}
+          disabled={disabled}
           onClick={() => onSystemToggle(system.key)}
         >
           <span className="rtw-overview-switch-title">{system.title}</span>

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import "./RouteTransition.css";
 
 const EASE = "cubic-bezier(0.19, 1, 0.22, 1)";
 
-export default function PassengerRouteTransition({ routeKey, isActive, children }) {
+export default function RouteTransition({ routeKey, isActive, children }) {
   const [shown, setShown] = useState({ key: routeKey, children });
   const [moving, setMoving] = useState(false);
   const viewportRef = useRef(null), clipRef = useRef(null), contentRef = useRef(null);
@@ -69,8 +70,8 @@ export default function PassengerRouteTransition({ routeKey, isActive, children 
     };
   }, [routeKey, isActive]);
 
-  return <div ref={viewportRef} className={`passenger-route-transition${moving ? " is-moving" : ""}`}>
-    <div ref={clipRef} className="passenger-route-clip"><div ref={contentRef}>
+  return <div ref={viewportRef} className={`rtw-route-transition${moving ? " is-moving" : ""}`}>
+    <div ref={clipRef} className="rtw-route-clip"><div ref={contentRef}>
       {shown.key === routeKey ? children : displayed.current}
     </div></div>
   </div>;

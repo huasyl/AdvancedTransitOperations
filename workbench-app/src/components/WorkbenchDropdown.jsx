@@ -25,10 +25,11 @@ export default function WorkbenchDropdown({
   open: controlledOpen,
   onOpenChange,
   onOpen,
-  closeOnSelect = true
+  closeOnSelect = true,
+  disabled = false
 }) {
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
-  const open = typeof controlledOpen === "boolean" ? controlledOpen : uncontrolledOpen;
+  const open = !disabled && (typeof controlledOpen === "boolean" ? controlledOpen : uncontrolledOpen);
   const setOpen = typeof onOpenChange === "function" ? onOpenChange : setUncontrolledOpen;
   const [menuRect, setMenuRect] = useState(null);
   const triggerRef = useRef(null);
@@ -119,6 +120,7 @@ export default function WorkbenchDropdown({
         <button
           key={option.key || option.value || option.label}
           type="button"
+          disabled={disabled}
           className={`dw-demo-dropdown-option ${option.active ? "is-active" : ""} ${optionClassName}`.trim()}
           onClick={() => {
             onSelect(option.value ?? option);
@@ -146,6 +148,7 @@ export default function WorkbenchDropdown({
         <button
           ref={triggerRef}
           type="button"
+          disabled={disabled}
           className={`dw-demo-input dw-demo-dropdown-trigger ${triggerClassName} ${open ? "is-open" : ""}`.trim()}
           title={title || value}
           onClick={() => {

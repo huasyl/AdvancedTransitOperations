@@ -19,7 +19,9 @@
 .rtw-line-route-origin > span { display: block; height: 18rem; line-height: 18rem; white-space: nowrap; }
 .rtw-line-route-origin-arrow { margin-left: 8rem; }
 .rtw-line-route-label.is-left .rtw-line-route-origin { justify-content: flex-end; }
-.rtw-line-route-detail { display: flex; flex-direction: column; align-items: center; width: 100%; padding-top: 8rem; color: #c4d1d9; font-size: 12rem; line-height: 16rem; }
+.rtw-line-route-detail { display: flex; flex-direction: column; align-items: center; width: 100%; padding-top: 4rem; color: #c4d1d9; font-size: 12rem; line-height: 16rem; }
 .rtw-line-route-detail > span { display: block; height: 16rem; flex: 0 0 16rem; line-height: 16rem; white-space: nowrap; }
-.rtw-line-route-edge { position: absolute; z-index: 2; transform: translateX(-50%); min-width: 42rem; height: 24rem; line-height: 24rem; padding: 0; border: 0; background: transparent; color: #edf5f9; font-size: 12rem; cursor: pointer; }
+.rtw-line-route-edge { display: flex; flex-direction: column; align-items: center; justify-content: center; position: absolute; z-index: 2; transform: translateX(-50%); min-width: 42rem; padding: 0; border: 0; background: transparent; color: #edf5f9; font-size: 12rem; line-height: 16rem; cursor: pointer; }
+.rtw-line-route-edge > span { display: block; height: 16rem; flex: 0 0 16rem; line-height: 16rem; white-space: nowrap; }
 .rtw-line-route-edge.is-selected { color: #81d4d4; }
+.rtw-line-route.is-static button, .rtw-line-route.is-static .rtw-line-route-hit { cursor: default; }

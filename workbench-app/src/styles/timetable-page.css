@@ -195,23 +195,24 @@
   z-index: 1;
   width: 300rem;
   flex: 0 0 300rem;
+  display: flex;
+  flex-direction: column;
   min-height: 0;
-  padding-top: 24rem;
-  padding-right: 24rem;
-  padding-bottom: 24rem;
-  padding-left: 24rem;
   border-right: 1px solid rgba(255, 255, 255, 0.10);
-  overflow-x: hidden;
-  overflow-y: auto;
-  transition: width 300ms cubic-bezier(0.2, 1, 0.3, 1), flex-basis 300ms cubic-bezier(0.2, 1, 0.3, 1), padding-right 300ms cubic-bezier(0.2, 1, 0.3, 1), padding-left 300ms cubic-bezier(0.2, 1, 0.3, 1);
+  overflow: hidden;
+  transition: width 300ms cubic-bezier(0.2, 1, 0.3, 1), flex-basis 300ms cubic-bezier(0.2, 1, 0.3, 1);
 }
 
 .rtw-timetable-shell.is-sidebar-collapsed .rtw-timetable-sidebar {
   width: 0;
   flex-basis: 0;
-  padding-right: 0;
-  padding-left: 0;
-  overflow: hidden;
+}
+
+.rtw-timetable-sidebar-scroll {
+  width: 300rem;
+  padding: 24rem;
+  overflow-x: hidden;
+  overflow-y: scroll;
 }
 
 .rtw-timetable-sidebar::before {
@@ -329,11 +330,10 @@
 }
 
 .rtw-timetable-sidebar-section-content {
-  max-height: 1200rem;
   overflow: hidden;
   opacity: 1;
   transform: translateY(0);
-  transition: max-height 300ms cubic-bezier(0.2, 1, 0.3, 1), opacity 300ms ease, transform 300ms cubic-bezier(0.2, 1, 0.3, 1);
+  transition: opacity 300ms ease, transform 300ms cubic-bezier(0.2, 1, 0.3, 1);
 }
 
 .rtw-timetable-sidebar-section.is-collapsed .rtw-timetable-sidebar-section-content {

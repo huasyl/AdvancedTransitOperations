@@ -179,7 +179,7 @@ export function buildRuntimeCatalog(snapshot, metadataSnapshot, persistedState, 
       : metadataSnapshot;
 
   const lineOptions = overlayPersistedLineSettings(
-    buildNativeLineOptions(sourceSnapshot?.lines, t),
+    buildNativeLineOptions(sourceSnapshot?.lines, t, { allowDefaultFallback: false }),
     persistedState?.lineSettings
   );
   const depotOptions = buildNativeDepotOptions(sourceSnapshot?.depots);

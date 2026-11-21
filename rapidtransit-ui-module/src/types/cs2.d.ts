@@ -34,6 +34,13 @@ declare module "cs2/ui" {
   export const Tooltip: React.ComponentType<any>;
 }
 
+declare module "cs2/input" {
+  import type * as React from "react";
+
+  export const ActiveFocusDiv: React.ComponentType<any>;
+  export const InputActionConsumer: React.ComponentType<any>;
+}
+
 declare module "cs2/modding" {
   export interface ModRegistrar {
     extend(path: string, exportName: string, callback: (input: any) => any): void;

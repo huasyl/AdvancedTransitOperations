@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { useNativeScheduleI18n } from "../../../shared/workbench-i18n";
+import WorkbenchTooltip from "../../../shared/WorkbenchTooltip";
 import { getLocalizedLineType } from "../schedule-catalog";
 import { isValidTimeValue, normalizeTimeInput } from "../schedule-normalize";
 
 export function DemoTextField({
   label,
+  labelTooltip,
   value,
   onCommit,
   className,
@@ -58,7 +60,13 @@ export function DemoTextField({
     <div className={`dw-demo-field ${className || ""}`}>
       <label className="dw-demo-label">
         <span className="dw-demo-label-content">
-          <span>{label}</span>
+          {labelTooltip ? (
+            <WorkbenchTooltip tooltip={labelTooltip}>
+              <span className="dw-field-label-hint">{label}</span>
+            </WorkbenchTooltip>
+          ) : (
+            <span>{label}</span>
+          )}
         </span>
       </label>
       <div className={`dw-demo-input-row ${suffix ? "has-suffix" : ""}`}>
@@ -72,6 +80,7 @@ export function DemoTextField({
           inputMode={timeMode ? "numeric" : "text"}
           maxLength={timeMode ? 5 : undefined}
           onChange={(event) => {
+            if (readOnly) return;
             const rawValue = event.currentTarget.value;
             const nextDraftValue = timeMode ? normalizeTimeInput(rawValue) : rawValue;
             setDraftValue(nextDraftValue);
@@ -80,7 +89,7 @@ export function DemoTextField({
             }
           }}
           onPaste={(event) => {
-            if (!timeMode) {
+            if (readOnly || !timeMode) {
               return;
             }
 
@@ -173,6 +182,7 @@ export function SummaryBadge({ kind }) {
   );
 }
 export function DemoOffsetField({
+  disabled = false,
   label,
   direction,
   minutes,
@@ -191,6 +201,7 @@ export function DemoOffsetField({
           <button
             type="button"
             className={`dw-demo-offset-toggle-button ${direction === "early" ? "is-active" : ""}`}
+            disabled={disabled}
             onClick={() => onDirectionChange(direction === "early" ? "" : "early")}
           >
             {t("nativeSchedule.toggle.early")}
@@ -198,6 +209,7 @@ export function DemoOffsetField({
           <button
             type="button"
             className={`dw-demo-offset-toggle-button ${direction === "late" ? "is-active" : ""}`}
+            disabled={disabled}
             onClick={() => onDirectionChange(direction === "late" ? "" : "late")}
           >
             {t("nativeSchedule.toggle.late")}
@@ -207,6 +219,7 @@ export function DemoOffsetField({
           <input
             type="text"
             value={minutes}
+            readOnly={disabled}
             className="dw-demo-input dw-demo-offset-minutes"
             inputMode="numeric"
             maxLength={2}

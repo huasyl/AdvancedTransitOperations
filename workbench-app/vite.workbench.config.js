@@ -35,7 +35,13 @@ export default defineConfig({
       cssFileName: "workbench"
     },
     rollupOptions: {
+      external: ["react", "react-dom", "react-dom/client"],
       output: {
+        globals: {
+          react: "React",
+          "react-dom": "ReactDOM",
+          "react-dom/client": "ReactDOM"
+        },
         assetFileNames: (assetInfo) => {
           if (assetInfo.name === "workbench.css" || assetInfo.name === "style.css") {
             return "workbench.css";

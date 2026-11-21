@@ -11,6 +11,7 @@ const SUMMARY_FALLBACK_VISIBLE_ROWS = 12;
 const SUMMARY_OVERSCAN_ROWS = 6;
 
 function SummaryTable({
+  editingLineId,
   rows,
   editableLineId,
   onRemoveRow,
@@ -190,6 +191,7 @@ function SummaryTable({
                     type="button"
                     className="dw-demo-link-danger dw-demo-row-action"
                     onClick={() => onRemoveRow(row.id)}
+                    disabled={Boolean(editingLineId && (editingLineId === true || editingLineId === row.serviceId))}
                   >
                     {t("nativeSchedule.summary.action.remove")}
                   </button>
@@ -208,6 +210,7 @@ function SummaryTable({
 }
 
 export default function SummarySection({
+  editingLineId,
   summaryStateLabel,
   hasAppliedSchedule,
   summaryRows,
@@ -244,6 +247,7 @@ export default function SummarySection({
       />
 
       <SummaryTable
+        editingLineId={editingLineId}
         rows={summaryRows}
         editableLineId={editableLineId}
         summaryScrollRef={summaryScrollRef}
@@ -255,7 +259,7 @@ export default function SummarySection({
       />
 
       <div className="dw-demo-footer">
-        <button type="button" className="dw-demo-flat-button is-muted" onClick={onClearSummary}>{t("nativeSchedule.summary.action.clear")}</button>
+        <button type="button" className="dw-demo-flat-button is-muted" disabled={Boolean(editingLineId && (editingLineId === true || editingLineId === editableLineId))} onClick={onClearSummary}>{t("nativeSchedule.summary.action.clear")}</button>
         {footerNote ? <span className={`dw-demo-footer-note ${footerNote.tone ? `is-${footerNote.tone}` : ""}`}>{footerNote.text}</span> : null}
         <button
           type="button"

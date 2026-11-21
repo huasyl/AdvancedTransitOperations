@@ -2,6 +2,7 @@ import { useNativeScheduleI18n } from "../../../shared/workbench-i18n";
 import WorkbenchScrollArea from "../../../shared/WorkbenchScrollArea";
 import { DemoOffsetField, DemoTextField } from "./ScheduleFields";
 import { DemoImportLeftIcon } from "./ScheduleIcons";
+import LineApplyButton from "./LineApplyButton";
 import {
   DemoRuleTextPreviewTimes,
   DemoTopPreviewTimes,
@@ -36,53 +37,40 @@ function QuickStepper({ value, decreaseDisabled, increaseDisabled, onDecrease, o
   );
 }
 
-function QuickSegment({ segment, index, script, onChangeBoundary, onChangeCount }) {
+function QuickSegment({ segment, index, script, onChangeBoundary, onChangeCount, beforePreview, singleLine = false, applyButton }) {
   const { t } = useNativeScheduleI18n();
   const maxItemsPerRow = getRulePreviewMaxItemsPerRow(script, false);
   const label = t(segment.labelKey);
+  const startStepper = <QuickStepper value={quickMinutesToTime(segment.start)} decreaseDisabled={segment.startMinusDisabled} increaseDisabled={segment.startPlusDisabled} onDecrease={() => onChangeBoundary(index, "start", -1)} onIncrease={() => onChangeBoundary(index, "start", 1)} ariaLabel={`${label} ${t("nativeSchedule.quick.action.time")}`} />;
+  const endStepper = <QuickStepper value={quickMinutesToTime(segment.end)} decreaseDisabled={segment.endMinusDisabled} increaseDisabled={segment.endPlusDisabled} onDecrease={() => onChangeBoundary(index, "end", -1)} onIncrease={() => onChangeBoundary(index, "end", 1)} ariaLabel={`${label} ${t("nativeSchedule.quick.action.time")}`} />;
+  const countStepper = <QuickStepper value={segment.count} valueClassName="is-count" decreaseDisabled={segment.countMinusDisabled} increaseDisabled={segment.countPlusDisabled} onDecrease={() => onChangeCount(index, -1)} onIncrease={() => onChangeCount(index, 1)} ariaLabel={`${label} ${t("nativeSchedule.quick.action.count")}`} />;
+  const preview = <DemoRuleTextPreviewTimes entries={segment.entries} showSkipped moveSkippedToEnd maxItemsPerRow={maxItemsPerRow} />;
+  if (singleLine) return <div className="dw-demo-quick-segment dw-departure-quick-segment">
+    <div className="dw-departure-quick-controls">
+      <div className="dw-departure-quick-control"><span>{t("nativeSchedule.auto.field.start")}</span>{startStepper}</div>
+      <div className="dw-departure-quick-control"><span>{t("nativeSchedule.auto.field.end")}</span>{endStepper}</div>
+      <div className="dw-departure-quick-control"><span>{t("nativeSchedule.quick.field.count")}</span>{countStepper}</div>
+      {applyButton}
+    </div>
+    <div className="dw-departure-quick-result"><span className="dw-departure-quick-result-label">{t("nativeSchedule.line.departureTimes")}</span><span className="dw-departure-quick-result-times">{preview}</span></div>
+  </div>;
   return (
     <div className="dw-demo-quick-segment">
       <div className="dw-demo-quick-time-row">
-        <span className="dw-demo-quick-segment-label">{label}</span>
-        <QuickStepper
-          value={quickMinutesToTime(segment.start)}
-          decreaseDisabled={segment.startMinusDisabled}
-          increaseDisabled={segment.startPlusDisabled}
-          onDecrease={() => onChangeBoundary(index, "start", -1)}
-          onIncrease={() => onChangeBoundary(index, "start", 1)}
-          ariaLabel={`${label} ${t("nativeSchedule.quick.action.time")}`}
-        />
-        <span className="dw-demo-quick-to">{t("nativeSchedule.quick.separator.to")}</span>
-        <QuickStepper
-          value={quickMinutesToTime(segment.end)}
-          decreaseDisabled={segment.endMinusDisabled}
-          increaseDisabled={segment.endPlusDisabled}
-          onDecrease={() => onChangeBoundary(index, "end", -1)}
-          onIncrease={() => onChangeBoundary(index, "end", 1)}
-          ariaLabel={`${label} ${t("nativeSchedule.quick.action.time")}`}
-        />
+        <span className="dw-demo-quick-segment-label">{singleLine ? t("nativeSchedule.auto.field.start") : label}</span>
+        {startStepper}
+        <span className={singleLine ? "dw-demo-quick-segment-label is-end" : "dw-demo-quick-to"}>{t(singleLine ? "nativeSchedule.auto.field.end" : "nativeSchedule.quick.separator.to")}</span>
+        {endStepper}
       </div>
       <div className="dw-demo-quick-count-row">
         <span className="dw-demo-quick-segment-label is-count">{t("nativeSchedule.quick.field.count")}</span>
-        <QuickStepper
-          value={segment.count}
-          valueClassName="is-count"
-          decreaseDisabled={segment.countMinusDisabled}
-          increaseDisabled={segment.countPlusDisabled}
-          onDecrease={() => onChangeCount(index, -1)}
-          onIncrease={() => onChangeCount(index, 1)}
-          ariaLabel={`${label} ${t("nativeSchedule.quick.action.count")}`}
-        />
+        {countStepper}
       </div>
+      {beforePreview}
       <div className="dw-demo-quick-preview-row">
         <span className="dw-demo-quick-preview-label">{t("nativeSchedule.quick.field.preview")}</span>
         <span className="dw-demo-quick-preview-values">
-          <DemoRuleTextPreviewTimes
-            entries={segment.entries}
-            showSkipped
-            moveSkippedToEnd
-            maxItemsPerRow={maxItemsPerRow}
-          />
+          {preview}
         </span>
       </div>
     </div>
@@ -135,6 +123,10 @@ function QuickAddSection({
 }
 
 function AutoRuleEditor({
+  singleLine,
+  editDisabled,
+  addLabelKey,
+  addDisabled,
   editorStart,
   editorEnd,
   autoFrequencyText,
@@ -143,6 +135,7 @@ function AutoRuleEditor({
   autoOffsetDirection,
   autoOffsetMinutesText,
   liveAutoPreview,
+  footerNote,
   editorEndInputRef,
   frequencyInputRef,
   onEditorStartChange,
@@ -154,50 +147,81 @@ function AutoRuleEditor({
 }) {
   const { t, script } = useNativeScheduleI18n();
   const topPreviewMaxItemsPerRow = getTopPreviewMaxItemsPerRow(script, Boolean(liveAutoPreview.meta));
+  const startField = (
+    <DemoTextField
+      label={t("nativeSchedule.auto.field.start")}
+      readOnly={editDisabled}
+      value={editorStart}
+      onCommit={onEditorStartChange}
+      onDraftChange={onEditorStartChange}
+      className="is-window-start"
+      timeMode
+      preserveInvalidTime
+      nextInputRef={editorEndInputRef}
+    />
+  );
+  const endField = (
+    <DemoTextField
+      label={t("nativeSchedule.auto.field.end")}
+      readOnly={editDisabled}
+      value={editorEnd}
+      onCommit={onEditorEndChange}
+      onDraftChange={onEditorEndChange}
+      className="is-window-end"
+      timeMode
+      preserveInvalidTime
+      inputRef={editorEndInputRef}
+      nextInputRef={frequencyInputRef}
+    />
+  );
+  const rateField = (
+    <DemoTextField
+      label={t("nativeSchedule.auto.field.rate")}
+      readOnly={editDisabled}
+      value={autoFrequencyText}
+      onCommit={onAutoFrequencyChange}
+      onDraftChange={onAutoFrequencyChange}
+      className="is-rate"
+      inputRef={frequencyInputRef}
+    />
+  );
+  const offsetField = showOffsetField ? (
+    <DemoOffsetField
+      label={t("nativeSchedule.auto.field.offset")}
+      disabled={editDisabled}
+      direction={autoOffsetDirection}
+      minutes={autoOffsetMinutesText}
+      onDirectionChange={onAutoOffsetDirectionChange}
+      onMinutesChange={onAutoOffsetMinutesChange}
+      className="is-offset"
+      hint={t("nativeSchedule.auto.field.offsetHint")}
+    />
+  ) : null;
+
+  if (singleLine) {
+    return (
+      <div className="dw-departure-quick-segment">
+        <div className="dw-departure-quick-controls">
+          {startField}
+          {endField}
+          {rateField}
+          {offsetField}
+          <button type="button" className={`dw-departure-quick-apply ${addDisabled ? "is-disabled" : ""}`} disabled={addDisabled} onClick={onAddAutoRule}>{t(addLabelKey)}</button>
+          {footerNote ? <span className={`dw-departure-quick-message ${footerNote.tone === "error" ? "is-error" : ""}`}>{footerNote.text}</span> : null}
+        </div>
+        <div className="dw-departure-quick-result"><span className="dw-departure-quick-result-label">{t("nativeSchedule.auto.preview.tag")}</span><span className="dw-departure-quick-result-times"><DemoRuleTextPreviewTimes entries={liveAutoPreview.entries} showSkipped moveSkippedToEnd maxItemsPerRow={getRulePreviewMaxItemsPerRow(script, false)} /></span></div>
+        {liveAutoPreview.meta ? <div className="dw-departure-quick-feedback dw-departure-wide">{liveAutoPreview.meta}</div> : null}
+      </div>
+    );
+  }
 
   return (
     <div className="dw-demo-rule-editor">
       <div className="dw-demo-rule-editor-row">
-        <DemoTextField
-          label={t("nativeSchedule.auto.field.start")}
-          value={editorStart}
-          onCommit={onEditorStartChange}
-          onDraftChange={onEditorStartChange}
-          className="is-window-start"
-          timeMode
-          preserveInvalidTime
-          nextInputRef={editorEndInputRef}
-        />
-        <DemoTextField
-          label={t("nativeSchedule.auto.field.end")}
-          value={editorEnd}
-          onCommit={onEditorEndChange}
-          onDraftChange={onEditorEndChange}
-          className="is-window-end"
-          timeMode
-          preserveInvalidTime
-          inputRef={editorEndInputRef}
-          nextInputRef={frequencyInputRef}
-        />
-        <DemoTextField
-          label={t("nativeSchedule.auto.field.rate")}
-          value={autoFrequencyText}
-          onCommit={onAutoFrequencyChange}
-          onDraftChange={onAutoFrequencyChange}
-          className="is-rate"
-          inputRef={frequencyInputRef}
-        />
-        {showOffsetField ? (
-          <DemoOffsetField
-            label={t("nativeSchedule.auto.field.offset")}
-            direction={autoOffsetDirection}
-            minutes={autoOffsetMinutesText}
-            onDirectionChange={onAutoOffsetDirectionChange}
-            onMinutesChange={onAutoOffsetMinutesChange}
-            className="is-offset"
-            hint={t("nativeSchedule.auto.field.offsetHint")}
-          />
-        ) : null}
+        {startField}
+        {endField}
+        {rateField}
+        {offsetField}
       </div>
 
       <div className="dw-demo-preview-panel">
@@ -212,13 +236,14 @@ function AutoRuleEditor({
         </div>
         <div className="dw-demo-preview-spacer is-rate" />
         <div className="dw-demo-preview-spacer is-offset" />
-        <button type="button" className="dw-demo-flat-button is-theme" onClick={onAddAutoRule}>{t("nativeSchedule.auto.button.add")}</button>
+        <button type="button" className="dw-demo-flat-button is-theme" disabled={addDisabled} onClick={onAddAutoRule}>{t(addLabelKey)}</button>
       </div>
     </div>
   );
 }
 
 function AutoRuleTable({
+  editDisabled,
   autoRules,
   showOffsetColumn,
   onRemoveAutoRule
@@ -251,7 +276,7 @@ function AutoRuleTable({
                 </div>
               ) : null}
               <div className="is-action">
-                <button type="button" className="dw-demo-link-danger dw-demo-row-action" onClick={() => onRemoveAutoRule(rule.id)}>{t("nativeSchedule.summary.action.remove")}</button>
+                <button type="button" className="dw-demo-link-danger dw-demo-row-action" disabled={editDisabled} onClick={() => onRemoveAutoRule(rule.id)}>{t("nativeSchedule.summary.action.remove")}</button>
               </div>
             </div>
             <div className="dw-demo-rule-preview">
@@ -296,6 +321,16 @@ function AutoModeHeader({ autoSubMode, onChangeAutoSubMode }) {
 
 export default function AutoRuleSection({
   autoSubMode,
+  singleLine = false,
+  editDisabled = false,
+  isApplying = false,
+  quickConflict = "",
+  quickPending,
+  day,
+  onApplyQuick,
+  selectedSegment = 0,
+  displaySegments = [],
+  onLocateSegment,
   quickSegments,
   quickFooterNote,
   quickImportDisabled,
@@ -311,6 +346,7 @@ export default function AutoRuleSection({
   liveAutoPreview,
   autoRules,
   footerNote,
+  minimumScheduleMinutes,
   editorEndInputRef,
   frequencyInputRef,
   onEditorStartChange,
@@ -327,12 +363,30 @@ export default function AutoRuleSection({
   onImportQuickToSummary
 }) {
   const { t, script } = useNativeScheduleI18n();
+  const quickApplyButton = <LineApplyButton isApplying={isApplying} conflict={quickConflict} pending={quickPending} count={day.count} message={quickFooterNote} onApply={onApplyQuick} />;
 
   return (
     <div className="dw-demo-right-body">
-      <AutoModeHeader autoSubMode={autoSubMode} onChangeAutoSubMode={onChangeAutoSubMode} />
+      {!singleLine ? <AutoModeHeader autoSubMode={autoSubMode} onChangeAutoSubMode={onChangeAutoSubMode} /> : null}
       {autoSubMode === "quick" ? (
-        <QuickAddSection
+        singleLine ? selectedSegment < 0 ? <>
+          <div className="dw-departure-selected-head">
+            <div><h2>{t("nativeSchedule.line.allDay")}</h2>{day.count ? <span>{day.first} – {day.last}</span> : null}<span>{t("nativeSchedule.line.count", { count: day.count })}</span></div>
+          </div>
+          <div className="dw-departure-period-hint">{t("nativeSchedule.line.pickPeriod")}</div>
+          <div className="dw-departure-quick-segment">
+            <div className="dw-departure-quick-controls">{quickApplyButton}</div>
+          </div>
+        </> : <>
+          <div className="dw-departure-selected-head">
+            <div><h2>{t(quickSegments[selectedSegment].labelKey)}</h2><span>{quickMinutesToTime(quickSegments[selectedSegment].start)} – {quickMinutesToTime(quickSegments[selectedSegment].end)}</span><span>{t("nativeSchedule.line.count", { count: displaySegments[selectedSegment].entries.filter((entry) => !entry.skipped).length })}</span></div>
+            <button type="button" className="dw-demo-flat-button is-theme" onClick={onLocateSegment}>{t("nativeSchedule.line.locate")}</button>
+          </div>
+          <QuickSegment segment={{ ...quickSegments[selectedSegment], entries: displaySegments[selectedSegment].entries }} index={selectedSegment} script={script} onChangeBoundary={onChangeQuickBoundary} onChangeCount={onChangeQuickCount} singleLine
+            applyButton={quickApplyButton}
+          />
+          {displaySegments[selectedSegment].entries.some((entry) => entry.skipped) ? <div className="dw-departure-skip-note">{t("nativeSchedule.preview.meta.skipped", { count: displaySegments[selectedSegment].entries.filter((entry) => entry.skipped).length })}<span>{t("nativeSchedule.preview.reason.gap", { minutes: minimumScheduleMinutes })}</span></div> : null}
+        </> : <QuickAddSection
           quickSegments={quickSegments}
           footerNote={quickFooterNote}
           quickImportDisabled={quickImportDisabled}
@@ -345,6 +399,10 @@ export default function AutoRuleSection({
       ) : (
         <>
           <AutoRuleEditor
+            singleLine={singleLine}
+            editDisabled={editDisabled}
+            addLabelKey={singleLine ? "nativeSchedule.line.addApply" : "nativeSchedule.auto.button.add"}
+            addDisabled={editDisabled || (singleLine && isApplying)}
             editorStart={editorStart}
             editorEnd={editorEnd}
             autoFrequencyText={autoFrequencyText}
@@ -353,6 +411,7 @@ export default function AutoRuleSection({
             autoOffsetDirection={autoOffsetDirection}
             autoOffsetMinutesText={autoOffsetMinutesText}
             liveAutoPreview={liveAutoPreview}
+            footerNote={footerNote}
             editorEndInputRef={editorEndInputRef}
             frequencyInputRef={frequencyInputRef}
             onEditorStartChange={onEditorStartChange}
@@ -360,26 +419,31 @@ export default function AutoRuleSection({
             onAutoFrequencyChange={onAutoFrequencyChange}
             onAutoOffsetDirectionChange={onAutoOffsetDirectionChange}
             onAutoOffsetMinutesChange={onAutoOffsetMinutesChange}
-            onAddAutoRule={onAddAutoRule}
+            onAddAutoRule={singleLine ? onImportAutoToSummary : onAddAutoRule}
           />
 
-          <AutoRuleTable
-            autoRules={autoRules}
-            showOffsetColumn={supportsExpress && selectedLineType === "express"}
-            onRemoveAutoRule={onRemoveAutoRule}
-          />
+          {singleLine ? null : (
+            <>
+              <AutoRuleTable
+                editDisabled={editDisabled}
+                autoRules={autoRules}
+                showOffsetColumn={supportsExpress && selectedLineType === "express"}
+                onRemoveAutoRule={onRemoveAutoRule}
+              />
 
-          <div className="dw-demo-footer">
-            {footerNote ? <span className={`dw-demo-footer-note ${footerNote.tone ? `is-${footerNote.tone}` : ""}`}>{footerNote.text}</span> : <span />}
-            <button type="button" className="dw-demo-primary dw-demo-cta is-secondary" onClick={onImportAutoToSummary}>
-              <span className="dw-demo-button-content">
-                <span className="dw-demo-button-icon-wrap" aria-hidden="true">
-                  <DemoImportLeftIcon />
-                </span>
-                <span>{t("nativeSchedule.auto.button.import")}</span>
-              </span>
-            </button>
-          </div>
+              <div className="dw-demo-footer">
+                {footerNote ? <span className={`dw-demo-footer-note ${footerNote.tone ? `is-${footerNote.tone}` : ""}`}>{footerNote.text}</span> : <span />}
+                <button type="button" className={`dw-demo-primary dw-demo-cta is-secondary ${isApplying ? "is-disabled" : ""}`} disabled={isApplying} onClick={onImportAutoToSummary}>
+                  <span className="dw-demo-button-content">
+                    <span className="dw-demo-button-icon-wrap" aria-hidden="true">
+                      <DemoImportLeftIcon />
+                    </span>
+                    <span>{t("nativeSchedule.auto.button.import")}</span>
+                  </span>
+                </button>
+              </div>
+            </>
+          )}
         </>
       )}
     </div>

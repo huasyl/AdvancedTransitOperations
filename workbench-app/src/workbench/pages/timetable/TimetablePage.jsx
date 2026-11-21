@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import WorkbenchDropdown from "../../shared/WorkbenchDropdown";
+import WorkbenchScrollArea from "../../shared/WorkbenchScrollArea";
 import { useNativeScheduleI18n } from "../../shared/workbench-i18n";
 import OperationMonitor from "./OperationMonitor";
 import RunChart from "./RunChart";
@@ -184,10 +185,10 @@ function trainOverlapsRange(train, startMinute, endMinute) {
   return lastMinute >= startMinute && firstMinute <= endMinute;
 }
 
-export default function TimetablePage({ activeTransportMode = "train", isActive = true, sharedSnapshot = null, debugToolsEnabled = false }) {
+export default function TimetablePage({ activeTransportMode = "train", isActive = true, sharedSnapshot = null, debugToolsEnabled = false, onSaved, recordFocus = null }) {
   const { t } = useNativeScheduleI18n();
   const portalHostRef = useRef(null);
-  const controller = useTimetableController({ activeTransportMode, isActive, sharedSnapshot });
+  const controller = useTimetableController({ activeTransportMode, isActive, sharedSnapshot, onSaved });
   const [view, setView] = useState("workspace");
   const [renderedView, setRenderedView] = useState("workspace");
   const [viewStage, setViewStage] = useState("entered");
@@ -381,6 +382,19 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
 
     return () => window.clearTimeout(timer);
   }, [renderedView, view]);
+
+  const recordHandledRef = useRef(0);
+  const [monitorFocus, setMonitorFocus] = useState(null);
+  useEffect(() => {
+    if (!recordFocus || recordHandledRef.current === recordFocus.token || !monitorLines.some((line) => line.id === recordFocus.lineId)) {
+      return;
+    }
+    recordHandledRef.current = recordFocus.token;
+    handleMonitorLine(recordFocus.lineId);
+    setDateMode("today");
+    setView("monitor");
+    setMonitorFocus(recordFocus);
+  }, [recordFocus, monitorLines]);
 
   const availableLines = lines;
   const visibleLines = useMemo(
@@ -877,6 +891,7 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
     <div className="rtw-timetable-root">
       <div className={`rtw-timetable-shell ${sidebarCollapsed ? "is-sidebar-collapsed" : ""}`}>
         <aside className="rtw-timetable-sidebar">
+          <WorkbenchScrollArea className="rtw-timetable-sidebar-scroll" metricsKey={`${renderedView}:${availableLines.length}`}>
           {renderedView === "workspace" ? (
             <div key="workspace" className={`rtw-timetable-sidebar-scene is-${viewStage}`}>
             {activeTransportMode !== "bus" ? <SidebarSection icon="map" title={t("timetable.interval.title")} collapsed={intervalCollapsed} onToggle={() => setIntervalCollapsed((current) => !current)}>
@@ -1003,6 +1018,7 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
               </SidebarSection>
             </div>
           )}
+          </WorkbenchScrollArea>
         </aside>
 
         <button
@@ -1093,7 +1109,7 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
           ) : (
             <div key="monitor" className="rtw-timetable-main-scroll">
               <div className={`rtw-timetable-view-scene is-${viewStage}`}>
-                <OperationMonitor line={monitorLine} dateMode={dateMode} isActive={isActive && view === "monitor"} t={t} />
+                <OperationMonitor line={monitorLine} dateMode={dateMode} isActive={isActive && view === "monitor"} t={t} focus={monitorFocus} onFocused={() => setMonitorFocus(null)} />
               </div>
             </div>
           )}
