@@ -10,6 +10,7 @@ using Game.Vehicles;
 using RapidTransitMod.Core;
 using RapidTransitMod.Dispatch.Lines;
 using RapidTransitMod.Dispatch.Runtime;
+using RapidTransitMod.Dispatch.Scheduling;
 using RapidTransitMod.TrackModel;
 using RapidTransitMod.TrackProjection;
 using Unity.Entities;
@@ -39,8 +40,6 @@ namespace RapidTransitMod.Dispatch.Observation
 
     internal sealed class ObservationPort
     {
-        private const float RailDispatchSampleOutlierFactor = 1.5f;
-        private const float RoadDispatchSampleOutlierFactor = 3.0f;
         private const uint DISPATCH_SAMPLE_MIN_FRAMES = 365u;
 
         private readonly ModRuntimeHostSystem m_Runtime;
@@ -57,7 +56,7 @@ namespace RapidTransitMod.Dispatch.Observation
 
         private sealed class DispatchEtaRequest
         {
-            public uint DispatchFrame;
+            public uint SpawnOrderRequestFrame;
         }
 
         public ObservationPort(
@@ -430,8 +429,8 @@ namespace RapidTransitMod.Dispatch.Observation
         {
             if (line == Entity.Null)
             {
-                m_Runtime.m_VehicleRegistry.ClearPreparing(vehicle);
-                m_Runtime.m_VehicleRegistry.ClearDispatch(vehicle);
+                m_Runtime.m_VehicleRegistry.ClearPreparingData(vehicle);
+                m_Runtime.m_VehicleRegistry.ClearSpawnOrderRequestFrame(vehicle);
                 ClearDispatchEta(vehicle);
                 return;
             }
@@ -439,21 +438,15 @@ namespace RapidTransitMod.Dispatch.Observation
             uint sampleFrames = 0;
             uint sampleStart = 0;
             bool hasSample = false;
-            if (m_Runtime.m_VehicleView.TryGetDispatch(vehicle, out uint dispatchRequestStart))
+            if (m_Runtime.m_VehicleView.TryGetSpawnOrderRequestFrame(vehicle, out uint spawnOrderRequestFrame))
             {
-                sampleFrames = nowFrame - dispatchRequestStart;
-                sampleStart = dispatchRequestStart;
-                hasSample = true;
-            }
-            else if (m_Runtime.m_VehicleView.TryGetPreparing(vehicle, out uint prepStart))
-            {
-                sampleFrames = nowFrame - prepStart;
-                sampleStart = prepStart;
+                sampleFrames = nowFrame - spawnOrderRequestFrame;
+                sampleStart = spawnOrderRequestFrame;
                 hasSample = true;
             }
 
-            m_Runtime.m_VehicleRegistry.ClearPreparing(vehicle);
-            m_Runtime.m_VehicleRegistry.ClearDispatch(vehicle);
+            m_Runtime.m_VehicleRegistry.ClearPreparingData(vehicle);
+            m_Runtime.m_VehicleRegistry.ClearSpawnOrderRequestFrame(vehicle);
             m_DispatchEtaRequests.Remove(vehicle);
             if (!hasSample || sampleFrames == 0)
                 return;
@@ -472,26 +465,12 @@ namespace RapidTransitMod.Dispatch.Observation
                 return;
             }
 
-            float cachedFrames = m_Runtime.m_DispatchCache.Read(line);
-            float outlierFactor = DispatchSampleOutlierFactor(line);
-            if (cachedFrames > 0f && sampleFrames > cachedFrames * outlierFactor)
-            {
-                if (RtLog.VerboseEnabled)
-                {
-                    float cachedMinutes = (float)clockSnapshot.ToMinutes(cachedFrames);
-                    m_Runtime.log.Info("[DispatchSample] line" + line.Index + " vehicle" + vehicle.Index
-                        + " sample=" + sampleMinutes.ToString("F1") + "min"
-                        + " cached=" + cachedMinutes.ToString("F1") + "min high-outlier skip");
-                }
-                return;
-            }
-
             int nowMinute = clockSnapshot.NowMinute;
             m_Runtime.m_SelectPanel.RecordLineDispatchSampleSummary(line, nowMinute, vehicle, sampleMinutes);
             m_Runtime.m_DispatchCache.Update(line, vehicle, sampleFrames);
         }
 
-        public void BeginDispatchEta(Entity vehicle, Entity line, uint dispatchFrame)
+        public void BeginDispatchEta(Entity vehicle, Entity line, uint spawnOrderRequestFrame)
         {
             if (vehicle == Entity.Null
                 || line == Entity.Null
@@ -501,7 +480,7 @@ namespace RapidTransitMod.Dispatch.Observation
                 return;
             m_DispatchEtaRequests[vehicle] = new DispatchEtaRequest
             {
-                DispatchFrame = dispatchFrame
+                SpawnOrderRequestFrame = spawnOrderRequestFrame
             };
         }
 
@@ -514,14 +493,14 @@ namespace RapidTransitMod.Dispatch.Observation
             if (!m_DispatchEtaRequests.TryGetValue(vehicle, out DispatchEtaRequest request))
                 return;
             if (line == Entity.Null
-                || IsDispatchTimingInvalid(line, request.DispatchFrame)
+                || IsDispatchTimingInvalid(line, request.SpawnOrderRequestFrame)
                 || TransportModeProfile.GetProfile(
                     TransportModeResolver.Resolve(m_Runtime.EntityManager, line)).Lifecycle != LifecycleKind.Rail)
             {
                 m_DispatchEtaRequests.Remove(vehicle);
                 return;
             }
-            if (!m_Runtime.m_VehicleView.TryGetDispatch(vehicle, out _))
+            if (!m_Runtime.m_VehicleView.TryGetSpawnOrderRequestFrame(vehicle, out _))
                 return;
             if (vehicle == Entity.Null || line == Entity.Null || waypoints.Length == 0 || !m_Runtime.EntityManager.Exists(vehicle))
                 return;
@@ -559,7 +538,7 @@ namespace RapidTransitMod.Dispatch.Observation
 
             // Per-vehicle PathOccupants ETA and its diagnostic log are intentionally paused.
             // Keep only the real spawn-to-path-ready preparation sample used by spawn-lead theory.
-            m_Runtime.m_DispatchCache.RecordPrep(line, unchecked(nowFrame - request.DispatchFrame));
+            m_Runtime.m_DispatchCache.RecordPrep(line, unchecked(nowFrame - request.SpawnOrderRequestFrame));
             m_DispatchEtaRequests.Remove(vehicle);
         }
 
@@ -626,14 +605,6 @@ namespace RapidTransitMod.Dispatch.Observation
                 && sampleStart <= cutoff;
         }
 
-        private float DispatchSampleOutlierFactor(Entity line)
-        {
-            return TransportModeProfile.GetProfile(
-                TransportModeResolver.Resolve(m_Runtime.EntityManager, line)).Lifecycle == LifecycleKind.Road
-                ? RoadDispatchSampleOutlierFactor
-                : RailDispatchSampleOutlierFactor;
-        }
-
         public string Json()
         {
             return m_Runtime.m_ObsRecorder?.SnapshotJson() ?? string.Empty;
@@ -641,9 +612,6 @@ namespace RapidTransitMod.Dispatch.Observation
 
         public bool MonitorPersistenceHealthy =>
             m_Runtime.m_ObsBuffers.MonitorPersistenceHealthy;
-
-        internal bool MonitorClaimsRestored =>
-            m_Runtime.m_ObsRecorder == null || m_Runtime.m_ObsRecorder.MonitorClaimsRestored;
 
         public void Dump()
         {
@@ -773,19 +741,14 @@ namespace RapidTransitMod.Dispatch.Observation
             return contracts.ToArray();
         }
 
-        public void BindTarget(Entity line, Entity vehicle, int targetMinute, uint nowFrame, string reasonCode)
-        {
-            m_Runtime.m_ObsRecorder?.TargetBound(line, vehicle, targetMinute, nowFrame, reasonCode);
-        }
-
         public MonitorChange Launch(
             Entity line,
             Entity vehicle,
             int targetMinute,
             int actualMinute,
             uint launchFrame,
-            bool lateDispatch,
-            AppliedMonitorRow row)
+            AppliedMonitorRow row,
+            DateTime serviceDate)
         {
             m_Admission.Begin(line, vehicle, targetMinute);
             if (!string.IsNullOrEmpty(row.RowId))
@@ -796,6 +759,7 @@ namespace RapidTransitMod.Dispatch.Observation
                         line,
                         vehicle,
                         row,
+                        serviceDate,
                         m_Runtime.m_SimClock.Snapshot,
                         launchFrame,
                         out _);
@@ -963,15 +927,8 @@ namespace RapidTransitMod.Dispatch.Observation
             return invalidatedSamples;
         }
 
-        internal void RestoreMonitorClaims(
-            IReadOnlyList<MonitorClaimSeed> seeds,
-            ClockSnapshot clock)
-        {
-            m_Runtime.m_ObsRecorder?.RestoreMonitorClaims(seeds, clock);
-        }
-
         public void MarkMissed(
-            IReadOnlyList<DispatchScheduler.MissedCandidate> candidates,
+            IReadOnlyList<MissedSlot> candidates,
             uint frame)
         {
             if (candidates == null || candidates.Count == 0 || m_Runtime.m_ObsRecorder == null)
@@ -979,12 +936,11 @@ namespace RapidTransitMod.Dispatch.Observation
             m_Runtime.m_ObsRecorder.TickDate(m_Runtime.m_SimClock.NowDate);
             for (int i = 0; i < candidates.Count; i++)
             {
-                DispatchScheduler.MissedCandidate candidate = candidates[i];
+                MissedSlot candidate = candidates[i];
                 m_Runtime.m_ObsRecorder.MarkMissed(
                     candidate.Line,
-                    candidate.Row,
-                    candidate.ServiceDate,
-                    candidate.Final,
+                    candidate.MonitorRow,
+                    candidate.Date,
                     candidate.State,
                     frame);
             }
@@ -1005,16 +961,11 @@ namespace RapidTransitMod.Dispatch.Observation
         {
             if (vehicle == Entity.Null)
                 return -1;
-            if (m_Runtime.m_VehicleStateStore.CurrentSlotMinute.IsCreated && m_Runtime.m_VehicleView.TryGetSlot(vehicle, out int currentSlotMinute))
+            if (m_Runtime.m_VehicleView.TryGetSlot(vehicle, out int currentSlotMinute))
                 return currentSlotMinute;
-            if (m_Runtime.m_VehicleStateStore.TargetMinute.IsCreated && m_Runtime.m_VehicleView.TryGetTarget(vehicle, out int targetMinute))
+            if (m_Runtime.m_VehicleView.TryGetTarget(vehicle, out int targetMinute))
                 return targetMinute;
             return -1;
-        }
-
-        public bool IsWaitingOriginDwell(Entity vehicle, uint nowFrame)
-        {
-            return m_Runtime.m_VehicleView.TryGetReady(vehicle, out uint readyFrame) && nowFrame < readyFrame;
         }
 
         public void ClearForcedMidStop(Entity vehicle)

@@ -1,12 +1,8 @@
 using System.Collections.Generic;
 using Game.Common;
 using Game.Routes;
-using Game.Vehicles;
 using RapidTransitMod.Core;
-using RapidTransitMod.Dispatch.Diagnostics;
 using RapidTransitMod.Dispatch.Runtime;
-using RapidTransitMod.TrackModel;
-using RapidTransitMod.TrackProjection;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
@@ -48,12 +44,6 @@ namespace RapidTransitMod.Dispatch.Lines
                 return float.MaxValue;
 
             return math.sqrt(distanceSq);
-        }
-
-        public bool IsWithinOriginDistance(Entity vehicle, DynamicBuffer<RouteWaypoint> waypoints, float radiusMeters)
-        {
-            return TryGetOriginDistanceSquared(vehicle, waypoints, out float distanceSq)
-                && distanceSq <= radiusMeters * radiusMeters;
         }
 
         private bool TryGetOriginDistanceSquared(Entity vehicle, DynamicBuffer<RouteWaypoint> waypoints, out float distanceSq)
@@ -99,247 +89,6 @@ namespace RapidTransitMod.Dispatch.Lines
             return stop;
         }
 
-        public bool ShouldEvaluateOriginSettle(
-            Entity vehicle,
-            DynamicBuffer<RouteWaypoint> waypoints,
-            bool atOrigin,
-            bool boarding,
-            bool lastBoarding,
-            int targetMinute)
-        {
-            bool probeEnabled = RuntimeHotPathProbe.Enabled();
-            if (probeEnabled)
-                m_Runtime.m_PerfProbeOriginSettleCalls++;
-            if (vehicle == Entity.Null || waypoints.Length == 0)
-                return false;
-
-            if (atOrigin
-                || boarding
-                || lastBoarding
-                || targetMinute >= 0
-                || m_Runtime.m_VehicleStateStore.OriginArrivalCandidateSinceFrame.ContainsKey(vehicle))
-            {
-                if (probeEnabled)
-                    m_Runtime.m_PerfProbeOriginSettleFastPathHits++;
-                return true;
-            }
-
-            uint nowFrame = m_Runtime.m_SimulationSystem.frameIndex;
-            uint vehiclePhase = unchecked((uint)vehicle.Index) & 15u;
-            if ((nowFrame & 15u) != vehiclePhase)
-                return false;
-
-            Entity line = m_Runtime.m_Resolve.Line(vehicle);
-            if (line == Entity.Null
-                || m_Runtime.m_LineStructureInvalidator.IsLinePending(line)
-                || !m_Runtime.m_TrackModel.TryGetChainForLine(line, waypoints, out LineTrackChain chain))
-            {
-                return false;
-            }
-
-            if (probeEnabled)
-                m_Runtime.m_PerfProbeOriginSettleSlowPathEntered++;
-            if (!m_Runtime.m_TrackProjection.TrySnapshot(
-                    vehicle,
-                    line,
-                    chain.Signature,
-                    m_Runtime.m_SimulationSystem.frameIndex,
-                    out VehicleTrackCursor cursor))
-            {
-                if (probeEnabled)
-                    m_Runtime.m_PerfProbeOriginSettlePreSnapshotMisses++;
-                return false;
-            }
-
-            int atomCursorIndex = cursor.AtomCursorIndex;
-            if (atomCursorIndex < 0 || atomCursorIndex >= chain.TrackAtoms.Count)
-                return false;
-
-            const int originAtomWindow = 2;
-            bool inOriginWindow = atomCursorIndex <= originAtomWindow
-                || atomCursorIndex >= math.max(0, chain.TrackAtoms.Count - 1 - originAtomWindow);
-            if (inOriginWindow)
-            {
-                if (probeEnabled)
-                    m_Runtime.m_PerfProbeOriginSettleWindowHits++;
-            }
-            return inOriginWindow;
-        }
-
-        // 原180帧判定暂时停用，保留算法供后续核对；调度来源不再调用。
-        public bool ShouldSettleAtOrigin(
-            Entity vehicle,
-            DynamicBuffer<RouteWaypoint> waypoints,
-            uint nowFrame,
-            bool atOrigin,
-            bool boarding,
-            bool lastBoarding,
-            int targetMinute,
-            bool strictOriginRejected)
-        {
-            if (strictOriginRejected)
-            {
-                m_Runtime.m_RuntimeEngine.ClearOriginCandidate(vehicle);
-                return false;
-            }
-
-            bool waitingAtOrigin = atOrigin
-                && (boarding
-                    || lastBoarding
-                    || targetMinute >= 0
-                    || m_Runtime.m_VehicleView.IsInbound(vehicle)
-                    || m_Runtime.m_VehicleStateStore.CurrentSlotMinute.ContainsKey(vehicle));
-
-            if (!waitingAtOrigin)
-            {
-                if (!IsWithinOriginDistance(vehicle, waypoints, ModRuntimeHostSystem.ORIGIN_FORCE_IDLE_RADIUS_METERS))
-                {
-                    m_Runtime.m_RuntimeEngine.ClearOriginCandidate(vehicle);
-                    return false;
-                }
-
-                if (!m_Runtime.m_RouteProgress.Try(vehicle, out int nextWaypointIndex, out float segmentPosition))
-                {
-                    m_Runtime.m_RuntimeEngine.ClearOriginCandidate(vehicle);
-                    return false;
-                }
-
-                if (nextWaypointIndex != 0 || segmentPosition < 0.92f)
-                {
-                    m_Runtime.m_RuntimeEngine.ClearOriginCandidate(vehicle);
-                    return false;
-                }
-            }
-
-            if (!m_Runtime.m_VehicleView.TryGetOrigin(vehicle, out uint sinceFrame))
-            {
-                m_Runtime.m_RuntimeEngine.SetOriginCandidate(vehicle, nowFrame);
-                return false;
-            }
-
-            return (nowFrame - sinceFrame) >= 180;
-        }
-
-        public bool IsBorderlineOriginArrivalCandidate(Entity vehicle, DynamicBuffer<RouteWaypoint> waypoints)
-        {
-            if (!IsWithinOriginDistance(vehicle, waypoints, ModRuntimeHostSystem.ORIGIN_FORCE_IDLE_RADIUS_METERS))
-                return false;
-
-            if (!m_Runtime.m_RouteProgress.Try(vehicle, out int nextWaypointIndex, out float segmentPosition))
-                return false;
-
-            return nextWaypointIndex == 0 && segmentPosition >= 0.92f;
-        }
-
-        public bool HasBorderlineOriginArrivalCandidate(
-            Entity line,
-            DynamicBuffer<RouteWaypoint> waypoints,
-            float slotFramesAway,
-            float lineDurationFrames,
-            bool lineHasHistory,
-            ClockSnapshot clockSnapshot)
-        {
-            uint waitFrames = clockSnapshot.ToFramesCeil(2d);
-            BufferLookup<RouteVehicle> rvBuffers = m_Runtime.GetBufferLookup<RouteVehicle>(true);
-            if (!rvBuffers.TryGetBuffer(line, out DynamicBuffer<RouteVehicle> vehicles))
-                return false;
-
-            uint nowFrame = m_Runtime.m_SimulationSystem.frameIndex;
-            for (int i = 0; i < vehicles.Length; i++)
-            {
-                Entity vehicle = vehicles[i].m_Vehicle;
-                if (!m_Runtime.EntityManager.Exists(vehicle))
-                    continue;
-                if (!m_Runtime.m_VehicleView.TryGetState(vehicle, out VehicleState state) || state != VehicleState.Running)
-                    continue;
-                if (m_Runtime.m_VehicleView.TryGetTarget(vehicle, out int target) && target >= 0)
-                    continue;
-                if (m_Runtime.m_VehicleView.TryGetCooldown(vehicle, out uint cooldownUntil) && nowFrame < cooldownUntil)
-                    continue;
-                if (!IsBorderlineOriginArrivalCandidate(vehicle, waypoints))
-                    continue;
-
-                float etaFrames = m_Runtime.m_LineTimes.Run(vehicle, line, waypoints, nowFrame, lineDurationFrames, lineHasHistory);
-                if (etaFrames != float.MaxValue && etaFrames <= slotFramesAway + waitFrames)
-                    return true;
-            }
-
-            return false;
-        }
-
-        public bool ShouldHoldSpawnForNearestRunningCandidate(
-            Entity nearestVehicle,
-            VehicleState nearestState,
-            float nearestEtaFrames,
-            DynamicBuffer<RouteWaypoint> waypoints,
-            ClockSnapshot clockSnapshot)
-        {
-            if (nearestVehicle == Entity.Null || nearestState != VehicleState.Running || nearestEtaFrames == float.MaxValue)
-                return false;
-
-            uint waitFrames = clockSnapshot.ToFramesCeil(2d);
-            if (nearestEtaFrames > waitFrames)
-                return false;
-
-            uint nowFrame = m_Runtime.m_SimulationSystem.frameIndex;
-            if (m_Runtime.m_VehicleView.TryGetCooldown(nearestVehicle, out uint cooldownUntil) && nowFrame < cooldownUntil)
-                return false;
-
-            if (IsWithinOriginDistance(nearestVehicle, waypoints, ModRuntimeHostSystem.ORIGIN_CONGESTION_RADIUS_METERS))
-                return true;
-
-            if (m_Runtime.m_RouteProgress.Try(nearestVehicle, out int nextWaypointIndex, out float segmentPosition))
-                return nextWaypointIndex == 0 || (nextWaypointIndex == 1 && segmentPosition <= 0.10f);
-
-            return false;
-        }
-
-        public bool HasInboundNearOrigin(
-            Entity line,
-            DynamicBuffer<RouteWaypoint> waypoints,
-            Entity ignoreVehicle,
-            float radiusMeters,
-            bool includePreparingVehicles = true)
-        {
-            EntityManager entityManager = m_Runtime.EntityManager;
-            Entity station = waypoints[0].m_Waypoint;
-            Entity stop = station != Entity.Null
-                && entityManager.Exists(station)
-                && entityManager.HasComponent<Connected>(station)
-                ? entityManager.GetComponentData<Connected>(station).m_Connected
-                : Entity.Null;
-            if (stop == Entity.Null || !entityManager.HasComponent<Game.Objects.Transform>(stop))
-                return false;
-
-            float3 stationPos = entityManager.GetComponentData<Game.Objects.Transform>(stop).m_Position;
-            float radiusSq = radiusMeters * radiusMeters;
-            BufferLookup<RouteVehicle> rvBuffers = m_Runtime.GetBufferLookup<RouteVehicle>(true);
-            if (!rvBuffers.TryGetBuffer(line, out DynamicBuffer<RouteVehicle> vehicles))
-                return false;
-
-            for (int i = 0; i < vehicles.Length; i++)
-            {
-                Entity vehicle = m_Runtime.m_Resolve.RuntimeVehicle(vehicles[i].m_Vehicle);
-                if (vehicle == ignoreVehicle || !entityManager.Exists(vehicle))
-                    continue;
-                if (!m_Runtime.m_VehicleView.TryGetState(vehicle, out VehicleState state))
-                    continue;
-                bool isPreparing = state == VehicleState.Preparing;
-                if (isPreparing && !includePreparingVehicles)
-                    continue;
-                if (!isPreparing && !m_Runtime.m_VehicleView.IsInbound(vehicle))
-                    continue;
-                if (!entityManager.HasComponent<Game.Objects.Transform>(vehicle))
-                    continue;
-
-                float3 delta = entityManager.GetComponentData<Game.Objects.Transform>(vehicle).m_Position - stationPos;
-                if (math.lengthsq(delta) <= radiusSq)
-                    return true;
-            }
-
-            return false;
-        }
-
         public bool HasPreparingReachedOrigin(
             Entity vehicle,
             DynamicBuffer<RouteWaypoint> waypoints,
@@ -367,6 +116,14 @@ namespace RapidTransitMod.Dispatch.Lines
             }
 
             return hash;
+        }
+
+        public bool Stable(Entity line)
+        {
+            return line != Entity.Null
+                && !m_Runtime.m_LineStructureInvalidator.IsLinePending(line)
+                && m_LineStableSinceFrame.TryGetValue(line, out uint stableSince)
+                && m_Runtime.m_SimulationSystem.frameIndex - stableSince >= NEW_LINE_STABLE_FRAMES;
         }
 
         public bool IsStable(Entity line, DynamicBuffer<RouteWaypoint> waypoints)
@@ -509,7 +266,7 @@ namespace RapidTransitMod.Dispatch.Lines
             }
 
             m_LifecycleFailureFrames[line] = nowFrame;
-            m_Runtime.log.Info("[LineProfile] 线路" + line.Index + " 生命周期解析失败，拒绝稳定性判断");
+            m_Runtime.log.Info("[LineProfile] line=" + line.Index + " lifecycle resolution failed; stability check skipped");
         }
 
         private bool ObserveRoadRouteSnapshot(Entity line, DynamicBuffer<RouteWaypoint> waypoints)

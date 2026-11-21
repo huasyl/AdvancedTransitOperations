@@ -28,7 +28,7 @@ namespace RapidTransitMod
             {
                 if (!EntityManager.Exists(kv.Key)) m_DeadVehicles.Add(kv.Key);
             }
-            Dictionary<Entity, int> removedCountByLine = null;
+            HashSet<Entity> removedLines = null;
             bool removedRail = false;
             foreach (Entity dead in m_DeadVehicles)
             {
@@ -44,12 +44,12 @@ namespace RapidTransitMod
                     int removedCachedWp = m_Runtime.m_CachedWpIdx.TryGetValue(dead, out int removedWp)
                         ? removedWp
                         : -1;
-                    uint removedPrepAge = m_Runtime.m_VehicleView.TryGetPreparing(dead, out uint removedPrepStart)
+                    uint removedPrepAge = m_Runtime.m_VehicleView.TryGetPreparingStartFrame(dead, out uint removedPrepStart)
                         ? m_Runtime.m_SimulationSystem.frameIndex - removedPrepStart
                         : 0;
                     if (RtLog.VerboseEnabled)
                     {
-                        log.Info("[PreparingRemoved] 车辆" + dead.Index
+                        log.Info("[PreparingRemoved] vehicle=" + dead.Index
                             + " line=" + DispatchCommandApplier.DescribeRetireShadowEntity(mappedLine)
                             + " targetMin=" + (removedTargetMin >= 0 ? ModRuntimeHostSystem.SlotStr(removedTargetMin) : "-")
                             + " cachedWp=" + removedCachedWp
@@ -60,16 +60,14 @@ namespace RapidTransitMod
                 removedRail |= context.Lifecycle == LifecycleKind.Rail;
                 if (context.Line != Entity.Null && context.State != VehicleState.Retiring)
                 {
-                    removedCountByLine ??= new Dictionary<Entity, int>();
-                    removedCountByLine[context.Line] = removedCountByLine.TryGetValue(context.Line, out int removedCount)
-                        ? removedCount + 1
-                        : 1;
+                    removedLines ??= new HashSet<Entity>();
+                    removedLines.Add(context.Line);
                 }
-                log.Info("[清理] 车辆" + dead.Index + " 消失");
+                log.Info("[VehicleCleanup] vehicle=" + dead.Index + " entity disappeared");
             }
-            if (removedCountByLine != null && removedCountByLine.Count > 0)
+            if (removedLines != null && removedLines.Count > 0)
             {
-                m_LineSpawnControl.ApplyCleanupTargetReduction(removedCountByLine);
+                m_LineSpawnControl.Recompute(removedLines);
             }
             if (removedRail)
                 m_Runtime.m_WaypointIndex.Clear();
@@ -80,7 +78,7 @@ namespace RapidTransitMod
             if (m_DeadVehicles.Count > 0 && RtLog.CacheInvalidationDiagnosticsEnabled)
             {
                 log.Info("[VehicleCleanupSummary] deadVehicles=" + m_DeadVehicles.Count
-                    + " affectedLines=" + (removedCountByLine != null ? removedCountByLine.Count : 0)
+                    + " affectedLines=" + (removedLines != null ? removedLines.Count : 0)
                     + " clearedWaypointIndex=1"
                     + " clearedRouteProgress=1"
                     + " clearedLineRunningSnapshots=1");

@@ -1,6 +1,10 @@
 using System;
 using System.Reflection;
+using Game.Common;
+using Game.Prefabs;
 using Game.Simulation;
+using Unity.Entities;
+using UnityEngine;
 
 namespace RapidTransitMod.Core
 {
@@ -93,6 +97,13 @@ namespace RapidTransitMod.Core
     /// </summary>
     public sealed class SimClock
     {
+        private enum SnapshotMode : byte
+        {
+            Live,
+            Load,
+            ClockChange
+        }
+
         private const int DEFAULT_TICKS_PER_DAY = 262144;
         private const string PROVIDER_TYPE_NAME = "Time2Work.Time2WorkTimeSystem";
         private const string PROVIDER_TICKS_PER_DAY_FIELD_NAME = "kTicksPerDay";
@@ -107,7 +118,7 @@ namespace RapidTransitMod.Core
         private bool m_ProviderAssemblyRescanUsed;
         private bool m_HasBaseline;
         private ClockSnapshot m_LastSnapshot;
-        private bool m_ClockChangePending;
+        private SnapshotMode m_SnapshotMode;
         private uint m_ClockChangeFrame;
         private bool m_HasDate;
         private int m_DateYear;
@@ -137,44 +148,54 @@ namespace RapidTransitMod.Core
         {
             get
             {
-                if (m_ClockChangePending)
+                if (m_SnapshotMode != SnapshotMode.Live)
                     return m_LastSnapshot.NowMinuteExact;
-                float normalizedDay = m_ProviderNormalizedTime?.Invoke() ?? m_GameClockSystem.normalizedTime;
-                if (float.IsNaN(normalizedDay) || float.IsInfinity(normalizedDay))
-                    return 0d;
-
-                double rawMinute = normalizedDay * 1440d;
-                rawMinute %= 1440d;
-                return rawMinute < 0d ? rawMinute + 1440d : rawMinute;
+                return MinuteOfDay(m_ProviderNormalizedTime?.Invoke() ?? m_GameClockSystem.normalizedTime);
             }
+        }
+
+        private static double MinuteOfDay(float normalizedDay)
+        {
+            if (float.IsNaN(normalizedDay) || float.IsInfinity(normalizedDay))
+                return 0d;
+            double rawMinute = normalizedDay * 1440d % 1440d;
+            return rawMinute < 0d ? rawMinute + 1440d : rawMinute;
         }
 
         public DateTime NowDate
         {
             get
             {
-                if (m_ClockChangePending)
+                if (m_SnapshotMode != SnapshotMode.Live)
                     return m_LastSnapshot.NowDate;
-                int year = ClockYear;
-                int daysPerYear = ClockDaysPerYear;
-                float normalizedDate = ClockNormalizedDate;
-                int dayOfYear = 1 + (int)Math.Floor((float)daysPerYear * normalizedDate) % daysPerYear;
-                if (!m_HasDate || year != m_DateYear || daysPerYear != m_DateDaysPerYear
-                    || dayOfYear != m_DateDayOfYear)
-                {
-                    m_Date = m_GameClockSystem.GetCurrentDateTime().Date;
-                    m_DateYear = year;
-                    m_DateDaysPerYear = daysPerYear;
-                    m_DateDayOfYear = dayOfYear;
-                    m_HasDate = true;
-                }
-                return m_Date;
+                return DateOf(ClockYear, ClockDaysPerYear, DayOfYear(NowMinuteExact));
             }
         }
 
-        public int DayIndex => m_ClockChangePending ? m_LastSnapshot.DayIndex
-            : (ClockYear - 1) * ClockDaysPerYear
-            + (int)Math.Floor(ClockNormalizedDate * ClockDaysPerYear);
+        public int DayIndex => m_SnapshotMode != SnapshotMode.Live ? m_LastSnapshot.DayIndex
+            : (ClockYear - 1) * ClockDaysPerYear + DayOfYear(NowMinuteExact);
+
+        private int DayOfYear(double minuteExact) => DayOfYear(minuteExact, ClockDaysPerYear, ClockNormalizedDate);
+
+        private static int DayOfYear(double minuteExact, int daysPerYear, float normalizedDate)
+        {
+            int day = (int)Math.Round(daysPerYear * (double)normalizedDate - minuteExact / 1440d);
+            return day % daysPerYear;
+        }
+
+        private DateTime DateOf(int year, int daysPerYear, int dayOfYear)
+        {
+            if (!m_HasDate || year != m_DateYear || daysPerYear != m_DateDaysPerYear
+                || dayOfYear != m_DateDayOfYear)
+            {
+                m_Date = new DateTime(0L, DateTimeKind.Utc).AddYears(year - 1).AddDays(dayOfYear).Date;
+                m_DateYear = year;
+                m_DateDaysPerYear = daysPerYear;
+                m_DateDayOfYear = dayOfYear;
+                m_HasDate = true;
+            }
+            return m_Date;
+        }
 
         private int ClockYear => m_ProviderYear?.Invoke() ?? m_GameClockSystem.year;
 
@@ -205,7 +226,7 @@ namespace RapidTransitMod.Core
                 m_ProviderReflectionResolved = false;
             }
             m_HasBaseline = false;
-            m_ClockChangePending = false;
+            m_SnapshotMode = SnapshotMode.Live;
             Refresh(simulationFrame);
         }
 
@@ -240,21 +261,24 @@ namespace RapidTransitMod.Core
             {
                 TicksPerDay = ticksPerDay;
                 FramesPerMinute = ticksPerDay / 1440d;
-                m_LastSnapshot = CreateSnapshot();
+                if (providerTicksPerDay > 0 && TryCreateLoadSnapshot(simulationFrame, out m_LastSnapshot))
+                    m_SnapshotMode = SnapshotMode.Load;
+                else
+                    m_LastSnapshot = CreateSnapshot();
                 m_HasBaseline = true;
                 return;
             }
             bool changed = ticksPerDay != TicksPerDay || daysPerYear != m_LastSnapshot.DaysPerYear;
-            if (changed && !m_ClockChangePending)
+            if (changed && m_SnapshotMode != SnapshotMode.ClockChange)
             {
-                m_ClockChangePending = true;
+                m_SnapshotMode = SnapshotMode.ClockChange;
                 m_ClockChangeFrame = simulationFrame;
                 return;
             }
-            if (m_ClockChangePending && simulationFrame == m_ClockChangeFrame)
+            if (m_SnapshotMode == SnapshotMode.ClockChange && simulationFrame == m_ClockChangeFrame)
                 return;
             ClockSnapshot oldSnapshot = m_LastSnapshot;
-            m_ClockChangePending = false;
+            m_SnapshotMode = SnapshotMode.Live;
             if (changed)
             {
                 TicksPerDay = ticksPerDay;
@@ -275,18 +299,45 @@ namespace RapidTransitMod.Core
 
         private ClockSnapshot CreateSnapshot()
         {
-            if (m_ClockChangePending)
+            if (m_SnapshotMode != SnapshotMode.Live)
                 return m_LastSnapshot;
-            double nowMinuteExact = NowMinuteExact;
+            return CreateSnapshot(NowMinuteExact, ClockYear, ClockDaysPerYear, ClockNormalizedDate);
+        }
+
+        private bool TryCreateLoadSnapshot(uint simulationFrame, out ClockSnapshot snapshot)
+        {
+            snapshot = default;
+            EntityManager entities = m_GameClockSystem.EntityManager;
+            using var timeQuery = entities.CreateEntityQuery(ComponentType.ReadOnly<TimeData>());
+            using var settingsQuery = entities.CreateEntityQuery(ComponentType.ReadOnly<TimeSettingsData>());
+            if (!timeQuery.TryGetSingleton<TimeData>(out var data)
+                || !settingsQuery.TryGetSingleton<TimeSettingsData>(out var settings))
+                return false;
+
+            int daysPerYear = settings.m_DaysPerYear;
+            int ticks = unchecked((int)simulationFrame - (int)data.m_FirstFrame
+                + Mathf.RoundToInt(data.TimeOffset * TicksPerDay)
+                + Mathf.RoundToInt(data.GetDateOffset(daysPerYear) * TicksPerDay * daysPerYear));
+            int ticksPerYear = TicksPerDay * daysPerYear;
+            float normalizedTime = (float)(ticks % TicksPerDay) / TicksPerDay;
+            float normalizedDate = (float)(ticks % ticksPerYear) / ticksPerYear;
+            int year = data.m_StartingYear + ticks / ticksPerYear;
+            snapshot = CreateSnapshot(MinuteOfDay(normalizedTime), year, daysPerYear, normalizedDate);
+            return true;
+        }
+
+        private ClockSnapshot CreateSnapshot(double nowMinuteExact, int year, int daysPerYear, float normalizedDate)
+        {
+            int dayOfYear = DayOfYear(nowMinuteExact, daysPerYear, normalizedDate);
             return new ClockSnapshot(
                 (int)Math.Floor(nowMinuteExact),
                 nowMinuteExact,
-                NowDate,
-                DayIndex,
+                DateOf(year, daysPerYear, dayOfYear),
+                (year - 1) * daysPerYear + dayOfYear,
                 TicksPerDay,
                 FramesPerMinute,
                 ClockEpoch,
-                ClockDaysPerYear);
+                daysPerYear);
         }
 
         private void ResolveProviderReflection()

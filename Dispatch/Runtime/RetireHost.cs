@@ -13,12 +13,6 @@ using Unity.Entities;
 
 namespace RapidTransitMod.Dispatch.Runtime
 {
-    internal delegate void CaptureRetireSpawnTargetDelegate(
-        Entity line,
-        out int preActive,
-        out bool hadSpawnTarget,
-        out int oldSpawnTarget);
-
     internal readonly struct RetireStartInput
     {
         internal readonly Entity Vehicle;
@@ -49,13 +43,11 @@ namespace RapidTransitMod.Dispatch.Runtime
     {
         internal readonly Entity Vehicle;
         internal readonly Entity SourceLine;
-        internal readonly string SpawnIntent;
 
-        internal RetireStartContext(Entity vehicle, Entity sourceLine, string spawnIntent)
+        internal RetireStartContext(Entity vehicle, Entity sourceLine)
         {
             Vehicle = vehicle;
             SourceLine = sourceLine;
-            SpawnIntent = spawnIntent ?? string.Empty;
         }
     }
 
@@ -69,12 +61,9 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly EntityQuery m_LineQuery;
         private readonly Func<bool, BufferLookup<RouteVehicle>> m_RouteVehicles;
         private readonly VehicleView m_VehicleView;
-        private readonly SpawnIntentTrace m_SpawnIntentTrace;
         private readonly RuntimeHotPathProbe m_HotPathProbe;
         private readonly Action<Entity> m_RetireRuntime;
-        private readonly CaptureRetireSpawnTargetDelegate m_CaptureRetireSpawnTarget;
-        private readonly Action<Entity, int, bool, int> m_ApplyRetireSpawnTarget;
-        private readonly Action<Entity> m_ClearAssistLaunchPending;
+        private readonly Action<Entity> m_RecomputeSpawn;
         private readonly StopRuntime m_StopRuntime;
         private readonly Action<Entity> m_ClearDwell;
         private readonly Action<Entity> m_ClearDwellDeadlineCache;
@@ -98,12 +87,9 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_LineQuery = runtime.m_LineQuery;
             m_RouteVehicles = readOnly => runtime.GetBufferLookup<RouteVehicle>(readOnly);
             m_VehicleView = runtime.m_VehicleView;
-            m_SpawnIntentTrace = runtime.m_SpawnIntentTrace;
             m_HotPathProbe = runtime.m_RuntimeHotPathProbe;
             m_RetireRuntime = runtime.m_RuntimeEngine.Retire;
-            m_CaptureRetireSpawnTarget = runtime.m_RuntimeEngine.CaptureRetireSpawnTarget;
-            m_ApplyRetireSpawnTarget = runtime.m_RuntimeEngine.ApplyRetireSpawnTarget;
-            m_ClearAssistLaunchPending = runtime.m_RuntimeEngine.ClearAssistLaunchPending;
+            m_RecomputeSpawn = runtime.m_LineSpawnControl.Recompute;
             m_StopRuntime = runtime.m_StopRuntime;
             m_ClearDwell = runtime.m_ObsPersist.ClearDwell;
             m_ClearDwellDeadlineCache = runtime.m_Observation.ClearDwellDeadlineCache;
@@ -126,8 +112,6 @@ namespace RapidTransitMod.Dispatch.Runtime
                 m_ServiceEnded?.Invoke(vehicle, line, frame);
         }
 
-        public string RetireIntent(Entity vehicle) => m_SpawnIntentTrace.Retire(vehicle, Frame);
-
         public bool BeginRetire(RetireStartInput input, out RetireStartContext context)
         {
             context = default;
@@ -141,32 +125,13 @@ namespace RapidTransitMod.Dispatch.Runtime
             }
 
             Entity sourceLine = input.SourceLine;
-            int preActive = 0;
-            bool hadSpawnTarget = false;
-            int oldSpawnTarget = 0;
-            if (sourceLine != Entity.Null)
-            {
-                CaptureRetireSpawnTarget(
-                    sourceLine,
-                    out preActive,
-                    out hadSpawnTarget,
-                    out oldSpawnTarget);
-            }
-
-            string spawnIntent = RetireIntent(vehicle);
             RecordRetireRequested(vehicle, sourceLine, input.Reason);
             RetireRuntimeVehicle(vehicle);
             ClearRetireRequestState(vehicle);
             if (sourceLine != Entity.Null)
-            {
-                ApplyRetireSpawnTarget(
-                    sourceLine,
-                    preActive,
-                    hadSpawnTarget,
-                    oldSpawnTarget);
-            }
+                m_RecomputeSpawn(sourceLine);
 
-            context = new RetireStartContext(vehicle, sourceLine, spawnIntent);
+            context = new RetireStartContext(vehicle, sourceLine);
             return true;
         }
 
@@ -234,32 +199,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_HotPathProbe.CountStageExecuted(RuntimeStageMask.Retire, 1);
         }
 
-        public void CaptureRetireSpawnTarget(
-            Entity line,
-            out int preActive,
-            out bool hadSpawnTarget,
-            out int oldSpawnTarget)
-        {
-            m_CaptureRetireSpawnTarget(
-                line,
-                out preActive,
-                out hadSpawnTarget,
-                out oldSpawnTarget);
-        }
-
-        public void ApplyRetireSpawnTarget(
-            Entity line,
-            int preActive,
-            bool hadSpawnTarget,
-            int oldSpawnTarget)
-        {
-            m_ApplyRetireSpawnTarget(
-                line,
-                preActive,
-                hadSpawnTarget,
-                oldSpawnTarget);
-        }
-
         public void ClearRetireRequestState(Entity vehicle)
         {
             m_ClearBypassVehicle(vehicle, "retire-request");
@@ -267,7 +206,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             ClearStopSessionState(vehicle);
             m_PreparingFixCooldownUntil.Remove(vehicle);
             m_FramePlan.ClearDeadline(vehicle, DeadlineKind.PreparingCooldown);
-            m_ClearAssistLaunchPending(vehicle);
         }
 
         private void ClearStopSessionState(Entity vehicle)

@@ -24,6 +24,14 @@ namespace RapidTransitMod
         public bool IsSupported => CanDispatch;
         public bool IsReserved => IsKnown && !IsSupported;
         public string Token => TransitModeCodec.Format(Mode);
+        public int MinimumStopMinutes => Mode switch
+        {
+            TransitMode.Train => 2,
+            TransitMode.Subway => 2,
+            TransitMode.Tram => 2,
+            TransitMode.Bus => 2,
+            _ => 0
+        };
 
         public static TransportModeProfile GetProfile(TransitMode mode)
         {

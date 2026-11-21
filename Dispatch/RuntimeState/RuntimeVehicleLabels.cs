@@ -72,7 +72,6 @@ namespace RapidTransitMod
             int vehicleNumber,
             int currentSlotMinute = -1,
             int nextSlotMinute = -1,
-            bool late = false,
             bool abnormal = false,
             bool includeHoldingInWaiting = true)
         {
@@ -82,7 +81,6 @@ namespace RapidTransitMod
                 vehicleNumber,
                 currentSlotMinute,
                 nextSlotMinute,
-                late,
                 abnormal,
                 includeHoldingInWaiting);
             if (m_LocalizedSpecCache.TryGetValue(vehicle, out LocalizedLabelSpec cachedSpec)
@@ -123,8 +121,8 @@ namespace RapidTransitMod
                 case VehicleLabelType.Holding:
                     if (spec.CurrentSlotMinute >= 0)
                     {
-                        key = spec.Late ? "HoldingLate" : "Holding";
-                        fallback = spec.Late ? "候车 补发" : "候车";
+                        key = "Holding";
+                        fallback = "候车";
                         suffix = " " + ModRuntimeHostSystem.SlotStr(spec.CurrentSlotMinute) + suffix;
                     }
                     else
@@ -144,8 +142,8 @@ namespace RapidTransitMod
                         suffix = " " + ModRuntimeHostSystem.SlotStr(spec.NextSlotMinute) + suffix;
                     return;
                 case VehicleLabelType.Running:
-                    key = spec.Abnormal ? "RunningAbnormal" : (spec.Late ? "RunningLate" : "Running");
-                    fallback = spec.Abnormal ? "运行中(异常)" : (spec.Late ? "运行中 补发" : "运行中");
+                    key = spec.Abnormal ? "RunningAbnormal" : "Running";
+                    fallback = spec.Abnormal ? "运行中(异常)" : "运行中";
                     if (!spec.Abnormal)
                     {
                         if (spec.CurrentSlotMinute >= 0 || spec.CurrentSlotMinute == int.MinValue)
@@ -252,7 +250,6 @@ namespace RapidTransitMod
             public readonly int VehicleNumber;
             public readonly int CurrentSlotMinute;
             public readonly int NextSlotMinute;
-            public readonly bool Late;
             public readonly bool Abnormal;
             public readonly bool IncludeHoldingInWaiting;
             private readonly string m_Key;
@@ -266,7 +263,6 @@ namespace RapidTransitMod
                 VehicleNumber = 0;
                 CurrentSlotMinute = 0;
                 NextSlotMinute = 0;
-                Late = false;
                 Abnormal = false;
                 IncludeHoldingInWaiting = false;
                 m_Key = key;
@@ -280,7 +276,6 @@ namespace RapidTransitMod
                 int vehicleNumber,
                 int currentSlotMinute,
                 int nextSlotMinute,
-                bool late,
                 bool abnormal,
                 bool includeHoldingInWaiting)
             {
@@ -288,7 +283,6 @@ namespace RapidTransitMod
                 VehicleNumber = vehicleNumber;
                 CurrentSlotMinute = currentSlotMinute;
                 NextSlotMinute = nextSlotMinute;
-                Late = late;
                 Abnormal = abnormal;
                 IncludeHoldingInWaiting = includeHoldingInWaiting;
                 m_Key = null;
@@ -303,7 +297,6 @@ namespace RapidTransitMod
                     && VehicleNumber == other.VehicleNumber
                     && CurrentSlotMinute == other.CurrentSlotMinute
                     && NextSlotMinute == other.NextSlotMinute
-                    && Late == other.Late
                     && Abnormal == other.Abnormal
                     && IncludeHoldingInWaiting == other.IncludeHoldingInWaiting
                     && string.Equals(m_Key, other.m_Key, System.StringComparison.Ordinal)

@@ -36,17 +36,13 @@ namespace RapidTransitMod.Dispatch.Runtime
         public float ProfileStopStartBufferMinutes;
         public float EtaScaleMin;
         public float EtaScaleMax;
-        public float DispatchFallbackFramesPerMeter;
         public float DispatchEstimateMinFrames;
         public float DispatchEstimateDefaultFrames;
-        public Func<LifecycleKind, float> DispatchEstimateMaxFrames = null!;
         public Func<Entity, float> ReadLapFrames = null!;
-        public Func<Entity, float> ReadDispatchFrames = null!;
         public Func<Entity, int> DwellMinutes = null!;
         public TryLineObservedWaypointStopFrames TryObservedWaypointStopFrames = null!;
         public TryLineRouteProgress TryRouteProgress = null!;
         public Func<Entity, int> CachedWaypointIndex = null!;
-        public Func<Entity, bool> IsPreparingKnown = null!;
         public TryLineLapFrames TryLapFrames = null!;
         public TryLineLapStartFrame TryLapStartFrame = null!;
         public TryLineBusSegFrames TryBusSegFrames = null!;

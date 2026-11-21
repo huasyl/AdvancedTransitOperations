@@ -8,12 +8,6 @@ namespace RapidTransitMod.Runtime
         public RetireCommand(Entity vehicle) { Vehicle = vehicle; }
     }
 
-    internal readonly struct RecheckCommand
-    {
-        public readonly Entity Vehicle;
-        public RecheckCommand(Entity vehicle) { Vehicle = vehicle; }
-    }
-
     internal readonly struct DepartCommand
     {
         public readonly Entity Vehicle;
@@ -29,7 +23,6 @@ namespace RapidTransitMod.Runtime
     internal enum UiCommandKind : byte
     {
         Retire,
-        Recheck,
         Depart,
         Spawn
     }

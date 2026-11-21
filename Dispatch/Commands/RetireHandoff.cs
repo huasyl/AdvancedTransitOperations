@@ -86,10 +86,9 @@ namespace RapidTransitMod.Dispatch.Commands
             if (vehicle == Entity.Null || !EntityManager.Exists(vehicle))
                 return;
             ResetShadow(vehicle);
-            string lineTag = start.SourceLine != Entity.Null ? "线路" + start.SourceLine.Index : "线路?";
-            Log.Info("[回库] " + lineTag + " 车辆" + vehicle.Index
-                + (input.Reason.Length > 0 ? " 原因:" + input.Reason : "") + " -> 车库"
-                + start.SpawnIntent);
+            string lineTag = start.SourceLine != Entity.Null ? start.SourceLine.Index.ToString() : "?";
+            Log.Info("[Retire] line=" + lineTag + " vehicle=" + vehicle.Index
+                + (input.Reason.Length > 0 ? " reason=" + input.Reason : "") + " destination=depot");
             RecordShadow(vehicle, "retire-request");
             uint requestedFrame = m_RetireHost.Frame;
             PutWatch(vehicle, new RetireHandoffWatchRecord

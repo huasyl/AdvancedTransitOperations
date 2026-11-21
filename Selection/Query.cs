@@ -99,7 +99,7 @@ namespace RapidTransitMod
         private readonly SelectPort.StopSession m_TryStopSession;
         private readonly SelectPort.VehicleTimes m_TryVehicleTimes;
         private readonly SelectPort.PanelStations m_TryPanelStations;
-        private readonly Unity.Collections.NativeHashMap<Entity, int> m_SpawningLines;
+        private readonly Func<Entity, int> m_SpawnTarget;
         private readonly Dictionary<Entity, string> m_LineLastSpawnTriggerSummary;
         private readonly Dictionary<Entity, string> m_LineLastVehicleRegisterSummary;
         private readonly Dictionary<Entity, string> m_LineLastHoldingSummary;
@@ -120,7 +120,7 @@ namespace RapidTransitMod
         private readonly Func<Entity, string> m_BuildTraversalProgress;
         private readonly Func<Entity, Entity, VehicleState, string> m_BuildEta;
         private readonly Func<Entity, Entity, (string CurrentStationName, string NextPhysicalStationName, string NextStopStationName)> m_GetStationContext;
-        private readonly Func<Entity, Entity, int, int, string> m_BuildVehicleAlert;
+        private readonly Func<Entity, Entity, string> m_BuildVehicleAlert;
         private readonly Func<Entity, int, int, float, float, int, string> m_BuildLineAlert;
         private readonly Func<int, string> m_SlotText;
         private readonly Func<bool, string> m_BoolText;
@@ -142,7 +142,7 @@ namespace RapidTransitMod
             SelectPort.StopSession tryStopSession,
             SelectPort.VehicleTimes tryVehicleTimes,
             SelectPort.PanelStations tryPanelStations,
-            Unity.Collections.NativeHashMap<Entity, int> spawningLines,
+            Func<Entity, int> spawnTarget,
             Dictionary<Entity, string> lineLastSpawnTriggerSummary,
             Dictionary<Entity, string> lineLastVehicleRegisterSummary,
             Dictionary<Entity, string> lineLastHoldingSummary,
@@ -163,7 +163,7 @@ namespace RapidTransitMod
             Func<Entity, string> buildTraversalProgress,
             Func<Entity, Entity, VehicleState, string> buildEta,
             Func<Entity, Entity, (string CurrentStationName, string NextPhysicalStationName, string NextStopStationName)> getStationContext,
-            Func<Entity, Entity, int, int, string> buildVehicleAlert,
+            Func<Entity, Entity, string> buildVehicleAlert,
             Func<Entity, int, int, float, float, int, string> buildLineAlert,
             Func<int, string> slotText,
             Func<bool, string> boolText,
@@ -183,7 +183,7 @@ namespace RapidTransitMod
             m_TryStopSession = tryStopSession;
             m_TryVehicleTimes = tryVehicleTimes;
             m_TryPanelStations = tryPanelStations;
-            m_SpawningLines = spawningLines;
+            m_SpawnTarget = spawnTarget;
             m_LineLastSpawnTriggerSummary = lineLastSpawnTriggerSummary;
             m_LineLastVehicleRegisterSummary = lineLastVehicleRegisterSummary;
             m_LineLastHoldingSummary = lineLastHoldingSummary;
@@ -233,9 +233,7 @@ namespace RapidTransitMod
             float routeDurationFrames = isManagedLine ? m_ReadLineDuration(line) : 0f;
             float lapCacheFrames = isManagedLine ? m_ReadLineLapCache(line) : 0f;
             float dispatchCacheFrames = isManagedLine ? m_ReadDispatchCache(line) : 0f;
-            int spawnPending = isManagedLine && m_SpawningLines.IsCreated && m_SpawningLines.TryGetValue(line, out int pending)
-                ? pending
-                : 0;
+            int spawnPending = isManagedLine ? m_SpawnTarget(line) : 0;
             string officialDispatchValue = m_OfficialDispatchValue();
 
             data = new LineSelectData
@@ -395,7 +393,7 @@ namespace RapidTransitMod
                 ActualArrivalMinute = actualArrivalMinute,
                 PlannedDepartureMinute = plannedDepartureMinute,
                 AlertText = isManagedVehicle
-                    ? m_BuildVehicleAlert(vehicle, line, nowMinute, targetMinute)
+                    ? m_BuildVehicleAlert(vehicle, line)
                     : (line != Entity.Null ? "using-native-fallback" : "vehicle-not-tracked")
             };
             return true;
@@ -577,11 +575,8 @@ namespace RapidTransitMod
 
         private string BuildInboundTimeValue(Entity vehicle)
         {
-            if (m_VehicleView.TryGetPreparing(vehicle, out uint prepStartFrame))
+            if (m_VehicleView.TryGetPreparingStartFrame(vehicle, out uint prepStartFrame))
                 return BuildStartMinuteText(prepStartFrame);
-
-            if (m_VehicleView.TryGetOrigin(vehicle, out uint originSinceFrame))
-                return BuildStartMinuteText(originSinceFrame);
 
             return "-";
         }

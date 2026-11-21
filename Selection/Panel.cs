@@ -6,6 +6,7 @@ using Game.Routes;
 using Game.UI.InGame;
 using Game.Vehicles;
 using RapidTransitMod.Core;
+using RapidTransitMod.Dispatch.Lines;
 using RapidTransitMod.Dispatch.Scheduling;
 using RapidTransitMod.Dispatch.Runtime;
 using RapidTransitMod.SignalPriority;
@@ -36,7 +37,7 @@ namespace RapidTransitMod
             if (m_Port.ClockSnapshot == null)
                 return string.Empty;
 
-            return "[游戏时间 " + ModRuntimeHostSystem.SlotStr(m_Port.ClockSnapshot().NowMinute) + "]";
+            return "[GameTime " + ModRuntimeHostSystem.SlotStr(m_Port.ClockSnapshot().NowMinute) + "]";
         }
 
         public void ClearDebugSummaries()
@@ -160,7 +161,6 @@ namespace RapidTransitMod
             public int WaitingForFastTrainVehicleId;
             public bool ShowRetireAction;
             public bool ShowForceDepartAction;
-            public bool ShowReevaluateAction;
             public bool ShowLineSpawnAction;
             public bool ShowDumpTrackModelAction;
             public bool ShowDumpPlannerInputAction;
@@ -334,7 +334,7 @@ namespace RapidTransitMod
                     m_Port.TryStopSession,
                     m_Port.TryVehicleTimes,
                     m_Port.TryPanelStations,
-                    m_Port.Spawns,
+                    m_Port.SpawnTarget,
                     m_LineLastSpawnTriggerSummary,
                     m_LineLastVehicleRegisterSummary,
                     m_LineLastHoldingSummary,
@@ -344,7 +344,7 @@ namespace RapidTransitMod
                     m_Port.ResolveVehicleLine,
                     m_Port.ResolveLineDisplayName,
                     m_Port.Lines.Applied,
-                    m_Port.Scheduler.NextManagedTarget,
+                    (line, minute) => ScheduleTargets.Next(minute, m_Port.Lines.Times(line)),
                     m_Port.Lines.Log,
                     m_Port.ReadLineDuration,
                     m_Port.ReadLap,
@@ -578,15 +578,6 @@ namespace RapidTransitMod
             return true;
         }
 
-        public bool Recheck(Entity vehicle)
-        {
-            vehicle = m_Port.ResolveVehicle(vehicle);
-            if (vehicle == Entity.Null)
-                return false;
-            m_Port.FramePlan.EnqueueUiCommand(new RecheckCommand(vehicle));
-            return true;
-        }
-
         public bool Depart(Entity vehicle)
         {
             vehicle = m_Port.ResolveVehicle(vehicle);
@@ -645,7 +636,7 @@ namespace RapidTransitMod
 #endif
         }
 
-        private string BuildVehicleAlertSummary(Entity vehicle, Entity line, int nowMinute, int targetMinute)
+        private string BuildVehicleAlertSummary(Entity vehicle, Entity line)
         {
             if (m_Port.TryBlocker(vehicle, out Entity blockerVehicle) && blockerVehicle != Entity.Null)
                 return "yielding-for:" + blockerVehicle.Index;
@@ -659,18 +650,6 @@ namespace RapidTransitMod
             string alerts = string.Empty;
             if (m_Port.Vehicles.IsInbound(vehicle))
                 alerts = AppendAlert(alerts, "nearing-terminus");
-            if (m_Port.Vehicles.TryGetCooldown(vehicle, out uint cooldownUntil) && m_Port.Sim.frameIndex < cooldownUntil)
-                alerts = AppendAlert(alerts, "launch-cooldown");
-            if (targetMinute >= 0 && ScheduleClock.Expired(nowMinute, targetMinute))
-                alerts = AppendAlert(alerts, "target-expired");
-            if (line != Entity.Null
-                && m_Port.Vehicles.TryGetState(vehicle, out var state)
-                && state == VehicleState.Idle
-                && m_Port.Scheduler.Policy.ShouldProtect(line, vehicle, nowMinute, -1))
-            {
-                alerts = AppendAlert(alerts, "yield-protected");
-            }
-
             return alerts.Length > 0 ? alerts : "None";
 #endif
         }
@@ -710,40 +689,22 @@ namespace RapidTransitMod
             if (line == Entity.Null || !m_Port.Lines.Applied(line))
                 return "-";
 
-            if (vehicleState == VehicleState.Preparing)
+            if (vehicleState == VehicleState.Preparing || vehicleState == VehicleState.Running)
             {
-                var routeWaypoints = m_Port.RouteWaypoints(true);
-                if (routeWaypoints.TryGetBuffer(line, out var waypoints))
+                ArrivalKind kind = m_Port.Times.Arrival(vehicle, line, out uint arrivalFrame);
+                if (kind == ArrivalKind.InStation)
+                    return EtaText(0f, false, line);
+                if (kind == ArrivalKind.Estimated)
+                    return EtaText(math.max(0f, unchecked((int)(arrivalFrame - m_Port.Sim.frameIndex))), false, line);
+                if (vehicleState == VehicleState.Preparing
+                    && m_Port.Vehicles.TryGetEstimatedOriginArrivalFrame(vehicle, out uint estimatedOriginArrivalFrame)
+                    && unchecked((int)(m_Port.Sim.frameIndex - estimatedOriginArrivalFrame)) > 0)
                 {
-                    bool isBus = TransportModeResolver.Resolve(m_Port.EntityManager, line) == TransitMode.Bus;
-                    float lineDurationFrames = isBus ? 0f : m_Port.ReadLineDuration(line);
-                    float etaFrames = m_Port.PrepEta(
-                        vehicle,
-                        line,
-                        waypoints,
-                        m_Port.Sim.frameIndex,
-                        lineDurationFrames);
-                    return EtaText(etaFrames, false, line);
+                    double overdue = m_Port.ClockSnapshot().ToMinutes(
+                        unchecked((uint)(m_Port.Sim.frameIndex - estimatedOriginArrivalFrame)));
+                    return (IsChineseLocale() ? "超出 " : "Overdue ") + overdue.ToString("F1") + " min";
                 }
-                return "-";
-            }
-
-            if (vehicleState == VehicleState.Running)
-            {
-                var routeWaypoints = m_Port.RouteWaypoints(true);
-                if (routeWaypoints.TryGetBuffer(line, out var waypoints))
-                {
-                    float lineDurationFrames = m_Port.ReadLineDuration(line);
-                    float etaFrames = m_Port.RunEta(
-                        vehicle,
-                        line,
-                        waypoints,
-                        m_Port.Sim.frameIndex,
-                        lineDurationFrames,
-                        lineDurationFrames > 0f);
-                    return EtaText(etaFrames, true, line);
-                }
-                return "-";
+                return EtaText(float.MaxValue, vehicleState == VehicleState.Running, line);
             }
 
             if (vehicleState == VehicleState.Holding)
@@ -823,11 +784,12 @@ namespace RapidTransitMod
             string currentMinuteText = m_Port.Vehicles.TryGetSlot(vehicle, out int currentSlotMinute) && currentSlotMinute >= 0 ? ModRuntimeHostSystem.SlotStr(currentSlotMinute) : "-";
             string cachedWp = m_Port.CachedWp.TryGetValue(vehicle, out int wp) ? wp.ToString() : "-";
             string tagged = BoolDebugStr(m_Port.Vehicles.IsInbound(vehicle));
-            string cooldown = BoolDebugStr(m_Port.Vehicles.TryGetCooldown(vehicle, out uint cd) && m_Port.Sim.frameIndex < cd);
             string lapStartFrame = m_Port.Obs.TryLapStartFrame(vehicle, out uint lsf) ? lsf.ToString() : "-";
-            string lapFrames = m_Port.Obs.TryLapFrames(vehicle, out uint lf) ? lf.ToString() : "-";
+            float loopFrames = m_Port.Obs.TryLapFrames(vehicle, out uint lf) && lf > 0u
+                ? lf : line != Entity.Null ? m_Port.ReadLap(line) : 0f;
+            string lapFrames = loopFrames > 0f ? loopFrames.ToString("F0") : "-";
             string lapDistance = m_Port.Obs.TryLapDistance(vehicle, out float ld) && ld >= 0f ? (ld / 1000f).ToString("F2") + "km" : "-";
-            string prepStart = m_Port.Vehicles.TryGetPreparing(vehicle, out uint psf) ? psf.ToString() : "-";
+            string prepStart = m_Port.Vehicles.TryGetPreparingStartFrame(vehicle, out uint psf) ? psf.ToString() : "-";
             string idleStart = m_Port.Vehicles.TryGetIdle(vehicle, out uint isf) ? isf.ToString() : "-";
 
             AddDebugItem(list, "车辆", "Vehicle", vehicle.Index.ToString());
@@ -837,7 +799,6 @@ namespace RapidTransitMod
             AddDebugItem(list, "当前班次", "Current Slot", currentMinuteText);
             AddDebugItem(list, "缓存路点", "Cached Waypoint", cachedWp);
             AddDebugItem(list, "回流标签", "Nearing Terminus", tagged);
-            AddDebugItem(list, "发车冷却", "Launch Cooldown", cooldown);
             AddDebugItem(list, "圈起点帧", "Lap Start Frame", lapStartFrame);
             AddDebugItem(list, "本圈帧数", "Lap Frames", lapFrames);
             AddDebugItem(list, "本圈距离", "Lap Distance", lapDistance);
@@ -850,15 +811,16 @@ namespace RapidTransitMod
             int nowMinute = m_Port.ClockSnapshot().NowMinute;
             bool isManagedLine = m_Port.Lines.Applied(line);
             int nextSlotMinute = isManagedLine
-                ? m_Port.Scheduler.NextManagedTarget(line, nowMinute)
-                : m_Port.Scheduler.NextSlotMin(nowMinute);
+                ? ScheduleTargets.Next(nowMinute, m_Port.Lines.Times(line))
+                : ScheduleClock.NextSlot(nowMinute);
             float routeDurationFrames = m_Port.ReadLineDuration(line);
             float lapCacheFrames = m_Port.ReadLap(line);
             float dispatchCacheFrames = m_Port.ReadDispatch(line);
             string routeDurationMinutesText = routeDurationFrames > 0f ? m_Port.ClockSnapshot().ToMinutes(routeDurationFrames).ToString("F1") + "min" : "-";
             string lapCacheMinutesText = lapCacheFrames > 0f ? m_Port.ClockSnapshot().ToMinutes(lapCacheFrames).ToString("F1") + "min" : "-";
             string dispatchCacheMinutesText = dispatchCacheFrames > 0f ? m_Port.ClockSnapshot().ToMinutes(dispatchCacheFrames).ToString("F1") + "min" : "-";
-            string spawning = m_Port.Spawns.TryGetValue(line, out int spawnTarget) ? spawnTarget.ToString() : "-";
+            int spawnTarget = m_Port.SpawnTarget(line);
+            string spawning = spawnTarget > 0 ? spawnTarget.ToString() : "-";
 
             int preparing = 0;
             int holding = 0;

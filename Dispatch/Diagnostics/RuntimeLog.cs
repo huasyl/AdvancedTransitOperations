@@ -13,7 +13,6 @@ namespace RapidTransitMod.Dispatch.Diagnostics
     {
         private readonly ModRuntimeHostSystem m_Runtime;
 
-        internal readonly Dictionary<Entity, string> m_YieldSkipLogCache = new Dictionary<Entity, string>();
         internal readonly Dictionary<Entity, string> m_PreparingSlotLogCache = new Dictionary<Entity, string>();
         internal readonly Dictionary<Entity, string> m_PreparingTargetDriftLogCache = new Dictionary<Entity, string>();
         internal readonly Dictionary<Entity, string> m_CrossLineCandidateLogCache = new Dictionary<Entity, string>();
@@ -44,7 +43,6 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             m_RouteVehicleOwnerMismatchLogCache.Clear();
             m_HoldingSkipLogCache.Clear();
             m_LateDispatchLogCache.Clear();
-            m_YieldSkipLogCache.Clear();
             m_OriginDispatchTraceLogCache.Clear();
             m_OriginDispatchTraceLastLogFrameCache.Clear();
             m_DispatchSlotHeldLogCache.Clear();
@@ -69,7 +67,6 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             m_RouteVehicleOwnerMismatchLogCache.Remove(vehicle);
             m_HoldingSkipLogCache.Remove(vehicle);
             m_LateDispatchLogCache.Remove(vehicle);
-            m_YieldSkipLogCache.Remove(vehicle);
             m_DepartureObserveLogCache.Remove(vehicle);
             m_OriginDispatchTraceLogCache.Remove(vehicle);
             m_OriginDispatchTraceLastLogFrameCache.Remove(vehicle);
@@ -315,7 +312,7 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                     + " slot=" + ModRuntimeHostSystem.SlotStr(slot)
                     + " vehicle=" + vehicle.Index
                     + " state=" + state
-                    + " eta=" + (etaFrames == float.MaxValue ? "?" : m_Runtime.m_SimClock.ToMinutes(etaFrames).ToString("F1") + "分钟")
+                    + " eta=" + (etaFrames == float.MaxValue ? "?" : m_Runtime.m_SimClock.ToMinutes(etaFrames).ToString("F1") + "min")
                     + " prevTarget=" + (previousTarget >= 0 ? ModRuntimeHostSystem.SlotStr(previousTarget) : "-")
                     + " " + VehicleOwnership(observedLine, vehicle, state, targetMin, "candidate"));
         }
@@ -342,7 +339,6 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             int cachedWaypointIndex = m_Runtime.m_CachedWpIdx.TryGetValue(vehicle, out int cachedWaypoint)
                 ? cachedWaypoint
                 : -1;
-            bool hasForcedReady = m_Runtime.m_VehicleView.TryGetReady(vehicle, out uint forcedReadyFrame) && forcedReadyFrame > nowFrame;
             int currentSlot = m_Runtime.m_VehicleView.TryGetSlot(vehicle, out int currentAssignedSlot) ? currentAssignedSlot : -1;
             string key = reason
                 + "|state=" + state
@@ -352,8 +348,7 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 + "|cached=" + cachedWaypointIndex
                 + "|atA=" + (atOrigin ? "1" : "0")
                 + "|boarding=" + (boarding ? "1" : "0")
-                + "|last=" + (lastBoarding ? "1" : "0")
-                + "|forced=" + (hasForcedReady ? "1" : "0");
+                + "|last=" + (lastBoarding ? "1" : "0");
 
             if (!Cooldown(
                     m_OriginDispatchTraceLogCache,
@@ -367,8 +362,6 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             }
 
             float distanceToOriginMeters = waypoints.Length > 0 ? m_Runtime.m_LineProfile.DistanceToOrigin(vehicle, waypoints) : -1f;
-            bool hasAssistPending = m_Runtime.m_RuntimeEngine.TryGetAssistPendingTarget(vehicle, route, targetMin, out int assistTargetMin);
-            uint forcedReadyRemainingFrames = hasForcedReady ? forcedReadyFrame - nowFrame : 0;
 
             m_Runtime.log.Info("[OriginDispatchTrace] reason=" + reason
                 + " line=" + line.Index
@@ -384,8 +377,6 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 + " curWpIdx=" + currentWaypointIndex
                 + " cachedWpIdx=" + cachedWaypointIndex
                 + " distOrigin=" + (distanceToOriginMeters >= 0f ? distanceToOriginMeters.ToString("F1") : "?")
-                + " forcedReadyFrames=" + forcedReadyRemainingFrames
-                + " assistPending=" + (hasAssistPending ? ("1(" + Slot(assistTargetMin) + ")") : "0")
                 + (string.IsNullOrWhiteSpace(extra) ? string.Empty : " " + extra));
         }
 
@@ -518,7 +509,7 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             int cachedWaypointIndex = m_Runtime.m_CachedWpIdx.TryGetValue(vehicle, out int cachedWaypoint)
                 ? cachedWaypoint
                 : -1;
-            uint preparingAge = m_Runtime.m_VehicleView.TryGetPreparing(vehicle, out uint preparingStart)
+            uint preparingAge = m_Runtime.m_VehicleView.TryGetPreparingStartFrame(vehicle, out uint preparingStart)
                 ? m_Runtime.m_SimulationSystem.frameIndex - preparingStart
                 : 0;
 

@@ -1,15 +1,21 @@
 using Unity.Collections;
 using Unity.Entities;
+using System.Collections.Generic;
+using RapidTransitMod.Dispatch.Scheduling;
 
 namespace RapidTransitMod
 {
     internal sealed class VehicleView
     {
         private readonly VehicleStateStore m_Store;
+        private readonly SlotBook m_Slots;
+        private readonly VehicleWorksets m_Worksets;
 
-        public VehicleView(VehicleStateStore store)
+        public VehicleView(VehicleStateStore store, SlotBook slots, VehicleWorksets worksets)
         {
             m_Store = store;
+            m_Slots = slots;
+            m_Worksets = worksets;
         }
 
         public int Count => m_Store.State.Count;
@@ -24,47 +30,46 @@ namespace RapidTransitMod
 
         public bool TryGetState(Entity vehicle, out VehicleState state) => m_Store.State.TryGetValue(vehicle, out state);
 
-        public bool TryGetTarget(Entity vehicle, out int targetMinute) => m_Store.TargetMinute.TryGetValue(vehicle, out targetMinute);
+        public bool TryGetTarget(Entity vehicle, out int targetMinute)
+        {
+            bool found = m_Slots.TryGetHeld(vehicle, out SlotRow row);
+            targetMinute = found ? row.Slot.Minute : -1;
+            return found;
+        }
 
-        public bool TryGetSlot(Entity vehicle, out int slotMinute) => m_Store.CurrentSlotMinute.TryGetValue(vehicle, out slotMinute);
+        public bool TryGetSlot(Entity vehicle, out int slotMinute)
+        {
+            bool found = m_Slots.TryGetTrip(vehicle, out SlotRow trip);
+            slotMinute = found ? trip.Slot.Minute : -1;
+            return found;
+        }
+
+        public IReadOnlyCollection<Entity> OnLine(Entity line) => m_Worksets.OnLine(line);
 
         public bool TryGetLine(Entity vehicle, out Entity line) => m_Store.Line.TryGetValue(vehicle, out line);
 
         public bool TryGetIdle(Entity vehicle, out uint frame) => m_Store.IdleStartFrame.TryGetValue(vehicle, out frame);
 
-        public bool TryGetPreparing(Entity vehicle, out uint frame) => m_Store.PreparingStartFrame.TryGetValue(vehicle, out frame);
+        public bool TryGetPreparingStartFrame(Entity vehicle, out uint frame) => m_Store.PreparingStartFrame.TryGetValue(vehicle, out frame);
+
+        public bool TryGetEstimatedOriginArrivalFrame(Entity vehicle, out uint frame) => m_Store.EstimatedOriginArrivalFrame.TryGetValue(vehicle, out frame);
+
+        public bool TryGetTheoryWait(Entity vehicle, out uint frame) => m_Store.WaitingForTheory.TryGetValue(vehicle, out frame);
 
         public bool TryGetLaunch(Entity vehicle, out uint frame) => m_Store.LastLaunchFrame.TryGetValue(vehicle, out frame);
 
-        public bool TryGetCooldown(Entity vehicle, out uint frame) => m_Store.LaunchCooldownUntil.TryGetValue(vehicle, out frame);
+        public bool TryGetSpawnOrderRequestFrame(Entity vehicle, out uint frame) => m_Store.SpawnOrderRequestFrame.TryGetValue(vehicle, out frame);
 
-        public bool TryGetDispatch(Entity vehicle, out uint frame) => m_Store.DispatchRequestStartFrame.TryGetValue(vehicle, out frame);
-
-        public bool TryGetOrigin(Entity vehicle, out uint frame) => m_Store.OriginArrivalCandidateSinceFrame.TryGetValue(vehicle, out frame);
-
-        public bool TryGetReady(Entity vehicle, out uint readyFrame)
-        {
-            if (m_Store.ForcedOriginReadyFrame.TryGetValue(vehicle, out ReadyClockState readyState))
-            {
-                readyFrame = readyState.ReadyFrame;
-                return true;
-            }
-
-            readyFrame = 0u;
-            return false;
-        }
-
-        public bool TryGetBoardingGrace(Entity vehicle, out uint frame) => m_Store.ForcedOriginBoardingGraceUntil.TryGetValue(vehicle, out frame);
 
         public bool IsInbound(Entity vehicle) => m_Store.NearingTerminus.Contains(vehicle);
 
         public bool IsFreshPreparing(Entity vehicle, uint nowFrame, uint graceFrames)
         {
-            if (vehicle == Entity.Null || !TryGetDispatch(vehicle, out uint dispatchStartFrame))
+            if (vehicle == Entity.Null || !TryGetSpawnOrderRequestFrame(vehicle, out uint spawnOrderRequestFrame))
                 return false;
 
-            return nowFrame >= dispatchStartFrame
-                && (nowFrame - dispatchStartFrame) <= graceFrames;
+            return nowFrame >= spawnOrderRequestFrame
+                && (nowFrame - spawnOrderRequestFrame) <= graceFrames;
         }
     }
 }

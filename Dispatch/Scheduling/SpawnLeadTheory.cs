@@ -99,6 +99,10 @@ namespace RapidTransitMod.Dispatch.Scheduling
             m_ActiveTicket = ticket;
         }
 
+        internal bool IsPending(Entity line)
+            => m_Entries.TryGetValue(line, out Entry entry) && !entry.Ready && !entry.Failed
+                && m_Runtime.m_RailEtaService?.IsAlive == true && IsRailLine(line);
+
         internal bool TryRead(Entity line, out float frames)
         {
             if (!IsRailLine(line))

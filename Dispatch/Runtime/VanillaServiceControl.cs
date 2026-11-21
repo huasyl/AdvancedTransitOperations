@@ -38,7 +38,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 if (line == Entity.Null)
                     continue;
                 bool operational = m_ServiceState.IsOperational(line);
-                m_Runtime.m_DispatchScheduler.BaselineLine(
+                m_Runtime.m_ServiceCalendar.Baseline(
                     line,
                     operational,
                     clock,
@@ -49,8 +49,8 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         private void PauseLine(Entity line, ClockSnapshot clock)
         {
-            m_Runtime.m_LineSpawnControl.SuspendLine(line);
-            m_Runtime.m_DispatchScheduler.PauseLine(line, clock);
+            m_Runtime.m_ServiceCalendar.Pause(line, clock);
+            m_Runtime.m_DispatchScheduler.LineChanged(line);
             List<Entity> bypassVehicles = m_Runtime.m_Bypass.ReleaseLineForServicePause(line);
             if (bypassVehicles != null)
             {
@@ -72,7 +72,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                     {
                         continue;
                     }
-                    m_Runtime.m_CommandApplier.Retire(vehicle, "线路暂停运营");
+                    m_Runtime.m_CommandApplier.Retire(vehicle, "service-suspended");
                 }
             }
             finally
@@ -83,8 +83,9 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         private void ResumeLine(Entity line, ClockSnapshot clock)
         {
-            m_Runtime.m_DispatchScheduler.ResumeLine(line, clock);
-            m_Runtime.m_LineSpawnControl.ResumeLine(line);
+            m_Runtime.m_ServiceCalendar.Resume(line, clock);
+            m_Runtime.m_DispatchScheduler.LineChanged(line);
+            m_Runtime.m_LineSpawnControl.Recompute(line);
         }
     }
 }

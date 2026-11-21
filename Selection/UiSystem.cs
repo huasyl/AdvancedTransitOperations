@@ -68,7 +68,6 @@ namespace RapidTransitMod
             AddBinding(new TriggerBinding(kGroup, "requestVehicleRetire", RequestVehicleRetire));
             AddBinding(new TriggerBinding(kGroup, "requestVehicleForceDepart", RequestVehicleForceDepart));
 #if RT_DEBUG_TOOLS
-            AddBinding(new TriggerBinding(kGroup, "requestVehicleReevaluate", RequestVehicleReevaluate));
             AddBinding(new TriggerBinding(kGroup, "requestLineSpawn", RequestLineSpawn));
             AddBinding(new TriggerBinding(kGroup, "requestDumpTrackModel", RequestDumpTrackModel));
             AddBinding(new TriggerBinding(kGroup, "requestDumpPlannerInput", RequestDumpPlannerInput));
@@ -304,13 +303,12 @@ namespace RapidTransitMod
             AppendJsonBool(sb, "showAlerts", snapshot.Mode != "vehicle" && snapshot.AlertText.Length > 0 && snapshot.AlertText != "None");
             AppendJsonBool(sb, "showRetireAction", snapshot.ShowRetireAction);
             AppendJsonBool(sb, "showForceDepartAction", snapshot.ShowForceDepartAction);
-            AppendJsonBool(sb, "showReevaluateAction", snapshot.ShowReevaluateAction);
             AppendJsonBool(sb, "showLineSpawnAction", snapshot.ShowLineSpawnAction);
             AppendJsonBool(sb, "showDumpTrackModelAction", snapshot.ShowDumpTrackModelAction);
             AppendJsonBool(sb, "showDumpPlannerInputAction", snapshot.ShowDumpPlannerInputAction);
             AppendJsonBool(sb, "showDumpObservationAction", snapshot.ShowDumpObservationAction);
             AppendJsonBool(sb, "showDumpStationAnchorObservationAction", snapshot.ShowDumpStationAnchorObservationAction);
-            AppendJsonBool(sb, "showActions", snapshot.ShowRetireAction || snapshot.ShowForceDepartAction || snapshot.ShowReevaluateAction || snapshot.ShowLineSpawnAction || snapshot.ShowDumpTrackModelAction || snapshot.ShowDumpPlannerInputAction || snapshot.ShowDumpObservationAction || snapshot.ShowDumpStationAnchorObservationAction);
+            AppendJsonBool(sb, "showActions", snapshot.ShowRetireAction || snapshot.ShowForceDepartAction || snapshot.ShowLineSpawnAction || snapshot.ShowDumpTrackModelAction || snapshot.ShowDumpPlannerInputAction || snapshot.ShowDumpObservationAction || snapshot.ShowDumpStationAnchorObservationAction);
             AppendJsonBool(sb, "showBypassStationToggle", snapshot.ShowBypassStationToggle);
             AppendJsonBool(sb, "bypassStationChecked", snapshot.BypassStationChecked);
             bool showSignalPriority = snapshot.ShowSignalPriority;
@@ -548,19 +546,6 @@ namespace RapidTransitMod
         }
 
 #if RT_DEBUG_TOOLS
-        private void RequestVehicleReevaluate()
-        {
-            if (ModRuntimeHostSystem.Instance == null)
-                return;
-
-            Entity selectedEntity = m_SelectedInfoUISystem.selectedEntity;
-            if (selectedEntity != Entity.Null)
-            {
-                ModRuntimeHostSystem.Instance.m_SelectPanel.Recheck(selectedEntity);
-                m_LastVehicle = Entity.Null;
-            }
-        }
-
         private void RequestDumpTrackModel()
         {
             if (ModRuntimeHostSystem.Instance == null)

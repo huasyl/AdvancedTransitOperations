@@ -2,15 +2,65 @@ using System.Collections.Generic;
 using Game.Pathfind;
 using Game.Prefabs;
 using Game.Routes;
+using RapidTransitMod.Dispatch.Scheduling;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
 
 namespace RapidTransitMod
 {
+    internal enum SpawnOrderState : byte
+    {
+        None,
+        Unclaimed,
+        Claimed
+    }
+
+    internal readonly struct SpawnOrder
+    {
+        internal readonly int Id;
+        internal readonly uint RequestFrame;
+        internal readonly bool HasSlot;
+        internal readonly SlotKey Slot;
+        internal readonly Entity ClaimedBy;
+
+        internal SpawnOrder(int id, uint requestFrame, bool hasSlot, SlotKey slot, Entity claimedBy = default)
+        {
+            Id = id;
+            RequestFrame = requestFrame;
+            HasSlot = hasSlot;
+            Slot = slot;
+            ClaimedBy = claimedBy;
+        }
+    }
+
+    internal readonly struct SpawnClaim
+    {
+        internal readonly bool Found;
+        internal readonly int Id;
+        internal readonly uint RequestFrame;
+        internal readonly bool HasSlot;
+        internal readonly SlotKey Slot;
+
+        internal SpawnClaim(SpawnOrder order, uint requestFrame)
+        {
+            Found = true;
+            Id = order.Id;
+            RequestFrame = requestFrame;
+            HasSlot = order.HasSlot;
+            Slot = order.Slot;
+        }
+    }
+
     internal sealed class LineSpawnControl
     {
         private readonly ModRuntimeHostSystem m_Runtime;
+        private readonly Dictionary<Entity, List<SpawnOrder>> m_Orders =
+            new Dictionary<Entity, List<SpawnOrder>>();
+        private readonly Dictionary<Entity, uint> m_LastClaimFrame = new Dictionary<Entity, uint>();
+        private readonly Dictionary<int, Entity> m_OrderLines = new Dictionary<int, Entity>();
+        private readonly List<Entity> m_ExpiredLines = new List<Entity>();
+        private int m_NextId = 1;
 
         public LineSpawnControl(ModRuntimeHostSystem runtime)
         {
@@ -20,90 +70,174 @@ namespace RapidTransitMod
         private EntityManager EntityManager => m_Runtime.EntityManager;
         private TimedLogger log => m_Runtime.log;
 
-        public void Tick(int nowMin)
+        internal int AddForSlot(Entity line, SlotKey slot, uint frame)
         {
-            PuppetMasterControl(nowMin);
-        }
-
-        internal void SuspendLine(Entity line)
-        {
-            if (line == Entity.Null)
-                return;
-            m_Runtime.m_SpawningLines.Remove(line);
-            m_Runtime.m_LineSpawnRequestFrame.Remove(line);
-            m_Runtime.m_LastSpawnBlockedLogFrame.Remove(line);
-            m_Runtime.m_SpawnIntentTrace.RemoveLine(line);
-        }
-
-        internal void ResumeLine(Entity line)
-        {
-            if (line == Entity.Null || !EntityManager.Exists(line))
-                return;
-            BufferLookup<RouteVehicle> routeVehicles = m_Runtime.GetBufferLookup<RouteVehicle>(true);
-            BufferLookup<RouteModifier> modifiers = m_Runtime.GetBufferLookup<RouteModifier>(false);
-            BufferLookup<RouteWaypoint> waypoints = m_Runtime.GetBufferLookup<RouteWaypoint>(true);
-            ApplyPuppetMasterControlForLine(line, routeVehicles, modifiers, waypoints);
-        }
-
-        public void ApplyCleanupTargetReduction(Dictionary<Entity, int> removedCountByLine)
-        {
-            if (removedCountByLine == null || removedCountByLine.Count == 0)
-                return;
-
-            BufferLookup<RouteVehicle> cleanupRouteVehicleBuffers = m_Runtime.GetBufferLookup<RouteVehicle>(true);
-            BufferLookup<RouteModifier> cleanupModifierBuffers = m_Runtime.GetBufferLookup<RouteModifier>(false);
-            BufferLookup<RouteWaypoint> cleanupWaypointBuffers = m_Runtime.GetBufferLookup<RouteWaypoint>(true);
-            foreach (KeyValuePair<Entity, int> removedEntry in removedCountByLine)
+            List<SpawnOrder> orders = GetOrders(line);
+            for (int i = 0; i < orders.Count; i++)
             {
-                ApplyCleanupTargetReductionForLine(
-                    removedEntry.Key,
-                    removedEntry.Value,
-                    cleanupRouteVehicleBuffers,
-                    cleanupModifierBuffers,
-                    cleanupWaypointBuffers);
+                SpawnOrder order = orders[i];
+                if (order.ClaimedBy == Entity.Null && order.HasSlot && order.Slot == slot)
+                    return order.Id;
+            }
+            int id = m_NextId++;
+            orders.Add(new SpawnOrder(id, frame, true, slot));
+            m_OrderLines.Add(id, line);
+            return id;
+        }
+
+        internal int AddWithoutSlot(Entity line, uint frame)
+        {
+            int id = m_NextId++;
+            GetOrders(line).Add(new SpawnOrder(id, frame, false, default));
+            m_OrderLines.Add(id, line);
+            return id;
+        }
+
+        internal SpawnOrderState Query(int id, out Entity vehicle)
+        {
+            return Query(id, out vehicle, out _);
+        }
+
+        internal SpawnOrderState Query(int id, out Entity vehicle, out uint requestFrame)
+        {
+            vehicle = Entity.Null;
+            requestFrame = 0u;
+            if (!m_OrderLines.TryGetValue(id, out Entity line))
+                return SpawnOrderState.None;
+            List<SpawnOrder> orders = m_Orders[line];
+            for (int i = 0; i < orders.Count; i++)
+            {
+                SpawnOrder order = orders[i];
+                if (order.Id != id)
+                    continue;
+                vehicle = order.ClaimedBy;
+                requestFrame = order.RequestFrame;
+                return vehicle == Entity.Null ? SpawnOrderState.Unclaimed : SpawnOrderState.Claimed;
+            }
+            return SpawnOrderState.None;
+        }
+
+        internal void Cancel(int id)
+        {
+            if (!m_OrderLines.TryGetValue(id, out Entity line))
+                return;
+            List<SpawnOrder> orders = m_Orders[line];
+            for (int i = 0; i < orders.Count; i++)
+            {
+                if (orders[i].Id != id)
+                    continue;
+                orders.RemoveAt(i);
+                m_OrderLines.Remove(id);
+                return;
             }
         }
 
-        public void CaptureRetireTarget(
-            Entity line,
-            out int preActive,
-            out bool hadSpawnTarget,
-            out int oldSpawnTarget)
+        internal void CancelLine(Entity line)
         {
-            preActive = 0;
-            hadSpawnTarget = false;
-            oldSpawnTarget = 0;
-            if (line == Entity.Null || !EntityManager.Exists(line))
+            if (!m_Orders.TryGetValue(line, out List<SpawnOrder> orders))
                 return;
-
-            BufferLookup<RouteVehicle> routeVehicles = m_Runtime.GetBufferLookup<RouteVehicle>(true);
-            preActive = m_Runtime.m_LineVehicles.Count(line, routeVehicles);
-            hadSpawnTarget = m_Runtime.m_SpawningLines.TryGetValue(line, out oldSpawnTarget);
+            for (int i = 0; i < orders.Count; i++)
+                m_OrderLines.Remove(orders[i].Id);
+            m_Orders.Remove(line);
         }
 
-        public void ApplyRetireTarget(
-            Entity line,
-            int preActive,
-            bool hadSpawnTarget,
-            int oldSpawnTarget)
+        internal SpawnClaim Claim(Entity line, Entity vehicle, uint nowFrame)
+        {
+            if (!m_Orders.TryGetValue(line, out List<SpawnOrder> orders))
+                return default;
+            for (int i = 0; i < orders.Count; i++)
+            {
+                SpawnOrder order = orders[i];
+                if (order.ClaimedBy != Entity.Null)
+                    continue;
+                uint requestFrame = m_LastClaimFrame.TryGetValue(line, out uint lastClaim)
+                    && unchecked((int)(order.RequestFrame - lastClaim)) < 0
+                        ? lastClaim
+                        : order.RequestFrame;
+                m_LastClaimFrame[line] = nowFrame;
+                if (order.HasSlot)
+                    orders[i] = new SpawnOrder(order.Id, order.RequestFrame, true, order.Slot, vehicle);
+                else
+                {
+                    orders.RemoveAt(i);
+                    m_OrderLines.Remove(order.Id);
+                }
+                return new SpawnClaim(order, requestFrame);
+            }
+            return default;
+        }
+
+        internal int SpawnDeficit(Entity line)
+        {
+            int unclaimed = UnclaimedCount(line);
+            if (unclaimed == 0)
+                return 0;
+            BufferLookup<RouteVehicle> vehicles = m_Runtime.GetBufferLookup<RouteVehicle>(true);
+            m_Runtime.m_LineVehicles.Count(line, vehicles, out int unregistered);
+            return math.max(0, unclaimed - unregistered);
+        }
+
+        internal int DisplayTarget(Entity line)
+        {
+            int unclaimed = UnclaimedCount(line);
+            if (unclaimed == 0)
+                return 0;
+            BufferLookup<RouteVehicle> vehicles = m_Runtime.GetBufferLookup<RouteVehicle>(true);
+            int current = m_Runtime.m_LineVehicles.Count(line, vehicles, out int unregistered);
+            return current + math.max(0, unclaimed - unregistered);
+        }
+
+        internal void Recompute(Entity line)
         {
             if (line == Entity.Null || !EntityManager.Exists(line))
                 return;
-
-            BufferLookup<RouteVehicle> routeVehicles = m_Runtime.GetBufferLookup<RouteVehicle>(true);
+            BufferLookup<RouteVehicle> vehicles = m_Runtime.GetBufferLookup<RouteVehicle>(true);
             BufferLookup<RouteModifier> modifiers = m_Runtime.GetBufferLookup<RouteModifier>(false);
             BufferLookup<RouteWaypoint> waypoints = m_Runtime.GetBufferLookup<RouteWaypoint>(true);
-            int postActive = m_Runtime.m_LineVehicles.Count(line, routeVehicles);
-            if (hadSpawnTarget && m_Runtime.m_SpawningLines.ContainsKey(line))
-            {
-                int plannedAdditional = math.max(0, oldSpawnTarget - preActive);
-                m_Runtime.m_SpawningLines[line] = postActive + plannedAdditional;
-            }
-
-            ApplyPuppetMasterControlForLine(line, routeVehicles, modifiers, waypoints);
+            ApplyVehicleIntervalForLine(line, vehicles, modifiers, waypoints);
         }
 
-        private void PuppetMasterControl(int nowMin)
+        internal void Recompute(IEnumerable<Entity> lines)
+        {
+            foreach (Entity line in lines)
+                Recompute(line);
+        }
+
+        internal void Clear()
+        {
+            m_Orders.Clear();
+            m_OrderLines.Clear();
+            m_LastClaimFrame.Clear();
+            m_ExpiredLines.Clear();
+        }
+
+        private List<SpawnOrder> GetOrders(Entity line)
+        {
+            if (!m_Orders.TryGetValue(line, out List<SpawnOrder> orders))
+            {
+                orders = new List<SpawnOrder>();
+                m_Orders[line] = orders;
+            }
+            return orders;
+        }
+
+        private int UnclaimedCount(Entity line)
+        {
+            if (!m_Orders.TryGetValue(line, out List<SpawnOrder> orders))
+                return 0;
+            int count = 0;
+            for (int i = 0; i < orders.Count; i++)
+                if (orders[i].ClaimedBy == Entity.Null)
+                    count++;
+            return count;
+        }
+
+        public void Tick()
+        {
+            ApplyVehicleIntervals();
+        }
+
+        private void ApplyVehicleIntervals()
         {
             NativeArray<Entity> lines = m_Runtime.m_LineQuery.ToEntityArray(Allocator.Temp);
             BufferLookup<RouteVehicle> rvBuffers = m_Runtime.GetBufferLookup<RouteVehicle>(true);
@@ -112,19 +246,20 @@ namespace RapidTransitMod
 
             try
             {
-                NativeArray<Entity> spawnKeys = m_Runtime.m_SpawningLines.GetKeyArray(Allocator.Temp);
-                for (int i = 0; i < spawnKeys.Length; i++)
+                m_ExpiredLines.Clear();
+                foreach (Entity line in m_Orders.Keys)
+                    if (!EntityManager.Exists(line))
+                        m_ExpiredLines.Add(line);
+                foreach (Entity line in m_LastClaimFrame.Keys)
+                    if (!EntityManager.Exists(line) && !m_ExpiredLines.Contains(line))
+                        m_ExpiredLines.Add(line);
+                for (int i = 0; i < m_ExpiredLines.Count; i++)
                 {
-                    if (!EntityManager.Exists(spawnKeys[i]))
-                    {
-                        if (RtLog.VerboseEnabled)
-                            log.Info("[PuppetMaster] 清理失效产车记录 线路" + spawnKeys[i].Index);
-                        m_Runtime.m_SpawningLines.Remove(spawnKeys[i]);
-                        m_Runtime.m_LineSpawnRequestFrame.Remove(spawnKeys[i]);
-                        m_Runtime.m_LastSpawnBlockedLogFrame.Remove(spawnKeys[i]);
-                    }
+                    Entity line = m_ExpiredLines[i];
+                    CancelLine(line);
+                    m_LastClaimFrame.Remove(line);
                 }
-                spawnKeys.Dispose();
+                m_ExpiredLines.Clear();
 
                 NativeArray<Entity> lineStableKeys = m_Runtime.m_LineProfile.StabilityKeys(Allocator.Temp);
                 for (int i = 0; i < lineStableKeys.Length; i++)
@@ -138,12 +273,12 @@ namespace RapidTransitMod
                 lineStableKeys.Dispose();
 
                 foreach (Entity line in lines)
-                    ApplyPuppetMasterControlForLine(line, rvBuffers, modBuffers, wpBuffers);
+                    ApplyVehicleIntervalForLine(line, rvBuffers, modBuffers, wpBuffers);
             }
             finally { lines.Dispose(); }
         }
 
-        private void ApplyPuppetMasterControlForLine(
+        private void ApplyVehicleIntervalForLine(
             Entity line,
             BufferLookup<RouteVehicle> rvBuffers,
             BufferLookup<RouteModifier> modBuffers,
@@ -151,7 +286,7 @@ namespace RapidTransitMod
         {
             if (!EntityManager.Exists(line)) return;
             if (!wpBuffers.TryGetBuffer(line, out DynamicBuffer<RouteWaypoint> wps) || wps.Length < 2) return;
-            if (!m_Runtime.m_LineProfile.IsStable(line, wps)) return;
+            if (!m_Runtime.m_LineProfile.Stable(line)) return;
             m_Runtime.m_LineServiceState.EnsureObserved(line);
             if (!m_Runtime.m_LineServiceState.IsOperational(line)) return;
             if (!m_Runtime.m_LineView.Managed(line, m_Runtime.m_Features.Dispatch())) return;
@@ -167,23 +302,8 @@ namespace RapidTransitMod
                 stableDuration = iDefault;
             if (stableDuration <= 0f) return;
 
-            int actualCount = m_Runtime.m_LineVehicles.Count(line, rvBuffers);
-            int targetCount = actualCount;
-
-            if (m_Runtime.m_SpawningLines.TryGetValue(line, out int spawnTarget))
-            {
-                if (actualCount >= spawnTarget)
-                {
-                    m_Runtime.m_SpawningLines.Remove(line);
-                    m_Runtime.m_LineSpawnRequestFrame.Remove(line);
-                    if (RtLog.VerboseEnabled)
-                        log.Info("[PuppetMaster] 线路" + line.Index + " 产车完成 actualCount=" + actualCount);
-                }
-                else
-                {
-                    targetCount = spawnTarget;
-                }
-            }
+            int actualCount = m_Runtime.m_LineVehicles.Count(line, rvBuffers, out int unregistered);
+            int targetCount = actualCount + math.max(0, UnclaimedCount(line) - unregistered);
 
             float targetInterval = targetCount <= 0
                 ? math.max(iDefault, stableDuration) * 64f
@@ -234,48 +354,6 @@ namespace RapidTransitMod
             }
 
             return stableDuration > 0f;
-        }
-
-        private void ApplyCleanupTargetReductionForLine(
-            Entity line,
-            int removedCount,
-            BufferLookup<RouteVehicle> rvBuffers,
-            BufferLookup<RouteModifier> modBuffers,
-            BufferLookup<RouteWaypoint> wpBuffers)
-        {
-            if (line == Entity.Null || !EntityManager.Exists(line) || removedCount <= 0)
-                return;
-
-            int actualCount = m_Runtime.m_LineVehicles.Count(line, rvBuffers);
-            if (m_Runtime.m_SpawningLines.TryGetValue(line, out int spawnTarget))
-            {
-                int newSpawnTarget = math.max(0, spawnTarget - removedCount);
-                if (newSpawnTarget <= actualCount)
-                {
-                    m_Runtime.m_SpawningLines.Remove(line);
-                    m_Runtime.m_LineSpawnRequestFrame.Remove(line);
-                    if (RtLog.VerboseEnabled)
-                    {
-                        log.Info("[CleanupTargetAdjust] 线路" + line.Index
-                            + " 清理" + removedCount + "辆"
-                            + " spawnTarget=" + spawnTarget + " -> -"
-                            + " actualCount=" + actualCount);
-                    }
-                }
-                else if (newSpawnTarget != spawnTarget)
-                {
-                    m_Runtime.m_SpawningLines[line] = newSpawnTarget;
-                    if (RtLog.VerboseEnabled)
-                    {
-                        log.Info("[CleanupTargetAdjust] 线路" + line.Index
-                            + " 清理" + removedCount + "辆"
-                            + " spawnTarget=" + spawnTarget + " -> " + newSpawnTarget
-                            + " actualCount=" + actualCount);
-                    }
-                }
-            }
-
-            ApplyPuppetMasterControlForLine(line, rvBuffers, modBuffers, wpBuffers);
         }
 
         private static void InjectModifier(DynamicBuffer<RouteModifier> mods, float delta)

@@ -7,20 +7,6 @@ using Unity.Entities;
 
 namespace RapidTransitMod.Dispatch.Persistence
 {
-    internal readonly struct ServiceWindow
-    {
-        internal readonly DateTime Start;
-        internal readonly DateTime End;
-        internal readonly bool Open;
-
-        internal ServiceWindow(DateTime start, DateTime end, bool open)
-        {
-            Start = start;
-            End = end;
-            Open = open;
-        }
-    }
-
     internal sealed class ServiceWindowStore
     {
         private readonly ModRuntimeHostSystem m_Runtime;
@@ -91,7 +77,7 @@ namespace RapidTransitMod.Dispatch.Persistence
             LineKey key = m_Runtime.m_LineAnchorCatalog.StableKey(line);
             if (!key.IsEmpty)
                 m_Restored.Remove(key);
-            m_Runtime.m_DispatchScheduler?.RemoveServiceWindows(line);
+            m_Runtime.m_ServiceCalendar?.RemoveLine(line);
             m_Dirty = true;
         }
 
@@ -102,7 +88,8 @@ namespace RapidTransitMod.Dispatch.Persistence
 
         internal void Flush()
         {
-            if (!m_Dirty || m_Runtime.m_DispatchScheduler == null)
+            if (m_Runtime.m_ServiceCalendar == null
+                || (!m_Dirty && !m_Runtime.m_ServiceCalendar.Dirty))
                 return;
             Ensure();
             Entity city = m_Runtime.m_CitySystem.City;
@@ -112,7 +99,7 @@ namespace RapidTransitMod.Dispatch.Persistence
             DynamicBuffer<LineServiceWindowElement> buffer =
                 m_Runtime.EntityManager.GetBuffer<LineServiceWindowElement>(city);
             buffer.Clear();
-            foreach (KeyValuePair<Entity, List<ServiceWindow>> entry in m_Runtime.m_DispatchScheduler.ServiceWindows())
+            foreach (KeyValuePair<Entity, List<ServiceWindow>> entry in m_Runtime.m_ServiceCalendar.Windows())
             {
                 LineKey key = m_Runtime.m_LineAnchorCatalog.StableKey(entry.Key);
                 if (key.IsEmpty)
@@ -135,6 +122,7 @@ namespace RapidTransitMod.Dispatch.Persistence
                 }
             }
             m_Dirty = false;
+            m_Runtime.m_ServiceCalendar.ClearDirty();
         }
 
         internal void ClearTracking()

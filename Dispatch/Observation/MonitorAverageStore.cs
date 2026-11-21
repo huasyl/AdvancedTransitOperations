@@ -152,6 +152,19 @@ namespace RapidTransitMod.Dispatch.Observation
             return true;
         }
 
+        internal bool TryAverage(Entity line, int index, out float frames)
+        {
+            frames = 0f;
+            if (!m_Lines.TryGetValue(line, out MonitorAverageLine value)
+                || index < 0 || index >= value.Segments.Length)
+                return false;
+            MonitorAverageSegment segment = value.Segments[index];
+            if (segment.SampleCount <= 0 || segment.TotalFrames == 0)
+                return false;
+            frames = (float)((double)segment.TotalFrames / segment.SampleCount);
+            return frames > 0f && !float.IsNaN(frames) && !float.IsInfinity(frames);
+        }
+
         internal bool TrySnapshot(Entity line, string expectedStopSig, out MonitorAverageSnapshot snapshot)
         {
             snapshot = default;

@@ -769,6 +769,22 @@ namespace RapidTransitMod
             return m_Cfg.GetHold(line);
         }
 
+        public int Late(Entity line)
+        {
+            return 8;
+        }
+
+        public int MinDwell(Entity line)
+        {
+            return TransportModeProfile.GetProfile(
+                TransportModeResolver.Resolve(m_EntityManager, line)).MinimumStopMinutes;
+        }
+
+        public int OriginMinDwell(Entity line)
+        {
+            return Math.Min(MinDwell(line), Hold(line));
+        }
+
         public int Dwell(string lineId)
         {
             return m_Cfg.GetDwell(lineId);

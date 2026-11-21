@@ -230,7 +230,6 @@ namespace RapidTransitMod.Runtime
         }
 
         public void EnqueueUiCommand(RetireCommand command) => EnqueueUiCommand(UiCommandKind.Retire, command.Vehicle);
-        public void EnqueueUiCommand(RecheckCommand command) => EnqueueUiCommand(UiCommandKind.Recheck, command.Vehicle);
         public void EnqueueUiCommand(DepartCommand command) => EnqueueUiCommand(UiCommandKind.Depart, command.Vehicle);
         public void EnqueueUiCommand(SpawnCommand command) => EnqueueUiCommand(UiCommandKind.Spawn, command.Line);
 

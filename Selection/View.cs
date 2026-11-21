@@ -26,7 +26,7 @@ namespace RapidTransitMod
             string slotCoverage = data.IsManagedLine
                 ? ((data.TargetingNextSlot + data.OccupyingNextSlot) > 0 ? "Occupied" : "Gap")
                 : data.OfficialDispatchValue;
-            string spawnTarget = data.IsManagedLine ? data.SpawnPending.ToString() : "-";
+            string spawnTarget = data.IsManagedLine && data.SpawnPending > 0 ? data.SpawnPending.ToString() : "-";
             string alertText = FormatLegacyAlertText(data.AlertText, data.OfficialDispatchValue);
 
             AddDebugItem(list, "线路", "Line", data.Line.Index.ToString());
@@ -147,7 +147,6 @@ namespace RapidTransitMod
                 AlertText = data.AlertText,
                 ShowRetireAction = data.IsManagedVehicle,
                 ShowForceDepartAction = data.IsManagedVehicle,
-                ShowReevaluateAction = data.IsManagedVehicle && BuildFlavor.DebugTools
             };
         }
 
@@ -201,7 +200,6 @@ namespace RapidTransitMod
                 ThirdSignalLight = data.SignalDisplay.ThirdLight,
                 ShowRetireAction = true,
                 ShowForceDepartAction = true,
-                ShowReevaluateAction = BuildFlavor.DebugTools
             };
         }
 

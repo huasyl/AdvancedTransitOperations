@@ -29,7 +29,8 @@ namespace RapidTransitMod.RailEtaHost
         public static void Bind(RailEtaBridgeService service) => Volatile.Write(ref s_Current, service);
         public bool IsDisposed => Volatile.Read(ref m_Disposed) != 0;
         public bool WorkerLost => m_Worker.WorkerLost;
-        internal bool CanSubmit => !IsDisposed && !WorkerLost && m_HotRuntime?.Current != null && !m_HotRuntime.ModuleBusy;
+        internal bool IsAlive => !IsDisposed && !WorkerLost && m_HotRuntime?.Current != null;
+        internal bool CanSubmit => IsAlive && !m_HotRuntime.ModuleBusy;
         internal long HotGeneration => m_HotRuntime?.Current?.Generation ?? 0;
         internal string HotBuildId => m_HotRuntime?.Current?.BuildId ?? string.Empty;
 

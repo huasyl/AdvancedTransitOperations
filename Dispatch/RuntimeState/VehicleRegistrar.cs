@@ -15,7 +15,7 @@ namespace RapidTransitMod
         private readonly ModRuntimeHostSystem m_Runtime;
         private readonly EntityQuery m_VehicleQuery;
         private readonly HashSet<Entity> m_EligibleLines = new HashSet<Entity>();
-        private readonly Dictionary<Entity, int> m_ReleasedCountByLine = new Dictionary<Entity, int>();
+        private readonly HashSet<Entity> m_ReleasedLines = new HashSet<Entity>();
         private readonly Dictionary<Entity, (Entity Line, byte RemainingAttempts)> m_PendingRegistrationConfirmations = new Dictionary<Entity, (Entity, byte)>();
         private readonly List<Entity> m_RegistrationConfirmationVehicles = new List<Entity>();
         private readonly System.Action<StopFact> m_PublishStopFact;
@@ -51,7 +51,7 @@ namespace RapidTransitMod
         {
             BufferLookup<RouteVehicle> rvBuffers = m_Runtime.GetBufferLookup<RouteVehicle>(true);
             BufferLookup<RouteWaypoint> wpBuffers = m_Runtime.GetBufferLookup<RouteWaypoint>(true);
-            m_ReleasedCountByLine.Clear();
+            m_ReleasedLines.Clear();
             CollectEligibleLines(rvBuffers, wpBuffers);
             using (NativeArray<Entity> vehicles = m_VehicleQuery.ToEntityArray(Allocator.Temp))
             {
@@ -95,15 +95,13 @@ namespace RapidTransitMod
                     ExitContext context = m_Runtime.m_VehicleExit.Release(vehicle, ExitMode.Live, reason);
                     if (context.Line != Entity.Null && context.State != VehicleState.Retiring)
                     {
-                        m_ReleasedCountByLine[context.Line] = m_ReleasedCountByLine.TryGetValue(context.Line, out int count)
-                            ? count + 1
-                            : 1;
+                        m_ReleasedLines.Add(context.Line);
                     }
                 }
             }
 
-            if (m_ReleasedCountByLine.Count > 0)
-                m_Runtime.m_LineSpawnControl.ApplyCleanupTargetReduction(m_ReleasedCountByLine);
+            if (m_ReleasedLines.Count > 0)
+                m_Runtime.m_LineSpawnControl.Recompute(m_ReleasedLines);
             foreach (Entity line in m_EligibleLines)
                 m_Runtime.m_LineInitialAdopted.Add(line);
         }
@@ -157,7 +155,6 @@ namespace RapidTransitMod
                         waypoint,
                         frame);
                     m_Runtime.m_RailEventSource.CommitWaypoint(vehicle, waypoint);
-                    SetRegistrationReady(vehicle, waypoint, state, frame);
                     m_PublishStopFact(restoredStop);
                     m_Runtime.m_RuntimeFramePlan.AddStage(vehicle, RapidTransitMod.Runtime.RuntimeStageMask.Dispatch);
                     continue;
@@ -172,21 +169,57 @@ namespace RapidTransitMod
             m_RegistrationConfirmationVehicles.Clear();
         }
 
-        internal void SetRegistrationReady(Entity vehicle, int waypoint, VehicleState state, uint frame)
-        {
-            if (waypoint == 0 && state == VehicleState.Holding)
-                m_Runtime.m_RuntimeEngine.SetReady(vehicle, frame, 2d, m_Runtime.m_SimClock.Snapshot);
-        }
-
         internal void CommitFinalState(Entity vehicle, Entity line, uint frame)
         {
             if (!m_Runtime.m_VehicleView.TryGetState(vehicle, out VehicleState state))
                 return;
 
-            if (state == VehicleState.Running)
+            if (state == VehicleState.Holding
+                && !m_Runtime.m_StopRuntime.HasActiveStopSession(vehicle, line, 0))
+            {
+                m_Runtime.m_DispatchScheduler.Release(vehicle);
+                m_Runtime.m_RuntimeEngine.RestoreRun(vehicle);
+                state = VehicleState.Running;
+                m_Runtime.log.Info("[RegistrationRestore] line=" + line.Index + " vehicle=" + vehicle.Index
+                    + " state=Running reason=origin-session-restore-failed");
+            }
+
+            if (state == VehicleState.Preparing)
+            {
+                uint? spawnOrderRequestFrame =
+                    m_Runtime.m_VehicleView.TryGetSpawnOrderRequestFrame(vehicle, out uint requestFrame)
+                        ? requestFrame : (uint?)null;
+                if (m_Runtime.m_LineTimes.TryEstimateNewVehicleOriginArrivalFrame(
+                    vehicle, line, spawnOrderRequestFrame, frame, out uint arrivalFrame))
+                    m_Runtime.m_VehicleRegistry.SetEstimatedOriginArrivalFrame(vehicle, arrivalFrame);
+                else
+                    m_Runtime.m_VehicleRegistry.SetTheoryWait(vehicle, frame);
+            }
+            else if (state == VehicleState.Running)
                 m_Runtime.m_RuntimeEngine.CommitRunning(vehicle, line);
             else if (state == VehicleState.Holding)
                 m_Runtime.m_Observation.Seed(vehicle, line, frame);
+        }
+
+        internal void SettleOriginArrivals(Entity line, uint frame)
+        {
+            foreach (Entity vehicle in m_Runtime.m_VehicleView.OnLine(line))
+            {
+                if (!m_Runtime.m_VehicleView.TryGetTheoryWait(vehicle, out uint registerFrame))
+                    continue;
+                if (!m_Runtime.m_VehicleView.TryGetState(vehicle, out VehicleState state) || state != VehicleState.Preparing)
+                {
+                    m_Runtime.m_VehicleRegistry.ClearTheoryWait(vehicle);
+                    continue;
+                }
+
+                uint? spawnOrderRequestFrame =
+                    m_Runtime.m_VehicleView.TryGetSpawnOrderRequestFrame(vehicle, out uint requestFrame)
+                        ? requestFrame : (uint?)null;
+                if (m_Runtime.m_LineTimes.TryEstimateNewVehicleOriginArrivalFrame(
+                    vehicle, line, spawnOrderRequestFrame, registerFrame, out uint arrivalFrame, settleFrame: frame))
+                    m_Runtime.m_VehicleRegistry.SetEstimatedOriginArrivalFrame(vehicle, arrivalFrame);
+            }
         }
 
         private void CollectEligibleLines(
@@ -219,7 +252,7 @@ namespace RapidTransitMod
             if (isRail)
                 m_Runtime.m_TrackModel.LogLineTrackChainDiagnostics(line);
             if (RtLog.VerboseEnabled)
-                m_Runtime.log.Info("[诊断] 线路" + line.Index + " (" + m_Runtime.EntityName(line) + ") waypoint数=" + waypoints.Length);
+                m_Runtime.log.Info("[LineDiagnostic] line=" + line.Index + " name=" + m_Runtime.EntityName(line) + " waypointCount=" + waypoints.Length);
         }
 
         private bool RestoreLiveCache(Entity vehicle, Entity line, bool allowRunningRestore, bool rail)
@@ -227,40 +260,18 @@ namespace RapidTransitMod
             if (!m_Runtime.m_VehicleCache.Restore(vehicle, line, allowRunningRestore, out VehicleState restoredState))
                 return false;
 
-            if (restoredState == VehicleState.Holding)
-                WriteRestoredDeparture(vehicle, line, rail);
-            else if (restoredState == VehicleState.Running)
+            if (restoredState == VehicleState.Running)
                 m_Runtime.m_VehicleCache.RestoreLap(vehicle, line);
             return true;
         }
 
-        private void WriteRestoredDeparture(Entity vehicle, Entity line, bool rail)
+        private uint? ClaimSpawnRequest(Entity line, Entity vehicle, bool adoptExistingVehicles)
         {
-            PublicTransport publicTransport = m_Runtime.EntityManager.GetComponentData<PublicTransport>(vehicle);
-            uint frame = m_Runtime.m_SimulationSystem.frameIndex;
-            publicTransport.m_DepartureFrame = frame + 99999;
-            if (rail)
-                m_Runtime.m_RailEventSource.RecordPublicTransportWrite(vehicle, publicTransport, frame);
-            else
-                m_Runtime.m_RoadEventSource.RecordPublicTransportWrite(vehicle, publicTransport, frame);
-            m_Runtime.EntityManager.SetComponentData(vehicle, publicTransport);
-            if (RtLog.VerboseEnabled)
-            {
-                int target = m_Runtime.m_VehicleView.TryGetTarget(vehicle, out int targetMinute) ? targetMinute : -1;
-                m_Runtime.log.Info("[恢复] 线路" + line.Index + " 车辆" + vehicle.Index
-                    + " Holding target=" + (target >= 0 ? ModRuntimeHostSystem.SlotStr(target) : "-"));
-            }
-        }
-
-        private uint? TakeSpawnRequestFrame(Entity line, bool adoptExistingVehicles)
-        {
-            if (!adoptExistingVehicles
-                && m_Runtime.m_LineSpawnRequestFrame.TryGetValue(line, out uint spawnRequestFrame))
-            {
-                m_Runtime.m_LineSpawnRequestFrame.Remove(line);
-                return spawnRequestFrame;
-            }
-            return null;
+            if (adoptExistingVehicles)
+                return null;
+            SpawnClaim claim = m_Runtime.m_LineSpawnControl.Claim(
+                line, vehicle, m_Runtime.m_SimulationSystem.frameIndex);
+            return claim.Found ? claim.RequestFrame : (uint?)null;
         }
 
         private void AdoptRoadCandidate(
@@ -284,14 +295,14 @@ namespace RapidTransitMod
                 boarding,
                 adoptExistingVehicles,
                 publicTransport.m_State);
-            uint? dispatchFrame = TakeSpawnRequestFrame(line, adoptExistingVehicles);
+            uint? spawnOrderRequestFrame = ClaimSpawnRequest(line, vehicle, adoptExistingVehicles);
 
             uint nowFrame = m_Runtime.m_SimulationSystem.frameIndex;
             m_Runtime.m_VehicleRegistry.BeginRestore();
 
             try
             {
-                m_Runtime.m_RuntimeEngine.Adopt(vehicle, line, initialState, nowFrame, dispatchFrame);
+                m_Runtime.m_RuntimeEngine.Adopt(vehicle, line, initialState, nowFrame, spawnOrderRequestFrame);
                 m_Runtime.m_RoadEventSource.RegisterSource(vehicle, line, waypointKnown ? waypointIndex : -1);
                 m_Runtime.m_ObsPersist.SetLapDistance(vehicle, -1f);
                 StopFact restoredStop = m_Runtime.m_StopRuntime.RestoreRegistration(
@@ -397,7 +408,7 @@ namespace RapidTransitMod
                 waypointIndex,
                 adoptExistingVehicles,
                 out string initialReason);
-            uint? dispatchFrame = TakeSpawnRequestFrame(line, adoptExistingVehicles);
+            uint? spawnOrderRequestFrame = ClaimSpawnRequest(line, vehicle, adoptExistingVehicles);
 
             m_Runtime.m_RailEventSource.RegisterSource(
                 vehicle,
@@ -407,13 +418,9 @@ namespace RapidTransitMod
                 waypoints.Length);
             m_Runtime.m_VehicleRegistry.BeginRestore();
             bool restored = false;
-            string spawnIntent = string.Empty;
             try
             {
-                m_Runtime.m_RuntimeEngine.Adopt(vehicle, line, initialState, nowFrame, dispatchFrame);
-                spawnIntent = dispatchFrame.HasValue
-                    ? m_Runtime.m_SpawnIntentTrace.Bind(line, vehicle, dispatchFrame.Value, nowFrame)
-                    : string.Empty;
+                m_Runtime.m_RuntimeEngine.Adopt(vehicle, line, initialState, nowFrame, spawnOrderRequestFrame);
                 m_Runtime.m_ObsPersist.SetLapDistance(vehicle, -1f);
                 StopFact restoredStop = m_Runtime.m_StopRuntime.RestoreRegistration(
                     vehicle,
@@ -443,15 +450,14 @@ namespace RapidTransitMod
                 m_Runtime.m_VehicleRegistry.CancelRestore();
                 throw;
             }
-            VehicleState finalState = m_Runtime.m_VehicleView.GetState(vehicle);
-            SetRegistrationReady(vehicle, waypointIndex, finalState, nowFrame);
             if (boarding && waypointIndex < 0)
                 m_PendingRegistrationConfirmations[vehicle] = (line, 2);
             CommitFinalState(vehicle, line, nowFrame);
+            VehicleState finalState = m_Runtime.m_VehicleView.GetState(vehicle);
 
             if (!adoptExistingVehicles)
                 m_Runtime.m_SelectPanel.RecordLineVehicleRegisterSummary(line, m_Runtime.m_RuntimeLifecycleHost.Minute(), vehicle, finalState);
-            LogRailRegistration(line, vehicle, initialState, initialReason, restored, waypointIndex, adoptExistingVehicles, spawnIntent);
+            LogRailRegistration(line, vehicle, initialState, initialReason, restored, waypointIndex, adoptExistingVehicles);
         }
 
 
@@ -529,18 +535,17 @@ namespace RapidTransitMod
             string initialReason,
             bool restored,
             int waypointIndex,
-            bool adoptExistingVehicles,
-            string spawnIntent)
+            bool adoptExistingVehicles)
         {
             if (!RtLog.VerboseEnabled)
                 return;
 
             VehicleState finalState = m_Runtime.m_VehicleView.GetState(vehicle);
             int finalTarget = m_Runtime.m_VehicleView.TryGetTarget(vehicle, out int target) ? target : -1;
-            string lineTag = "线路" + line.Index;
-            m_Runtime.log.Info("[注册] " + lineTag + " 车辆" + vehicle.Index
-                + " 初始:" + initialState + " 最终:" + finalState
-                + (restored ? "(缓存恢复)" : "")
+            string lineTag = "line=" + line.Index;
+            m_Runtime.log.Info("[VehicleRegister] " + lineTag + " vehicle=" + vehicle.Index
+                + " initial=" + initialState + " final=" + finalState
+                + " restored=" + (restored ? "1" : "0")
                 + " targetMin=" + finalTarget
                 + " initReason=" + initialReason
                 + " depot=" + m_Runtime.m_SelectPanel.DescribeVehicleOwnerDepot(vehicle));
@@ -551,7 +556,7 @@ namespace RapidTransitMod
                     + "|state=" + finalState
                     + "|target=" + (m_Runtime.EntityManager.HasComponent<Target>(vehicle) ? m_Runtime.EntityManager.GetComponentData<Target>(vehicle).m_Target.Index : -1)
                     + "|route=" + (m_Runtime.EntityManager.HasComponent<CurrentRoute>(vehicle) ? m_Runtime.EntityManager.GetComponentData<CurrentRoute>(vehicle).m_Route.Index : -1),
-                "[RegisterDetail] " + lineTag + " 车辆" + vehicle.Index
+                "[RegisterDetail] " + lineTag + " vehicle=" + vehicle.Index
                     + " " + m_Runtime.m_RuntimeLog.VehicleOwnership(line, vehicle, finalState, finalTarget, "register")
                     + " initReason=" + initialReason
                     + " restored=" + (restored ? "1" : "0")
@@ -564,8 +569,7 @@ namespace RapidTransitMod
                     + " state=" + finalState
                     + " targetMin=" + finalTarget
                     + " initReason=" + initialReason
-                    + " depot=" + m_Runtime.m_SelectPanel.DescribeVehicleOwnerDepot(vehicle)
-                    + spawnIntent);
+                    + " depot=" + m_Runtime.m_SelectPanel.DescribeVehicleOwnerDepot(vehicle));
             }
         }
     }

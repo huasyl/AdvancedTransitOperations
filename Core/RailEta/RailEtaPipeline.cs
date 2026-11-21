@@ -79,7 +79,7 @@ namespace RapidTransitMod.RailEta.BuiltIn
     {
         public RailEtaMode Mode;
         public long BatchId;
-        public long BatchStartTicks;
+        public uint BatchStartFrame;
         public uint IndexOriginFrame;
         public int Generation;
         public List<RailEtaBatchRequest> Requests;
@@ -164,7 +164,7 @@ namespace RapidTransitMod.RailEta.BuiltIn
         public RailEtaScopeResult Scope;
         public uint OriginFrame;
         public long IndexWallTicks;
-        public long BatchStartTicks;
+        public uint BatchStartFrame;
     }
 
     internal sealed class RailEtaMaterializeResult
@@ -181,7 +181,7 @@ namespace RapidTransitMod.RailEta.BuiltIn
     internal sealed class RailEtaPredictionWork
     {
         public RailEtaScopeResult Scope;
-        public long BatchStartTicks;
+        public uint BatchStartFrame;
         public RailEtaWorldSnapshot Snapshot;
         public long IndexWallTicks;
         public long ScopedWallTicks;

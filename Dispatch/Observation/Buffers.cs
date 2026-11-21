@@ -19,10 +19,10 @@ namespace RapidTransitMod.Dispatch.Observation
         private const int MonitorStopVersion = 3;
         private const int MonitorTripVersion = 4;
         private const int MonitorAverageVersion = 2;
-        private const int MaxMonitorDateSlots = 2;
+        private const int MaxMonitorDateSlots = 3;
         private const int MaxMonitorTripsPerDate = 8192;
         private const int MaxMonitorActiveTrips = 1024;
-        private const int MaxMonitorTrips = MaxMonitorTripsPerDate * 2 + MaxMonitorActiveTrips;
+        private const int MaxMonitorTrips = MaxMonitorTripsPerDate * MaxMonitorDateSlots + MaxMonitorActiveTrips;
         private const int MaxMonitorStops = MaxMonitorTrips * 256;
         private const int MaxMonitorAverageSegments = MonitorAverageStore.MaxLines * MonitorAverageStore.MaxSegmentsPerLine;
         private const int MaxRestoreLineLogSlices = 32;
@@ -134,7 +134,7 @@ namespace RapidTransitMod.Dispatch.Observation
             DynamicBuffer<MonitorDateSlotElement> slots =
                 m_Runtime.EntityManager.GetBuffer<MonitorDateSlotElement>(city, true);
             HashSet<int> slotKeys = new HashSet<int>();
-            for (int i = 0; i < slots.Length && slotKeys.Count < 2; i++)
+            for (int i = 0; i < slots.Length && slotKeys.Count < MaxMonitorDateSlots; i++)
             {
                 MonitorDateSlotElement element = slots[i];
                 if (element.m_Version != MonitorVersion
@@ -1429,7 +1429,7 @@ namespace RapidTransitMod.Dispatch.Observation
             m_Runtime.m_LastStationStopDwellLegacyRestoredCount = restoredCount;
             if (RtLog.VerboseEnabled)
             {
-                m_Runtime.log.Info("[恢复] DwellObservations buffer=" + buffer.Length
+                m_Runtime.log.Info("[ObservationRestore] DwellObservations buffer=" + buffer.Length
                     + " restored=" + restoredCount
                     + " legacyTopologyFallback=" + restoredByLegacyTopologyCount
                     + " skippedSignatureMismatch=" + skippedSignatureMismatchCount);
@@ -1791,7 +1791,7 @@ namespace RapidTransitMod.Dispatch.Observation
             m_Runtime.m_TraversalSliceObservationCacheLoaded = true;
             if (RtLog.VerboseEnabled)
             {
-                m_Runtime.log.Info("[恢复] TraversalSliceObservations buffer=" + storedCount
+                m_Runtime.log.Info("[ObservationRestore] TraversalSliceObservations buffer=" + storedCount
                     + " restored=" + restoredCount
                     + " legacyRestored=" + legacyRestoredCount
                     + " removedMismatch=" + removedMismatchCount
@@ -1942,7 +1942,7 @@ namespace RapidTransitMod.Dispatch.Observation
             m_Runtime.m_BusSegObservationCacheLoaded = true;
             if (RtLog.VerboseEnabled)
             {
-                m_Runtime.log.Info("[恢复] BusSegObservations buffer=" + observations.Length
+                m_Runtime.log.Info("[ObservationRestore] BusSegObservations buffer=" + observations.Length
                     + " restored=" + restored);
             }
         }

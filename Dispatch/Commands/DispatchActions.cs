@@ -27,22 +27,6 @@ namespace RapidTransitMod.Dispatch.Commands
             m_Host.SetPublicTransport(vehicle, publicTransport);
         }
 
-        public void HoldDeparture(
-            Entity vehicle,
-            ref PublicTransport publicTransport,
-            uint nowFrame,
-            EntityCommandBuffer ecb)
-        {
-            publicTransport.m_DepartureFrame = nowFrame + 9999;
-            CommitPublicTransport(vehicle, publicTransport, ecb);
-        }
-
-        public void HoldDeparture(Entity vehicle, uint nowFrame, EntityCommandBuffer ecb)
-        {
-            PublicTransport publicTransport = m_Host.ReadPublicTransport(vehicle);
-            HoldDeparture(vehicle, ref publicTransport, nowFrame, ecb);
-        }
-
         public void HoldUntil(Entity vehicle, uint releaseFrame, EntityCommandBuffer ecb)
         {
             PublicTransport publicTransport = m_Host.ReadPublicTransport(vehicle);
@@ -64,14 +48,6 @@ namespace RapidTransitMod.Dispatch.Commands
         {
             PublicTransport publicTransport = m_Host.ReadPublicTransport(vehicle);
             ForceDepart(vehicle, ref publicTransport, nowFrame, ecb);
-        }
-
-        public void CommitAssistLaunch(Entity vehicle, uint nowFrame, EntityCommandBuffer ecb)
-        {
-            PublicTransport publicTransport = m_Host.ReadPublicTransport(vehicle);
-            publicTransport.m_DepartureFrame = nowFrame > 0 ? nowFrame - 1 : 0;
-            publicTransport.m_State &= ~PublicTransportFlags.Boarding;
-            CommitPublicTransport(vehicle, publicTransport, ecb);
         }
 
         public void ReleaseDeparture(Entity vehicle, uint nowFrame, EntityCommandBuffer ecb)

@@ -59,12 +59,10 @@ namespace RapidTransitMod
         internal VehicleView Vehicles;
         internal LineView Lines;
         internal RapidTransitMod.Dispatch.Observation.Query Obs;
-        internal NativeHashMap<Entity, int> Spawns;
-        internal NativeHashMap<Entity, uint> SpawnFrames;
+        internal Func<Entity, int> SpawnTarget;
         internal NativeHashMap<Entity, int> CachedWp;
         internal DispatchCommandApplier Commands;
         internal DispatchEngine Runtime;
-        internal DispatchScheduler Scheduler;
         internal RuntimeVehicleLabels Labels;
         internal RuntimeFramePlan FramePlan;
 
@@ -80,10 +78,8 @@ namespace RapidTransitMod
         internal Func<Entity, float> ReadDispatch;
         internal Func<bool, BufferLookup<RouteVehicle>> RouteVehicles;
         internal Func<bool, BufferLookup<RouteWaypoint>> RouteWaypoints;
-        internal Func<Entity, BufferLookup<RouteVehicle>, int> CountVehicles;
         internal Func<Entity, DynamicBuffer<RouteWaypoint>, int> ComputeWp;
-        internal Func<Entity, Entity, DynamicBuffer<RouteWaypoint>, uint, float, float> PrepEta;
-        internal Func<Entity, Entity, DynamicBuffer<RouteWaypoint>, uint, float, bool, float> RunEta;
+        internal LineTimes Times;
         internal Progress TryProgress;
         internal Blocker TryBlocker;
         internal SessionArrival TrySessionArrival;

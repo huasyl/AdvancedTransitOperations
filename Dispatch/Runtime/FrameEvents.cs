@@ -82,17 +82,18 @@ namespace RapidTransitMod.Dispatch.Runtime
         public readonly int TargetMinute;
         public readonly int SlotMinute;
         public readonly int ActualMinute;
-        public readonly bool Late;
         public readonly string Reason;
+        public readonly DateTime ServiceDate;
 
-        public DispatchBusinessFact(int targetMinute, int slotMinute, int actualMinute, bool late, string reason)
+        public DispatchBusinessFact(int targetMinute, int slotMinute, int actualMinute, string reason,
+            DateTime serviceDate = default)
         {
             Exists = true;
             TargetMinute = targetMinute;
             SlotMinute = slotMinute;
             ActualMinute = actualMinute;
-            Late = late;
             Reason = reason;
+            ServiceDate = serviceDate.Date;
         }
     }
 
@@ -284,22 +285,23 @@ namespace RapidTransitMod.Dispatch.Runtime
             CountFact();
         }
 
-        public void AppendLaunchConfirmed(Entity vehicle, uint frame, Entity line, int targetMinute, int slotMinute, int actualMinute, bool late, string reason)
+        public void AppendLaunchConfirmed(Entity vehicle, uint frame, Entity line, int targetMinute, int slotMinute,
+            int actualMinute, string reason, DateTime serviceDate)
         {
             AppendDispatch(vehicle, frame, DispatchFactKind.LaunchConfirmed, default, default, line,
-                fact: new DispatchBusinessFact(targetMinute, slotMinute, actualMinute, late, reason));
+                fact: new DispatchBusinessFact(targetMinute, slotMinute, actualMinute, reason, serviceDate));
         }
 
         public void AppendUnplannedRun(Entity vehicle, uint frame, Entity line, string reason)
         {
             AppendDispatch(vehicle, frame, DispatchFactKind.UnplannedRun, default, default, line,
-                fact: new DispatchBusinessFact(-1, -1, -1, false, reason));
+                fact: new DispatchBusinessFact(-1, -1, -1, reason));
         }
 
         public void AppendRetireRequested(Entity vehicle, uint frame, Entity line, string reason)
         {
             AppendDispatch(vehicle, frame, DispatchFactKind.RetireRequested, default, default, line,
-                fact: new DispatchBusinessFact(-1, -1, -1, false, reason));
+                fact: new DispatchBusinessFact(-1, -1, -1, reason));
         }
 
         public void AppendStop(StopFact fact, uint frame)

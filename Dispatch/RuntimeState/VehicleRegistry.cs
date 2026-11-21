@@ -49,9 +49,15 @@ namespace RapidTransitMod
                 return;
 
             if (m_Store.Line.TryGetValue(vehicle, out Entity oldLine))
+            {
+                if (oldLine != line)
+                    ClearTheoryWait(vehicle);
                 m_Worksets.RemoveMode(vehicle);
+                m_Worksets.RemoveLine(vehicle, oldLine);
+            }
             m_Store.Line[vehicle] = line;
             m_Worksets.AddMode(vehicle, m_ModeOfLine(line));
+            m_Worksets.AddLine(vehicle, line);
             m_FramePlan?.AddStage(vehicle, RuntimeStageMask.Stop | RuntimeStageMask.Dispatch);
             if (!m_Restoring)
             {
@@ -74,6 +80,8 @@ namespace RapidTransitMod
             if (m_Store.State.TryGetValue(vehicle, out VehicleState oldState))
                 m_Worksets.RemoveState(vehicle, oldState);
             m_Store.State[vehicle] = state;
+            if (previous == VehicleState.Preparing && state != VehicleState.Preparing)
+                ClearTheoryWait(vehicle);
             m_Worksets.AddState(vehicle, state);
             if (state == VehicleState.Retiring)
                 m_FramePlan?.AddStage(vehicle, RuntimeStageMask.Retire);
@@ -81,57 +89,6 @@ namespace RapidTransitMod
                 m_FramePlan?.AddStage(vehicle, RuntimeStageMask.Dispatch);
             if (!m_Restoring)
                 m_Events.AppendDispatch(vehicle, m_Frame(), DispatchFactKind.State, previous, state, ReadLine(vehicle));
-        }
-
-        public void SetTarget(Entity vehicle, int targetMinute)
-        {
-            if (vehicle == Entity.Null)
-                return;
-
-            int previous = m_Store.TargetMinute.TryGetValue(vehicle, out int old) ? old : -1;
-            if (previous == targetMinute) return;
-            m_Store.TargetMinute[vehicle] = targetMinute;
-            m_FramePlan?.AddStage(vehicle, RuntimeStageMask.Dispatch);
-            if (!m_Restoring)
-                m_Events.AppendDispatch(vehicle, m_Frame(), DispatchFactKind.Target, default, default, ReadLine(vehicle), previous, targetMinute);
-        }
-
-        public void ClearTarget(Entity vehicle)
-        {
-            if (vehicle == Entity.Null)
-                return;
-
-            int previous = m_Store.TargetMinute.TryGetValue(vehicle, out int old) ? old : -1;
-            if (previous == -1) return;
-            m_Store.TargetMinute[vehicle] = -1;
-            m_FramePlan?.AddStage(vehicle, RuntimeStageMask.Dispatch);
-            if (!m_Restoring)
-                m_Events.AppendDispatch(vehicle, m_Frame(), DispatchFactKind.Target, default, default, ReadLine(vehicle), previous, -1);
-        }
-
-        public void SetSlot(Entity vehicle, int slotMinute)
-        {
-            if (vehicle == Entity.Null)
-                return;
-
-            int previous = m_Store.CurrentSlotMinute.TryGetValue(vehicle, out int old) ? old : -1;
-            if (previous == slotMinute) return;
-            m_Store.CurrentSlotMinute[vehicle] = slotMinute;
-            m_FramePlan?.AddStage(vehicle, RuntimeStageMask.Dispatch);
-            if (!m_Restoring)
-                m_Events.AppendDispatch(vehicle, m_Frame(), DispatchFactKind.Slot, default, default, ReadLine(vehicle), previous, slotMinute);
-        }
-
-        public void ClearSlot(Entity vehicle)
-        {
-            if (vehicle == Entity.Null)
-                return;
-
-            if (!m_Store.CurrentSlotMinute.TryGetValue(vehicle, out int previous)) return;
-            m_Store.CurrentSlotMinute.Remove(vehicle);
-            m_FramePlan?.AddStage(vehicle, RuntimeStageMask.Dispatch);
-            if (!m_Restoring)
-                m_Events.AppendDispatch(vehicle, m_Frame(), DispatchFactKind.Slot, default, default, ReadLine(vehicle), previous, -1);
         }
 
         public void SetIdle(Entity vehicle, uint frame)
@@ -153,7 +110,7 @@ namespace RapidTransitMod
             m_FramePlan?.ClearDeadline(vehicle, DeadlineKind.Idle);
         }
 
-        public void SetPreparing(Entity vehicle, uint frame)
+        public void SetPreparingStartFrame(Entity vehicle, uint frame)
         {
             if (vehicle == Entity.Null)
                 return;
@@ -162,12 +119,34 @@ namespace RapidTransitMod
             m_FramePlan?.AddStage(vehicle, RuntimeStageMask.Dispatch);
         }
 
-        public void ClearPreparing(Entity vehicle)
+        public void SetEstimatedOriginArrivalFrame(Entity vehicle, uint frame)
+        {
+            if (vehicle == Entity.Null)
+                return;
+
+            ClearTheoryWait(vehicle);
+            m_Store.EstimatedOriginArrivalFrame[vehicle] = frame;
+        }
+
+        public void SetTheoryWait(Entity vehicle, uint frame)
+        {
+            if (vehicle == Entity.Null)
+                return;
+
+            m_Store.EstimatedOriginArrivalFrame.Remove(vehicle);
+            m_Store.WaitingForTheory[vehicle] = frame;
+        }
+
+        public void ClearTheoryWait(Entity vehicle) => m_Store.WaitingForTheory.Remove(vehicle);
+
+        public void ClearPreparingData(Entity vehicle)
         {
             if (vehicle == Entity.Null)
                 return;
 
             m_Store.PreparingStartFrame.Remove(vehicle);
+            m_Store.EstimatedOriginArrivalFrame.Remove(vehicle);
+            ClearTheoryWait(vehicle);
             m_FramePlan?.AddStage(vehicle, RuntimeStageMask.Dispatch);
         }
 
@@ -189,39 +168,21 @@ namespace RapidTransitMod
             m_FramePlan?.AddStage(vehicle, RuntimeStageMask.Dispatch);
         }
 
-        public void SetCooldown(Entity vehicle, uint frame)
+        public void SetSpawnOrderRequestFrame(Entity vehicle, uint frame)
         {
             if (vehicle == Entity.Null)
                 return;
 
-            m_Store.LaunchCooldownUntil[vehicle] = frame;
-            m_FramePlan?.SetDeadline(vehicle, DeadlineKind.LaunchCooldown, frame);
-        }
-
-        public void ClearCooldown(Entity vehicle)
-        {
-            if (vehicle == Entity.Null)
-                return;
-
-            m_Store.LaunchCooldownUntil.Remove(vehicle);
-            m_FramePlan?.ClearDeadline(vehicle, DeadlineKind.LaunchCooldown);
-        }
-
-        public void SetDispatch(Entity vehicle, uint frame)
-        {
-            if (vehicle == Entity.Null)
-                return;
-
-            m_Store.DispatchRequestStartFrame[vehicle] = frame;
+            m_Store.SpawnOrderRequestFrame[vehicle] = frame;
             m_FramePlan?.AddStage(vehicle, RuntimeStageMask.Dispatch);
         }
 
-        public void ClearDispatch(Entity vehicle)
+        public void ClearSpawnOrderRequestFrame(Entity vehicle)
         {
             if (vehicle == Entity.Null)
                 return;
 
-            m_Store.DispatchRequestStartFrame.Remove(vehicle);
+            m_Store.SpawnOrderRequestFrame.Remove(vehicle);
             m_FramePlan?.AddStage(vehicle, RuntimeStageMask.Dispatch);
         }
 
@@ -243,77 +204,6 @@ namespace RapidTransitMod
             m_Store.NearingTerminus.Remove(vehicle);
             m_SetDemand?.Invoke(vehicle, RuntimeDemandMask.InboundWatch, false);
             m_FramePlan?.AddStage(vehicle, RuntimeStageMask.Dispatch);
-        }
-
-        public void SetOriginCandidate(Entity vehicle, uint frame)
-        {
-            if (vehicle == Entity.Null)
-                return;
-
-            if (m_Store.OriginArrivalCandidateSinceFrame.ContainsKey(vehicle))
-                return;
-
-            m_Store.OriginArrivalCandidateSinceFrame[vehicle] = frame;
-            m_FramePlan?.SetDeadline(vehicle, DeadlineKind.OriginSettle, unchecked(frame + 180u));
-            m_SetDemand?.Invoke(vehicle, RuntimeDemandMask.OriginCandidate, true);
-        }
-
-        public void ClearOriginCandidate(Entity vehicle)
-        {
-            if (vehicle == Entity.Null)
-                return;
-
-            m_Store.OriginArrivalCandidateSinceFrame.Remove(vehicle);
-            m_FramePlan?.ClearDeadline(vehicle, DeadlineKind.OriginSettle);
-            m_SetDemand?.Invoke(vehicle, RuntimeDemandMask.OriginCandidate, false);
-        }
-
-        public void SetReady(
-            Entity vehicle,
-            uint startFrame,
-            double waitMinutes,
-            ClockSnapshot clockSnapshot)
-        {
-            if (vehicle == Entity.Null)
-                return;
-
-            uint readyFrame = unchecked(startFrame + clockSnapshot.ToFramesCeil(waitMinutes));
-            m_Store.ForcedOriginReadyFrame[vehicle] = new ReadyClockState(startFrame, waitMinutes, readyFrame);
-            m_FramePlan?.SetDeadline(vehicle, DeadlineKind.Ready, readyFrame);
-        }
-
-        public void ReprojectReady(
-            uint nowFrame,
-            ClockSnapshot oldClockSnapshot,
-            ClockSnapshot newClockSnapshot)
-        {
-            NativeArray<Entity> vehicles = m_Store.ForcedOriginReadyFrame.GetKeyArray(Allocator.Temp);
-            try
-            {
-                for (int vehicleIndex = 0; vehicleIndex < vehicles.Length; vehicleIndex++)
-                {
-                    Entity vehicle = vehicles[vehicleIndex];
-                    if (!m_Store.ForcedOriginReadyFrame.TryGetValue(vehicle, out ReadyClockState readyState))
-                        continue;
-                    if (nowFrame >= readyState.ReadyFrame)
-                    {
-                        ClearReady(vehicle);
-                        continue;
-                    }
-
-                    uint elapsedFrames = unchecked(nowFrame - readyState.StartFrame);
-                    double elapsedMinutes = oldClockSnapshot.ToMinutes(elapsedFrames);
-                    double remainingMinutes = Math.Max(0d, readyState.WaitMinutes - elapsedMinutes);
-                    uint readyFrame = unchecked(nowFrame + newClockSnapshot.ToFramesCeil(remainingMinutes));
-                    m_Store.ForcedOriginReadyFrame[vehicle] =
-                        new ReadyClockState(nowFrame, remainingMinutes, readyFrame);
-                    m_FramePlan?.SetDeadline(vehicle, DeadlineKind.Ready, readyFrame);
-                }
-            }
-            finally
-            {
-                vehicles.Dispose();
-            }
         }
 
         public void ReprojectIdle(uint nowFrame, ClockSnapshot oldClock, ClockSnapshot newClock)
@@ -339,33 +229,6 @@ namespace RapidTransitMod
             }
         }
 
-        public void ClearReady(Entity vehicle)
-        {
-            if (vehicle == Entity.Null)
-                return;
-
-            m_Store.ForcedOriginReadyFrame.Remove(vehicle);
-            m_FramePlan?.ClearDeadline(vehicle, DeadlineKind.Ready);
-        }
-
-        public void SetBoardingGrace(Entity vehicle, uint frame)
-        {
-            if (vehicle == Entity.Null)
-                return;
-
-            m_Store.ForcedOriginBoardingGraceUntil[vehicle] = frame;
-            m_FramePlan?.SetDeadline(vehicle, DeadlineKind.OriginBoardingGrace, frame);
-        }
-
-        public void ClearBoardingGrace(Entity vehicle)
-        {
-            if (vehicle == Entity.Null)
-                return;
-
-            m_Store.ForcedOriginBoardingGraceUntil.Remove(vehicle);
-            m_FramePlan?.ClearDeadline(vehicle, DeadlineKind.OriginBoardingGrace);
-        }
-
         public void Remove(Entity vehicle)
         {
             Entity line = ReadLine(vehicle);
@@ -379,10 +242,11 @@ namespace RapidTransitMod
                 m_PublishStopFact(new StopFact(StopFactKind.Removed, vehicle, line, -1, frame));
             }
             m_Worksets.RemoveMode(vehicle);
+            m_Worksets.RemoveLine(vehicle, line);
             if (m_Store.State.TryGetValue(vehicle, out state))
                 m_Worksets.RemoveState(vehicle, state);
             m_FramePlan?.ClearVehicle(vehicle);
-            m_SetDemand?.Invoke(vehicle, RuntimeDemandMask.DeparturePending | RuntimeDemandMask.OriginCandidate | RuntimeDemandMask.InboundWatch, false);
+            m_SetDemand?.Invoke(vehicle, RuntimeDemandMask.DeparturePending | RuntimeDemandMask.InboundWatch, false);
             m_Store.Remove(vehicle);
             MarkSchedulerDirty(line);
         }

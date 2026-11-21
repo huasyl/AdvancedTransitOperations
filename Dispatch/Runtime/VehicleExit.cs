@@ -57,6 +57,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 m_Runtime.m_RoadEventSource.RemoveVehicle(vehicle);
             m_Runtime.m_RouteProgress.Remove(vehicle);
             ClearHostFields(vehicle, reason);
+            m_Runtime.m_DispatchScheduler.Release(vehicle);
             m_Runtime.m_VehicleRegistry.Remove(vehicle);
             return context;
         }
@@ -100,8 +101,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_UICache.Remove(vehicle);
             m_Runtime.m_CachedWpIdx.Remove(vehicle);
             m_Runtime.m_PreparingFixCooldownUntil.Remove(vehicle);
-            m_Runtime.m_RuntimeEngine.ClearAssistLaunchPending(vehicle);
-            m_Runtime.m_SpawnIntentTrace?.Remove(vehicle);
             m_Runtime.m_RuntimeLog.ClearVehicle(vehicle);
             m_Runtime.m_StationContextQuery.RemoveVehicle(vehicle);
             m_Runtime.m_CommandApplier.RemoveRetireHandoff(vehicle);

@@ -22,6 +22,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         internal long ClockEpoch;
         internal bool HoldApplied;
         internal bool CanBypass;
+        internal bool StallLogged;
         internal bool RestorePending;
         internal double RestoredWaitMinutes = -1d;
         internal int SavedTicksPerDay;

@@ -37,18 +37,21 @@ namespace RapidTransitMod.Dispatch.Observation
             int currentKey = ScheduleClock.DateKey(currentDate.Date);
             if (m_Store.MonitorCurrentDateKey == currentKey)
                 return false;
-            int previousKey = ScheduleClock.DateKey(ScheduleClock.OffsetDate(currentDate, -1, m_Port.ClockSnapshot().DaysPerYear));
+            int daysPerYear = m_Port.ClockSnapshot().DaysPerYear;
+            int previousKey = ScheduleClock.DateKey(ScheduleClock.OffsetDate(currentDate, -1, daysPerYear));
+            int nextKey = ScheduleClock.DateKey(ScheduleClock.OffsetDate(currentDate, 1, daysPerYear));
             bool changed = false;
             int[] existing = m_Store.DateSlots.Keys.ToArray();
             for (int i = 0; i < existing.Length; i++)
             {
-                if (existing[i] == currentKey || existing[i] == previousKey)
+                if (existing[i] == currentKey || existing[i] == previousKey || existing[i] == nextKey)
                     continue;
                 m_Store.DateSlots.Remove(existing[i]);
                 changed = true;
             }
             changed |= EnsureDateSlot(currentKey);
             changed |= EnsureDateSlot(previousKey);
+            changed |= EnsureDateSlot(nextKey);
             m_Store.MonitorCurrentDateKey = currentKey;
             return changed;
         }
@@ -57,6 +60,7 @@ namespace RapidTransitMod.Dispatch.Observation
             Entity line,
             Entity vehicle,
             AppliedMonitorRow row,
+            DateTime serviceDate,
             ClockSnapshot clock,
             uint launchFrame,
             out string endedKey)
@@ -64,14 +68,14 @@ namespace RapidTransitMod.Dispatch.Observation
             endedKey = string.Empty;
             if (row.Stops != null && row.Stops.Length > MaxStopsPerTrip)
             {
-                NoteOverflow("trip-stop-capacity", ScheduleClock.DateKey(ScheduleClock.ServiceDate(clock, row.SlotMinute)));
+                NoteOverflow("trip-stop-capacity", ScheduleClock.DateKey(serviceDate));
                 return string.Empty;
             }
             if (!ValidRow(line, row) || vehicle == Entity.Null)
                 return string.Empty;
 
             TickDate(clock.NowDate);
-            DateTime serviceDate = ScheduleClock.ServiceDate(clock, row.SlotMinute);
+            serviceDate = serviceDate.Date;
             int serviceDateKey = ScheduleClock.DateKey(serviceDate);
             string key = MonitorKey(row.LineKey.ToString(), row.RowId, serviceDateKey);
             if (m_Store.ActiveTrips.TryGetValue(vehicle, out MonitorTrip active)
@@ -109,7 +113,6 @@ namespace RapidTransitMod.Dispatch.Observation
                 ? 0u
                 : clock.ToFramesCeil(1440d);
             m_Store.ActiveTrips[vehicle] = trip;
-            ClearMonitorClaim(vehicle);
             return trip.Key;
         }
 
@@ -117,7 +120,6 @@ namespace RapidTransitMod.Dispatch.Observation
             Entity line,
             AppliedMonitorRow row,
             DateTime serviceDate,
-            bool final,
             MonitorTripState state,
             uint frame)
         {
@@ -133,9 +135,6 @@ namespace RapidTransitMod.Dispatch.Observation
             string key = MonitorKey(row.LineKey.ToString(), row.RowId, serviceDateKey);
             if (ContainsMonitorKey(key))
                 return string.Empty;
-            if (!final && HasMonitorClaim(line, row.SlotMinute, serviceDate))
-                return string.Empty;
-
             MonitorTrip trip = BuildMonitorTrip(
                 line,
                 Entity.Null,
@@ -144,7 +143,6 @@ namespace RapidTransitMod.Dispatch.Observation
                 state,
                 frame);
             Archive(trip);
-            ClearMonitorSlotClaim(line, row.SlotMinute, serviceDate);
             return trip.Key;
         }
 
@@ -324,8 +322,6 @@ namespace RapidTransitMod.Dispatch.Observation
 
         internal string MonitorIssueCode => m_Store.MonitorIssueCode;
 
-        internal bool MonitorClaimsRestored => m_Store.MonitorClaimsRestored;
-
         internal bool TryMonitor(string key, out MonitorTrip trip, out bool active)
         {
             foreach (MonitorTrip value in m_Store.ActiveTrips.Values)
@@ -397,49 +393,6 @@ namespace RapidTransitMod.Dispatch.Observation
             m_Store.MonitorCurrentDateKey = 0;
             m_Store.MonitorOverflowReason = string.Empty;
             m_Store.MonitorIssueCode = string.Empty;
-            m_Store.MonitorClaims.Clear();
-            m_Store.VehicleMonitorClaims.Clear();
-            m_Store.MonitorClaimsRestored = false;
-        }
-
-        internal void RestoreMonitorClaims(
-            IReadOnlyList<MonitorClaimSeed> seeds,
-            ClockSnapshot clock)
-        {
-            if (m_Store.MonitorClaimsRestored)
-                return;
-
-            if (seeds != null)
-            {
-                for (int i = 0; i < seeds.Count; i++)
-                {
-                    MonitorClaimSeed seed = seeds[i];
-                    if (seed.Vehicle == Entity.Null
-                        || seed.Line == Entity.Null
-                        || seed.SlotMinute < 0
-                        || seed.SlotMinute >= 1440)
-                    {
-                        continue;
-                    }
-
-                    int serviceDateKey = ScheduleClock.DateKey(
-                        ScheduleClock.MonitorOccurrenceDate(clock, seed.SlotMinute));
-                    MonitorSlotKey key = new MonitorSlotKey(seed.Line, seed.SlotMinute, serviceDateKey);
-                    if (m_Store.MonitorClaims.ContainsKey(key)
-                        || m_Store.VehicleMonitorClaims.ContainsKey(seed.Vehicle))
-                    {
-                        continue;
-                    }
-
-                    m_Store.MonitorClaims[key] = new MonitorClaim
-                    {
-                        Vehicle = seed.Vehicle
-                    };
-                    m_Store.VehicleMonitorClaims[seed.Vehicle] = key;
-                }
-            }
-
-            m_Store.MonitorClaimsRestored = true;
         }
 
         private bool EnsureDateSlot(int dateKey)
@@ -555,7 +508,6 @@ namespace RapidTransitMod.Dispatch.Observation
             {
                 m_Store.ActiveTrips.Remove(trip.Vehicle);
             }
-            ClearMonitorClaim(trip.Vehicle);
             if (!CanArchive(trip))
                 return false;
 
@@ -608,8 +560,8 @@ namespace RapidTransitMod.Dispatch.Observation
             long days = ScheduleClock.GameDay(clock.NowDate, clock.DaysPerYear)
                 - ScheduleClock.GameDay(serviceDate, clock.DaysPerYear);
             long minute = days * 1440L + clock.NowMinute;
-            if (minute < int.MinValue)
-                return int.MinValue;
+            if (minute < 0)
+                return 0;
             if (minute > int.MaxValue)
                 return int.MaxValue;
             return (int)minute;
@@ -1057,100 +1009,6 @@ namespace RapidTransitMod.Dispatch.Observation
             {
                 trips.Add(trip);
             }
-        }
-
-        private void RecordMonitorClaim(
-            Entity line,
-            Entity vehicle,
-            int slotMinute,
-            uint frame)
-        {
-            if (line == Entity.Null || vehicle == Entity.Null || slotMinute < 0)
-                return;
-
-            ClearMonitorClaim(vehicle);
-            ClockSnapshot clock = m_Port.ClockSnapshot();
-            int serviceDateKey = ScheduleClock.DateKey(
-                ScheduleClock.MonitorOccurrenceDate(clock, slotMinute));
-            MonitorSlotKey key = new MonitorSlotKey(line, slotMinute, serviceDateKey);
-            m_Store.MonitorClaims[key] = new MonitorClaim
-            {
-                Vehicle = vehicle
-            };
-            m_Store.VehicleMonitorClaims[vehicle] = key;
-        }
-
-        private void ClearMonitorClaim(Entity vehicle)
-        {
-            if (vehicle == Entity.Null
-                || !m_Store.VehicleMonitorClaims.TryGetValue(vehicle, out MonitorSlotKey key))
-            {
-                return;
-            }
-
-            m_Store.VehicleMonitorClaims.Remove(vehicle);
-            if (m_Store.MonitorClaims.TryGetValue(key, out MonitorClaim claim)
-                && claim != null
-                && claim.Vehicle == vehicle)
-            {
-                m_Store.MonitorClaims.Remove(key);
-            }
-        }
-
-        private void ClearMonitorSlotClaim(Entity line, int slotMinute, DateTime serviceDate)
-        {
-            MonitorSlotKey key = new MonitorSlotKey(
-                line,
-                slotMinute,
-                ScheduleClock.DateKey(serviceDate));
-            if (!m_Store.MonitorClaims.TryGetValue(key, out MonitorClaim claim)
-                || claim == null)
-            {
-                return;
-            }
-
-            m_Store.MonitorClaims.Remove(key);
-            if (m_Store.VehicleMonitorClaims.TryGetValue(claim.Vehicle, out MonitorSlotKey vehicleKey)
-                && vehicleKey.Equals(key))
-            {
-                m_Store.VehicleMonitorClaims.Remove(claim.Vehicle);
-            }
-        }
-
-        private bool HasMonitorClaim(Entity line, int slotMinute, DateTime serviceDate)
-        {
-            return m_Store.MonitorClaims.ContainsKey(new MonitorSlotKey(
-                line,
-                slotMinute,
-                ScheduleClock.DateKey(serviceDate)));
-        }
-
-        internal void TargetBound(Entity line, Entity vehicle, int targetMinute, uint nowFrame, string reasonCode)
-        {
-            if (line == Entity.Null || vehicle == Entity.Null || targetMinute < 0)
-                return;
-
-            RecordMonitorClaim(line, vehicle, targetMinute, nowFrame);
-            if (m_Store.Session == null)
-                return;
-
-            Trip[] trips = GetTripActiveOccurrences(line, targetMinute, nowFrame);
-            if (trips.Length == 0)
-                return;
-
-            foreach (Trip trip in trips)
-            {
-                trip.State = trip.State == "pending" ? "bound" : trip.State;
-                trip.Vehicle = vehicle;
-                DateTime serviceDate = GameDate();
-                trip.ServiceDate = ServiceDate(serviceDate);
-                trip.ServiceDayIndex = DayIndex(serviceDate);
-                trip.ReasonCode = reasonCode ?? string.Empty;
-                trip.BindingConfidence = "target-bound";
-                trip.UpdatedFrame = nowFrame;
-                AddTripVehicleIndex(vehicle, trip);
-            }
-            m_Store.Session.UpdatedFrame = nowFrame;
         }
 
         internal void Launch(Entity line, Entity vehicle, int targetMinute, int actualMinute, uint launchFrame, bool lateDispatch)

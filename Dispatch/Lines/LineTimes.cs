@@ -1,4 +1,4 @@
-using Game.Objects;
+using Game.Simulation;
 using System.Collections.Generic;
 using Game.Common;
 using Game.Pathfind;
@@ -6,11 +6,15 @@ using Game.Prefabs;
 using Game.Routes;
 using Game.Vehicles;
 using RapidTransitMod.Dispatch.Runtime;
+using RapidTransitMod.Dispatch.Observation;
+using RapidTransitMod.Dispatch.Persistence;
+using RapidTransitMod.Dispatch.Scheduling;
 using RapidTransitMod.Core;
 using RapidTransitMod.TrackModel;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using Curve = Game.Net.Curve;
 
 namespace RapidTransitMod.Dispatch.Lines
 {
@@ -26,6 +30,33 @@ namespace RapidTransitMod.Dispatch.Lines
         }
     }
 
+    internal enum ArrivalKind : byte { Unknown, InStation, Estimated }
+    internal enum LeadSource : byte { Theory, History, Lap, Default, BusHistory, BusNone, Pending }
+    internal enum EtaSource : byte { None, Path, Monitor, Bus }
+    internal enum ArrivalMethod : byte
+    {
+        None, InStation, Outbound, OutboundExpired, Stop, Progress, CachedWaypoint, Lap, OutboundPending
+    }
+
+    internal readonly struct ArrivalBasis
+    {
+        internal readonly ArrivalMethod Method;
+        internal readonly EtaSource Source;
+        internal readonly int Waypoint;
+        internal readonly float Position;
+        internal readonly float Scale;
+
+        internal ArrivalBasis(ArrivalMethod method, EtaSource source = EtaSource.None,
+            int waypoint = -1, float position = -1f, float scale = 1f)
+        {
+            Method = method;
+            Source = source;
+            Waypoint = waypoint;
+            Position = position;
+            Scale = scale;
+        }
+    }
+
     internal sealed class LineTimes
     {
         private readonly LineTimesPort m_Port;
@@ -33,6 +64,21 @@ namespace RapidTransitMod.Dispatch.Lines
         private NativeList<float> m_RawSegmentFrames;
         private NativeList<float> m_SegmentFrames;
         private NativeList<float> m_StopFrames;
+        private NativeList<float> m_EtaSeg;
+        private NativeList<float> m_EtaDwell;
+        private NativeList<float> m_EtaLeft;
+        private readonly SimulationSystem m_Simulation;
+        private readonly VehicleView m_Vehicles;
+        private readonly StopRuntime m_Stops;
+        private readonly MonitorAverageStore m_Monitor;
+        private readonly DispatchCache m_Dispatch;
+        private readonly SpawnLeadTheory m_Theory;
+        private readonly LineStructureInvalidator m_Invalidator;
+        private readonly Dictionary<Entity, LineStopLayout> m_Layouts = new Dictionary<Entity, LineStopLayout>();
+        private readonly Dictionary<Entity, float> m_LineMeters = new Dictionary<Entity, float>();
+        private readonly Dictionary<Entity, bool> m_BusLines = new Dictionary<Entity, bool>();
+        private readonly Dictionary<Entity, bool> m_PendingLeadLines = new Dictionary<Entity, bool>();
+        private readonly HashSet<Entity> m_Tried = new HashSet<Entity>();
         private readonly List<FreeRange> m_FreeRanges = new List<FreeRange>();
         private readonly List<BusSegmentPlan> m_BusScratch = new List<BusSegmentPlan>(32);
         private readonly List<float> m_BusRawScratch = new List<float>(32);
@@ -120,9 +166,18 @@ namespace RapidTransitMod.Dispatch.Lines
             }
         }
 
-        public LineTimes(LineTimesPort port)
+        public LineTimes(LineTimesPort port, SimulationSystem simulation, VehicleView vehicles,
+            StopRuntime stops, MonitorAverageStore monitor, DispatchCache dispatch,
+            SpawnLeadTheory theory, LineStructureInvalidator invalidator)
         {
             m_Port = port;
+            m_Simulation = simulation;
+            m_Vehicles = vehicles;
+            m_Stops = stops;
+            m_Monitor = monitor;
+            m_Dispatch = dispatch;
+            m_Theory = theory;
+            m_Invalidator = invalidator;
         }
 
         public void Init()
@@ -131,6 +186,9 @@ namespace RapidTransitMod.Dispatch.Lines
             m_RawSegmentFrames = new NativeList<float>(256, Allocator.Persistent);
             m_SegmentFrames = new NativeList<float>(256, Allocator.Persistent);
             m_StopFrames = new NativeList<float>(256, Allocator.Persistent);
+            m_EtaSeg = new NativeList<float>(256, Allocator.Persistent);
+            m_EtaDwell = new NativeList<float>(256, Allocator.Persistent);
+            m_EtaLeft = new NativeList<float>(256, Allocator.Persistent);
         }
 
         public void Dispose()
@@ -139,6 +197,9 @@ namespace RapidTransitMod.Dispatch.Lines
             if (m_RawSegmentFrames.IsCreated) m_RawSegmentFrames.Dispose();
             if (m_SegmentFrames.IsCreated) m_SegmentFrames.Dispose();
             if (m_StopFrames.IsCreated) m_StopFrames.Dispose();
+            if (m_EtaSeg.IsCreated) m_EtaSeg.Dispose();
+            if (m_EtaDwell.IsCreated) m_EtaDwell.Dispose();
+            if (m_EtaLeft.IsCreated) m_EtaLeft.Dispose();
         }
 
         public void Clear()
@@ -147,6 +208,9 @@ namespace RapidTransitMod.Dispatch.Lines
             if (m_RawSegmentFrames.IsCreated) m_RawSegmentFrames.Clear();
             if (m_SegmentFrames.IsCreated) m_SegmentFrames.Clear();
             if (m_StopFrames.IsCreated) m_StopFrames.Clear();
+            if (m_EtaSeg.IsCreated) m_EtaSeg.Clear();
+            if (m_EtaDwell.IsCreated) m_EtaDwell.Clear();
+            if (m_EtaLeft.IsCreated) m_EtaLeft.Clear();
             m_FreeRanges.Clear();
             m_BusScratch.Clear();
             m_BusRawScratch.Clear();
@@ -155,6 +219,430 @@ namespace RapidTransitMod.Dispatch.Lines
             m_BusSourceSpanScratch.Clear();
             m_BusBuildIssue = false;
             m_BusMissingSeg.Clear();
+            m_Layouts.Clear();
+            m_LineMeters.Clear();
+            m_BusLines.Clear();
+            m_PendingLeadLines.Clear();
+            m_Tried.Clear();
+        }
+
+        public ArrivalKind Arrival(Entity vehicle, Entity line, out uint frame)
+            => Arrival(vehicle, line, out frame, out _);
+
+        public ArrivalKind Arrival(Entity vehicle, Entity line, out uint frame, out ArrivalBasis basis)
+        {
+            frame = 0u;
+            if (m_Stops.TryGetSession(vehicle, out Entity sessionLine, out int wp, out uint arrival)
+                && sessionLine == line && wp == 0)
+            {
+                frame = arrival;
+                basis = new ArrivalBasis(ArrivalMethod.InStation);
+                return ArrivalKind.InStation;
+            }
+
+            if (m_Vehicles.TryGetTheoryWait(vehicle, out _))
+            {
+                basis = new ArrivalBasis(ArrivalMethod.OutboundPending);
+                return ArrivalKind.Unknown;
+            }
+
+            uint now = m_Simulation.frameIndex;
+            bool hasEstimatedOriginArrival =
+                m_Vehicles.TryGetEstimatedOriginArrivalFrame(vehicle, out uint estimatedOriginArrivalFrame);
+            if (hasEstimatedOriginArrival && unchecked((int)(now - estimatedOriginArrivalFrame)) > 0)
+            {
+                basis = new ArrivalBasis(ArrivalMethod.OutboundExpired);
+                return ArrivalKind.Unknown;
+            }
+            if (hasEstimatedOriginArrival)
+            {
+                frame = estimatedOriginArrivalFrame;
+                basis = new ArrivalBasis(ArrivalMethod.Outbound);
+                return ArrivalKind.Estimated;
+            }
+
+            if (TryEtaProfile(line, out LineTimeProfileHeader profile))
+            {
+                float scale = EtaScale(vehicle, line, profile);
+                float remaining;
+                if (sessionLine == line && wp > 0 && wp < profile.m_Count)
+                {
+                    remaining = math.max(0f, scale * m_EtaDwell[profile.m_Offset + wp] - unchecked((int)(now - arrival)))
+                        + scale * m_EtaLeft[profile.m_Offset + wp];
+                    basis = new ArrivalBasis(ArrivalMethod.Stop, (EtaSource)profile.m_EtaSource, wp, -1f, scale);
+                }
+                else if (m_Port.TryRouteProgress(vehicle, out int next, out float position)
+                    && next >= 0 && next < profile.m_Count)
+                {
+                    int segment = next == 0 ? profile.m_Count - 1 : next - 1;
+                    remaining = m_EtaSeg[profile.m_Offset + segment] * (1f - math.saturate(position));
+                    if (next != 0)
+                        remaining += m_EtaDwell[profile.m_Offset + next] + m_EtaLeft[profile.m_Offset + next];
+                    remaining *= scale;
+                    basis = new ArrivalBasis(ArrivalMethod.Progress, (EtaSource)profile.m_EtaSource, next, position, scale);
+                }
+                else
+                {
+                    int cached = m_Port.CachedWaypointIndex(vehicle);
+                    if (cached < 0 || cached >= profile.m_Count)
+                        return LapArrival(vehicle, line, now, out frame, out basis);
+                    remaining = scale * m_EtaLeft[profile.m_Offset + cached];
+                    basis = new ArrivalBasis(ArrivalMethod.CachedWaypoint, (EtaSource)profile.m_EtaSource, cached, -1f, scale);
+                }
+                frame = AddFrames(now, remaining);
+                return ArrivalKind.Estimated;
+            }
+            return LapArrival(vehicle, line, now, out frame, out basis);
+        }
+
+        private ArrivalKind LapArrival(Entity vehicle, Entity line, uint now, out uint frame, out ArrivalBasis basis)
+        {
+            frame = 0u;
+            basis = new ArrivalBasis(ArrivalMethod.None);
+            if (IsBus(line)) return ArrivalKind.Unknown;
+            float lap = m_Port.TryLapFrames(vehicle, out uint observed) && observed > 0u
+                ? observed : m_Port.ReadLapFrames(line);
+            if (!(lap > 0f) || !m_Port.TryLapStartFrame(vehicle, out uint start))
+                return ArrivalKind.Unknown;
+            frame = AddFrames(now, math.max(0f, lap - unchecked((int)(now - start))));
+            basis = new ArrivalBasis(ArrivalMethod.Lap);
+            return ArrivalKind.Estimated;
+        }
+
+        private bool TryEtaProfile(Entity line, out LineTimeProfileHeader profile)
+        {
+            profile = default;
+            if (m_Port.IsLinePending(line)) return false;
+            if (m_Profiles.TryGetValue(line, out profile))
+                return profile.m_Count > 0 && profile.m_EtaSource != (byte)EtaSource.None;
+            if (!m_Tried.Add(line) || !m_Port.EntityManager.HasBuffer<RouteWaypoint>(line))
+                return false;
+            return Get(line, m_Port.EntityManager.GetBuffer<RouteWaypoint>(line, true), out profile)
+                && profile.m_EtaSource != (byte)EtaSource.None;
+        }
+
+        private float EtaScale(Entity vehicle, Entity line, LineTimeProfileHeader profile)
+        {
+            if (profile.m_EtaSource != (byte)EtaSource.Path) return 1f;
+            float total = m_EtaLeft[profile.m_Offset];
+            if (!(total > 0f)) return 1f;
+            float lap = m_Port.TryLapFrames(vehicle, out uint observed) && observed > 0u
+                ? observed : m_Port.ReadLapFrames(line);
+            float scale = lap / total;
+            return scale >= m_Port.EtaScaleMin && scale <= m_Port.EtaScaleMax ? scale : 1f;
+        }
+
+        private static uint AddFrames(uint frame, float frames)
+            => unchecked(frame + (uint)math.ceil(math.max(0f, frames)));
+
+        public float Lead(Entity line) => Lead(line, out _);
+
+        public float Lead(Entity line, out LeadSource source)
+            => ReadLead(line, out source, ensureTheory: true);
+
+        private float ReadLead(Entity line, out LeadSource source, bool ensureTheory)
+        {
+            float frames;
+            if (IsBus(line))
+            {
+                frames = m_Dispatch.Read(line);
+                source = frames > 0f ? LeadSource.BusHistory : LeadSource.BusNone;
+                return frames > 0f ? math.clamp(frames, m_Port.DispatchEstimateMinFrames,
+                    m_Port.ClockSnapshot().ToFramesCeil(60d)) : 0f;
+            }
+            if (ensureTheory && m_Port.EntityManager.HasBuffer<RouteWaypoint>(line))
+                m_Theory.Ensure(line, m_Port.EntityManager.GetBuffer<RouteWaypoint>(line, true));
+            if (m_Theory.TryRead(line, out frames)) source = LeadSource.Theory;
+            else if ((frames = m_Dispatch.Read(line)) > 0f) source = LeadSource.History;
+            else if ((frames = m_Port.ReadLapFrames(line) * 0.2f) > 0f) source = LeadSource.Lap;
+            else { frames = m_Port.DispatchEstimateDefaultFrames; source = LeadSource.Default; }
+            if (ensureTheory && source != LeadSource.Theory && m_Theory.IsPending(line))
+            {
+                source = LeadSource.Pending;
+                if (!m_PendingLeadLines.ContainsKey(line))
+                    m_PendingLeadLines.Add(line, false);
+            }
+            return math.max(m_Port.DispatchEstimateMinFrames, frames);
+        }
+
+        internal bool TryMarkSpawnDeferred(Entity line)
+        {
+            if (m_PendingLeadLines[line]) return false;
+            m_PendingLeadLines[line] = true;
+            return true;
+        }
+
+        internal List<Entity> TakeSettledLeadLines()
+        {
+            if (m_PendingLeadLines.Count == 0) return null;
+
+            List<Entity> settled = null;
+            foreach (Entity line in m_PendingLeadLines.Keys)
+            {
+                if (!m_Theory.IsPending(line))
+                    (settled ??= new List<Entity>()).Add(line);
+            }
+            if (settled != null)
+                foreach (Entity line in settled)
+                    m_PendingLeadLines.Remove(line);
+            return settled;
+        }
+
+        public bool TryEstimateNewVehicleOriginArrivalFrame(
+            Entity vehicle, Entity line, uint? spawnOrderRequestFrame, uint registerFrame,
+            out uint result, uint? settleFrame = null)
+        {
+            float lead = ReadLead(line, out LeadSource source, ensureTheory: !settleFrame.HasValue);
+            if (source == LeadSource.Pending)
+            {
+                if (RtLog.VerboseEnabled)
+                    m_Port.Log("[OutboundEta] line=" + line.Index + " vehicle=" + vehicle.Index + " method=pending"
+                        + " request=" + (spawnOrderRequestFrame.HasValue ? spawnOrderRequestFrame.Value.ToString() : "-")
+                        + " register=" + registerFrame + " lead=" + lead.ToString("F0") + "(" + source + ")");
+                result = 0u;
+                return false;
+            }
+            float prep = source == LeadSource.Theory || source == LeadSource.History || source == LeadSource.BusHistory
+                ? m_Dispatch.ReadPrep(line) : 0f;
+            float travel = math.max(0f, lead - prep);
+            string method = "order";
+            string bound = null;
+            string fallback = null;
+            float pathLeft = -1f;
+            float remainingMeters = 0f;
+            float totalMeters = 0f;
+            uint baseFrame = spawnOrderRequestFrame.HasValue ? registerFrame : settleFrame ?? registerFrame;
+            if (spawnOrderRequestFrame.HasValue)
+            {
+                uint requested = AddFrames(spawnOrderRequestFrame.Value, lead);
+                uint registered = AddFrames(registerFrame, travel);
+                bool byRequest = unchecked((int)(requested - registered)) >= 0;
+                result = byRequest ? requested : registered;
+                bound = byRequest ? "request" : "register";
+            }
+            else
+            {
+                method = "lead";
+                result = AddFrames(baseFrame, lead);
+                fallback = ReadPathMeters(vehicle, line, out remainingMeters, out totalMeters);
+                if (fallback == null)
+                {
+                    method = "path";
+                    pathLeft = math.saturate(remainingMeters / totalMeters);
+                    result = AddFrames(baseFrame, travel * pathLeft);
+                }
+            }
+            if (RtLog.VerboseEnabled)
+            {
+                m_Port.Log("[OutboundEta] line=" + line.Index + " vehicle=" + vehicle.Index
+                    + " method=" + method + (bound != null ? " bound=" + bound : string.Empty)
+                    + (settleFrame.HasValue ? " stage=settle" : string.Empty)
+                    + " request=" + (spawnOrderRequestFrame.HasValue ? spawnOrderRequestFrame.Value.ToString() : "-")
+                    + " register=" + registerFrame + " lead=" + lead.ToString("F0") + "(" + source + ")"
+                    + " prep=" + prep.ToString("F0") + " travel=" + travel.ToString("F0")
+                    + " pathLeft=" + (pathLeft >= 0f ? pathLeft.ToString("F2") : "-")
+                    + (pathLeft >= 0f ? " meters=" + remainingMeters.ToString("F1") + "/" + totalMeters.ToString("F1") : string.Empty)
+                    + (fallback != null ? " fallback=" + fallback : string.Empty)
+                    + " result=" + result
+                    + " resultIn=" + m_Port.ClockSnapshot().ToMinutes(unchecked((int)(result - baseFrame))).ToString("F1") + "min");
+            }
+            return true;
+        }
+
+        private string ReadPathMeters(Entity vehicle, Entity line, out float remaining, out float total)
+        {
+            EntityManager em = m_Port.EntityManager;
+            remaining = 0f;
+            PathInformation info = em.HasComponent<PathInformation>(vehicle)
+                ? em.GetComponentData<PathInformation>(vehicle) : default;
+            total = info.m_Distance;
+            if (total <= 0f) return "distance";
+            if (!em.HasComponent<PathOwner>(vehicle)) return "path-state";
+            PathOwner owner = em.GetComponentData<PathOwner>(vehicle);
+            if ((owner.m_State & (PathFlags.Pending | PathFlags.Failed | PathFlags.Obsolete | PathFlags.Updated)) != 0)
+                return "path-state";
+            Entity target = em.HasComponent<Target>(vehicle) ? em.GetComponentData<Target>(vehicle).m_Target : Entity.Null;
+            if (info.m_Destination != target) return "destination";
+            if (!em.HasBuffer<RouteWaypoint>(line)) return "target";
+            DynamicBuffer<RouteWaypoint> waypoints = em.GetBuffer<RouteWaypoint>(line, true);
+            if (waypoints.Length == 0 || target != waypoints[0].m_Waypoint) return "target";
+
+            if (IsBus(line))
+            {
+                if (em.HasComponent<CarCurrentLane>(vehicle))
+                {
+                    CarCurrentLane lane = em.GetComponentData<CarCurrentLane>(vehicle);
+                    remaining += LaneMeters(em, lane.m_Lane, lane.m_CurvePosition.z - lane.m_CurvePosition.x);
+                }
+                if (em.HasBuffer<CarNavigationLane>(vehicle))
+                {
+                    DynamicBuffer<CarNavigationLane> lanes = em.GetBuffer<CarNavigationLane>(vehicle, true);
+                    foreach (CarNavigationLane lane in lanes)
+                        remaining += LaneMeters(em, lane.m_Lane, lane.m_CurvePosition.y - lane.m_CurvePosition.x);
+                }
+            }
+            else
+            {
+                if (em.HasBuffer<LayoutElement>(vehicle))
+                {
+                    DynamicBuffer<LayoutElement> layout = em.GetBuffer<LayoutElement>(vehicle, true);
+                    if (layout.Length > 0 && em.HasComponent<TrainCurrentLane>(layout[0].m_Vehicle))
+                    {
+                        TrainBogieLane front = em.GetComponentData<TrainCurrentLane>(layout[0].m_Vehicle).m_Front;
+                        remaining += LaneMeters(em, front.m_Lane, front.m_CurvePosition.w - front.m_CurvePosition.y);
+                    }
+                }
+                if (em.HasBuffer<TrainNavigationLane>(vehicle))
+                {
+                    DynamicBuffer<TrainNavigationLane> lanes = em.GetBuffer<TrainNavigationLane>(vehicle, true);
+                    foreach (TrainNavigationLane lane in lanes)
+                        remaining += LaneMeters(em, lane.m_Lane, lane.m_CurvePosition.y - lane.m_CurvePosition.x);
+                }
+            }
+            if (em.HasBuffer<PathElement>(vehicle))
+            {
+                DynamicBuffer<PathElement> route = em.GetBuffer<PathElement>(vehicle, true);
+                for (int index = owner.m_ElementIndex; index < route.Length; index++)
+                {
+                    PathElement element = route[index];
+                    remaining += LaneMeters(em, element.m_Target, element.m_TargetDelta.y - element.m_TargetDelta.x);
+                }
+            }
+            return null;
+        }
+
+        private static float LaneMeters(EntityManager em, Entity lane, float delta)
+            => em.HasComponent<Curve>(lane) ? em.GetComponentData<Curve>(lane).m_Length * math.abs(delta) : 0f;
+
+        public bool TryLineMeters(Entity line, out float meters)
+        {
+            if (m_LineMeters.TryGetValue(line, out meters)) return true;
+            meters = 0f;
+            EntityManager em = m_Port.EntityManager;
+            if (line == Entity.Null || !em.HasBuffer<RouteSegment>(line)) return false;
+            DynamicBuffer<RouteSegment> segments = em.GetBuffer<RouteSegment>(line, true);
+            if (segments.Length == 0) return false;
+            for (int i = 0; i < segments.Length; i++)
+            {
+                Entity segment = segments[i].m_Segment;
+                if (!em.HasComponent<PathInformation>(segment)) return false;
+                float distance = em.GetComponentData<PathInformation>(segment).m_Distance;
+                if (!(distance > 0f)) return false;
+                meters += distance;
+            }
+            m_LineMeters[line] = meters;
+            return true;
+        }
+
+        public void RefreshMonitor(MonitorChange change)
+        {
+            if (!change.Changed || m_Port.IsLinePending(change.Line)
+                || !m_Profiles.TryGetValue(change.Line, out LineTimeProfileHeader profile)
+                || !m_Port.EntityManager.HasBuffer<RouteWaypoint>(change.Line)) return;
+            RebuildEta(change.Line, m_Port.EntityManager.GetBuffer<RouteWaypoint>(change.Line, true), ref profile);
+            m_Profiles[change.Line] = profile;
+        }
+
+        public void RebuildAll()
+        {
+            m_Tried.Clear();
+            using var lines = m_Profiles.GetKeyArray(Allocator.Temp);
+            for (int i = 0; i < lines.Length; i++)
+            {
+                Entity line = lines[i];
+                if (!m_Port.EntityManager.Exists(line) || m_Port.IsLinePending(line)
+                    || !m_Port.EntityManager.HasBuffer<RouteWaypoint>(line)) continue;
+                LineTimeProfileHeader profile = m_Profiles[line];
+                DynamicBuffer<RouteWaypoint> waypoints = m_Port.EntityManager.GetBuffer<RouteWaypoint>(line, true);
+                if (waypoints.Length != profile.m_Count) continue;
+                RebuildEta(line, waypoints, ref profile);
+                m_Profiles[line] = profile;
+            }
+        }
+
+        private void RebuildEta(Entity line, DynamicBuffer<RouteWaypoint> waypoints, ref LineTimeProfileHeader profile)
+        {
+            int offset = profile.m_Offset;
+            if (IsBus(line))
+            {
+                for (int i = 0; i < profile.m_Count; i++)
+                {
+                    m_EtaSeg[offset + i] = m_SegmentFrames[offset + i];
+                    m_EtaDwell[offset + i] = i == 0 ? 0f : m_StopFrames[offset + i];
+                }
+                profile.m_EtaSource = (byte)EtaSource.Bus;
+            }
+            else
+            {
+                // 全部站间都有样本后整线切换，原剖面保留给轨道、待避与规划器。
+                bool monitor = TryMonitorLayout(line, profile.m_Count, out LineStopLayout layout);
+                if (monitor)
+                {
+                    for (int i = 0; i < layout.StopCount; i++)
+                    {
+                        if (!m_Monitor.TryAverage(line, i, out _)) { monitor = false; break; }
+                    }
+                }
+                Entity prefab = m_Port.EntityManager.GetComponentData<PrefabRef>(line).m_Prefab;
+                TransportLineData data = m_Port.EntityManager.GetComponentData<TransportLineData>(prefab);
+                for (int i = 0; i < profile.m_Count; i++)
+                {
+                    m_EtaSeg[offset + i] = m_SegmentFrames[offset + i];
+                    m_EtaDwell[offset + i] = i == 0 ? 0f : monitor
+                        ? MonitorDwell(line, waypoints, i, data) : Stop(line, waypoints, i, data);
+                }
+                if (monitor)
+                {
+                    for (int i = 0; i < layout.StopCount; i++)
+                    {
+                        int start = layout[i].WaypointIndex;
+                        int end = layout[(i + 1) % layout.StopCount].WaypointIndex;
+                        float raw = 0f;
+                        int count = 0;
+                        int cursor = start;
+                        do { raw += m_SegmentFrames[offset + cursor]; count++; cursor = (cursor + 1) % profile.m_Count; } while (cursor != end);
+                        m_Monitor.TryAverage(line, i, out float average);
+                        cursor = start;
+                        do
+                        {
+                            m_EtaSeg[offset + cursor] = raw > 0f ? average * m_SegmentFrames[offset + cursor] / raw : average / count;
+                            cursor = (cursor + 1) % profile.m_Count;
+                        } while (cursor != end);
+                    }
+                }
+                profile.m_EtaSource = (byte)(monitor ? EtaSource.Monitor : EtaSource.Path);
+            }
+            RebuildEtaLeft(profile);
+        }
+
+        private void RebuildEtaLeft(LineTimeProfileHeader profile)
+        {
+            int offset = profile.m_Offset;
+            float left = 0f;
+            for (int i = profile.m_Count - 1; i >= 0; i--)
+            {
+                left = m_EtaSeg[offset + i] + (i + 1 < profile.m_Count ? m_EtaDwell[offset + i + 1] : 0f) + left;
+                m_EtaLeft[offset + i] = left;
+            }
+        }
+
+        private bool TryMonitorLayout(Entity line, int waypointCount, out LineStopLayout layout)
+        {
+            if (!m_Layouts.TryGetValue(line, out layout)
+                && m_Invalidator.TryGetStableSignalInputs(line, out _, out layout)
+                && layout.WaypointCount == waypointCount)
+                m_Layouts[line] = layout;
+            return layout != null
+                && layout.WaypointCount == waypointCount
+                && m_Monitor.TryState(line, layout.StopSig, out MonitorAverageState state) && state.Ready;
+        }
+
+        private float MonitorDwell(Entity line, DynamicBuffer<RouteWaypoint> waypoints, int index, TransportLineData data)
+        {
+            if (!(StopBase(waypoints[index].m_Waypoint, data) > 0f)) return 0f;
+            if (m_Port.TryObservedWaypointStopFrames(line, index, out float dwell) && dwell > 0f) return dwell;
+            int minutes = m_Port.DwellMinutes(line);
+            return minutes > 0 ? m_Port.ClockSnapshot().ToFramesCeil(minutes) : StopBase(waypoints[index].m_Waypoint, data);
         }
 
         public float Segment(LineTimeProfileHeader profile, int segmentIndex)
@@ -268,6 +756,7 @@ namespace RapidTransitMod.Dispatch.Lines
                 m_Offset = offset,
                 m_Count = count
             };
+            RebuildEta(line, wps, ref profile);
             m_Profiles[line] = profile;
             return true;
         }
@@ -280,6 +769,7 @@ namespace RapidTransitMod.Dispatch.Lines
             Entity toWaypoint,
             Entity toStop)
         {
+            m_Tried.Remove(line);
             if (!IsBus(line)
                 || fromWaypoint == Entity.Null
                 || fromStop == Entity.Null
@@ -301,6 +791,10 @@ namespace RapidTransitMod.Dispatch.Lines
 
         public void InvalidateLine(Entity line)
         {
+            m_Layouts.Remove(line);
+            m_LineMeters.Remove(line);
+            m_BusLines.Remove(line);
+            m_Tried.Remove(line);
             m_BusMissingSeg.Remove(line);
             if (line == Entity.Null || !m_Profiles.TryGetValue(line, out LineTimeProfileHeader profile))
                 return;
@@ -319,6 +813,9 @@ namespace RapidTransitMod.Dispatch.Lines
             if (line == Entity.Null)
                 return new LineTimesChangeResult(kind, false);
 
+            m_LineMeters.Remove(line);
+            if (newLayout != null) m_Layouts[line] = newLayout;
+
             if (kind == LineTimesPlanKind.Remove)
             {
                 bool hadProfile = m_Profiles.ContainsKey(line);
@@ -332,6 +829,7 @@ namespace RapidTransitMod.Dispatch.Lines
             if (kind == LineTimesPlanKind.Rebuild)
             {
                 InvalidateLine(line);
+                if (newLayout != null) m_Layouts[line] = newLayout;
                 return new LineTimesChangeResult(kind, GetForStructure(line, waypoints, out _));
             }
 
@@ -342,6 +840,7 @@ namespace RapidTransitMod.Dispatch.Lines
                 || profile.m_Count != waypoints.Length)
             {
                 InvalidateLine(line);
+                if (newLayout != null) m_Layouts[line] = newLayout;
                 return new LineTimesChangeResult(
                     LineTimesPlanKind.Rebuild,
                     GetForStructure(line, waypoints, out _));
@@ -353,6 +852,7 @@ namespace RapidTransitMod.Dispatch.Lines
                 || profile.m_Offset + profile.m_Count > m_SegmentFrames.Length)
             {
                 InvalidateLine(line);
+                if (newLayout != null) m_Layouts[line] = newLayout;
                 return new LineTimesChangeResult(
                     LineTimesPlanKind.Rebuild,
                     GetForStructure(line, waypoints, out _));
@@ -362,6 +862,7 @@ namespace RapidTransitMod.Dispatch.Lines
             if (!MarkAffectedSegments(newLayout, impact, affectedSegments))
             {
                 InvalidateLine(line);
+                if (newLayout != null) m_Layouts[line] = newLayout;
                 return new LineTimesChangeResult(
                     LineTimesPlanKind.Rebuild,
                     GetForStructure(line, waypoints, out _));
@@ -375,6 +876,7 @@ namespace RapidTransitMod.Dispatch.Lines
                 if (!TryRawFrames(line, i, out refreshed[i]))
                 {
                     InvalidateLine(line);
+                    if (newLayout != null) m_Layouts[line] = newLayout;
                     return new LineTimesChangeResult(
                         LineTimesPlanKind.Rebuild,
                         GetForStructure(line, waypoints, out _));
@@ -395,6 +897,7 @@ namespace RapidTransitMod.Dispatch.Lines
                 if (i != 0)
                     profile.m_BaseLoopFrames += m_StopFrames[profile.m_Offset + i];
             }
+            RebuildEta(line, waypoints, ref profile);
             m_Profiles[line] = profile;
             return new LineTimesChangeResult(kind, true);
         }
@@ -492,6 +995,7 @@ namespace RapidTransitMod.Dispatch.Lines
                 m_Offset = offset,
                 m_Count = waypoints.Length
             };
+            RebuildEta(line, waypoints, ref profile);
             m_Profiles[line] = profile;
             if (!m_BusBuildIssue)
                 m_BusMissingSeg.Remove(line);
@@ -839,6 +1343,9 @@ namespace RapidTransitMod.Dispatch.Lines
                 m_RawSegmentFrames.Add(0f);
                 m_SegmentFrames.Add(0f);
                 m_StopFrames.Add(0f);
+                m_EtaSeg.Add(0f);
+                m_EtaDwell.Add(0f);
+                m_EtaLeft.Add(0f);
             }
             return appendedOffset;
         }
@@ -863,6 +1370,9 @@ namespace RapidTransitMod.Dispatch.Lines
                 m_RawSegmentFrames[offset + i] = 0f;
                 m_SegmentFrames[offset + i] = 0f;
                 m_StopFrames[offset + i] = 0f;
+                m_EtaSeg[offset + i] = 0f;
+                m_EtaDwell[offset + i] = 0f;
+                m_EtaLeft[offset + i] = 0f;
             }
         }
 
@@ -884,7 +1394,13 @@ namespace RapidTransitMod.Dispatch.Lines
 
         private bool IsBus(Entity line)
         {
-            return line != Entity.Null && m_Port.ResolveMode(line) == TransitMode.Bus;
+            if (line == Entity.Null) return false;
+            if (!m_BusLines.TryGetValue(line, out bool bus))
+            {
+                bus = m_Port.ResolveMode(line) == TransitMode.Bus;
+                m_BusLines[line] = bus;
+            }
+            return bus;
         }
 
         private ulong BusSignature(DynamicBuffer<RouteWaypoint> waypoints)
@@ -978,9 +1494,11 @@ namespace RapidTransitMod.Dispatch.Lines
 
             float previousStopFrames = m_StopFrames[stopOffset];
             float updatedStopFrames;
+            float etaStopFrames;
             if (isBus)
             {
                 updatedStopFrames = BusStop(line, waypointIndex);
+                etaStopFrames = updatedStopFrames;
             }
             else
             {
@@ -989,23 +1507,25 @@ namespace RapidTransitMod.Dispatch.Lines
                 Entity prefab = m_Port.EntityManager.GetComponentData<PrefabRef>(line).m_Prefab;
                 if (!m_Port.EntityManager.HasComponent<TransportLineData>(prefab))
                     return;
-                updatedStopFrames = Stop(
-                    line,
-                    waypoints,
-                    waypointIndex,
-                    m_Port.EntityManager.GetComponentData<TransportLineData>(prefab));
+                TransportLineData data = m_Port.EntityManager.GetComponentData<TransportLineData>(prefab);
+                updatedStopFrames = Stop(line, waypoints, waypointIndex, data);
+                etaStopFrames = profile.m_EtaSource == (byte)EtaSource.Monitor
+                    ? MonitorDwell(line, waypoints, waypointIndex, data)
+                    : updatedStopFrames;
             }
-            if (math.abs(previousStopFrames - updatedStopFrames) < 0.01f)
-                return;
-
-            m_StopFrames[stopOffset] = updatedStopFrames;
-            if (waypointIndex != 0)
+            if (math.abs(previousStopFrames - updatedStopFrames) >= 0.01f)
             {
-                profile.m_BaseLoopFrames = math.max(
-                    0f,
-                    profile.m_BaseLoopFrames + updatedStopFrames - previousStopFrames);
-                m_Profiles[line] = profile;
+                m_StopFrames[stopOffset] = updatedStopFrames;
+                if (waypointIndex != 0)
+                {
+                    profile.m_BaseLoopFrames = math.max(
+                        0f,
+                        profile.m_BaseLoopFrames + updatedStopFrames - previousStopFrames);
+                }
             }
+            m_EtaDwell[stopOffset] = waypointIndex == 0 ? 0f : isBus ? m_StopFrames[stopOffset] : etaStopFrames;
+            RebuildEtaLeft(profile);
+            m_Profiles[line] = profile;
         }
 
         private float BusStop(Entity line, int waypointIndex)
@@ -1100,190 +1620,6 @@ namespace RapidTransitMod.Dispatch.Lines
             return guard <= count ? math.max(0f, remaining) : float.MaxValue;
         }
 
-        public float ToWaypoint(
-            Entity vehicle,
-            Entity line,
-            DynamicBuffer<RouteWaypoint> waypoints,
-            int targetWaypointIndex)
-        {
-            if (Get(line, waypoints, out LineTimeProfileHeader profile))
-            {
-                float scale = Scale(vehicle, line, profile.m_BaseLoopFrames);
-                if (m_Port.TryRouteProgress(vehicle, out int nextWaypointIndex, out float segmentPosition))
-                {
-                    float profiledFrames = ProfileTo(profile, nextWaypointIndex, segmentPosition, targetWaypointIndex);
-                    if (profiledFrames != float.MaxValue)
-                        return profiledFrames * scale;
-                }
-
-                int cachedWaypointIndex = m_Port.CachedWaypointIndex(vehicle);
-                float cachedFrames = Depart(profile, cachedWaypointIndex, targetWaypointIndex);
-                if (cachedFrames != float.MaxValue)
-                    return cachedFrames * scale;
-            }
-
-            return float.MaxValue;
-        }
-
-        public float Prep(
-            Entity v,
-            Entity line,
-            DynamicBuffer<RouteWaypoint> wps,
-            float lineDurationFrames)
-        {
-            if (!m_Port.IsPreparingKnown(v))
-                return float.MaxValue;
-            float cachedFrames = m_Port.ReadDispatchFrames(line);
-            if (cachedFrames <= 0f)
-                cachedFrames = DispatchFallback(v, line, lineDurationFrames);
-            if (cachedFrames <= 0f)
-                return float.MaxValue;
-            cachedFrames = math.clamp(
-                cachedFrames,
-                m_Port.DispatchEstimateMinFrames,
-                m_Port.DispatchEstimateMaxFrames(TransportModeProfile.GetProfile(m_Port.ResolveMode(line)).Lifecycle));
-
-            if (wps.Length > 0
-                && m_Port.EntityManager.HasComponent<Target>(v)
-                && m_Port.EntityManager.GetComponentData<Target>(v).m_Target == wps[0].m_Waypoint
-                && m_Port.TryRouteProgress(v, out int nextWaypointIndex, out float segmentPosition)
-                && nextWaypointIndex == 0)
-            {
-                return math.max(0f, cachedFrames * (1f - math.saturate(segmentPosition)));
-            }
-
-            return cachedFrames;
-        }
-
-        public float Run(
-            Entity v,
-            Entity line,
-            DynamicBuffer<RouteWaypoint> wps,
-            uint nowFrame,
-            float lineDurationFrames,
-            bool lineHasHistory)
-        {
-            if (Get(line, wps, out var profile))
-            {
-                float scale = Scale(v, line, profile.m_BaseLoopFrames);
-
-                if (m_Port.TryRouteProgress(v, out int nextWaypointIndex, out float segmentPosition))
-                    return Remain(profile, nextWaypointIndex, segmentPosition) * scale;
-
-                int cachedWpIdx = m_Port.CachedWaypointIndex(v);
-                float cachedWaypointEstimate = CachedRemain(profile, cachedWpIdx);
-                if (cachedWaypointEstimate != float.MaxValue)
-                    return cachedWaypointEstimate * scale;
-            }
-
-            if (IsBus(line))
-            {
-                // 公交站间观测不完整时仅Running路线ETA未知；Preparing仍走现有Prep，Scheduler保持既有规则，禁止用raw或Lap补齐。
-                return float.MaxValue;
-            }
-
-            float lapFrames = m_Port.TryLapFrames(v, out uint vehicleLapFrames) && vehicleLapFrames > 0
-                ? vehicleLapFrames
-                : 0f;
-            if (lapFrames <= 0f && lineHasHistory && lineDurationFrames > 0f)
-                lapFrames = lineDurationFrames;
-
-            if (lapFrames <= 0f)
-                return float.MaxValue;
-
-            if (m_Port.TryLapStartFrame(v, out uint lapStartFrame))
-                return math.max(0f, lapFrames - (float)(nowFrame - lapStartFrame));
-
-            return float.MaxValue;
-        }
-
-        public float RunTo(
-            Entity vehicle,
-            Entity line,
-            DynamicBuffer<RouteWaypoint> waypoints,
-            int targetWaypointIndex)
-        {
-            return ToWaypoint(vehicle, line, waypoints, targetWaypointIndex);
-        }
-
-        public float ProfileTo(
-            LineTimeProfileHeader profile,
-            int nextWaypointIndex,
-            float segmentPosition,
-            int targetWaypointIndex)
-        {
-            int count = profile.m_Count;
-            if (count == 0
-                || nextWaypointIndex < 0
-                || nextWaypointIndex >= count
-                || targetWaypointIndex < 0
-                || targetWaypointIndex >= count)
-            {
-                return float.MaxValue;
-            }
-
-            int segmentIndex = nextWaypointIndex == 0 ? count - 1 : nextWaypointIndex - 1;
-            float remaining = m_SegmentFrames[profile.m_Offset + segmentIndex] * (1f - math.saturate(segmentPosition));
-            int cursor = nextWaypointIndex;
-            int guard = 0;
-
-            while (cursor != targetWaypointIndex && guard++ < count)
-            {
-                remaining += m_StopFrames[profile.m_Offset + cursor];
-                remaining += m_SegmentFrames[profile.m_Offset + cursor];
-                cursor = (cursor + 1) % count;
-            }
-
-            return guard <= count ? math.max(0f, remaining) : float.MaxValue;
-        }
-
-        public float Scale(Entity v, Entity line, float baseLoopFrames)
-        {
-            if (IsBus(line))
-                return 1f;
-            if (baseLoopFrames <= 0f) return 1f;
-            if (!m_Port.TryLapFrames(v, out uint observedLoopFrames) || observedLoopFrames == 0)
-                return 1f;
-
-            float rawScale = observedLoopFrames / baseLoopFrames;
-            if (rawScale < m_Port.EtaScaleMin || rawScale > m_Port.EtaScaleMax)
-                return 1f;
-            return rawScale;
-        }
-
-        public float Remain(LineTimeProfileHeader profile, int nextWaypointIndex, float segmentPosition)
-        {
-            int count = profile.m_Count;
-            if (count == 0) return float.MaxValue;
-            if (nextWaypointIndex < 0 || nextWaypointIndex >= count) return float.MaxValue;
-
-            int segmentIndex = nextWaypointIndex == 0 ? count - 1 : nextWaypointIndex - 1;
-            float remaining = m_SegmentFrames[profile.m_Offset + segmentIndex] * (1f - math.saturate(segmentPosition));
-
-            for (int waypointIndex = nextWaypointIndex; waypointIndex != 0; waypointIndex = (waypointIndex + 1) % count)
-            {
-                remaining += m_StopFrames[profile.m_Offset + waypointIndex];
-                remaining += m_SegmentFrames[profile.m_Offset + waypointIndex];
-            }
-            return math.max(0f, remaining);
-        }
-
-        public float CachedRemain(LineTimeProfileHeader profile, int cachedWpIdx)
-        {
-            int count = profile.m_Count;
-            if (count == 0) return float.MaxValue;
-            if (cachedWpIdx < 0 || cachedWpIdx >= count) return float.MaxValue;
-
-            float remaining = m_SegmentFrames[profile.m_Offset + cachedWpIdx];
-            int nextWaypointIndex = (cachedWpIdx + 1) % count;
-            for (int waypointIndex = nextWaypointIndex; waypointIndex != 0; waypointIndex = (waypointIndex + 1) % count)
-            {
-                remaining += m_StopFrames[profile.m_Offset + waypointIndex];
-                remaining += m_SegmentFrames[profile.m_Offset + waypointIndex];
-            }
-            return math.max(0f, remaining);
-        }
-
         public float StopBase(Entity waypoint, TransportLineData prefabLineData)
         {
             EntityManager entityManager = m_Port.EntityManager;
@@ -1302,51 +1638,6 @@ namespace RapidTransitMod.Dispatch.Lines
                     stopDuration = RouteUtils.GetStopDuration(prefabLineData, entityManager.GetComponentData<Game.Routes.TransportStop>(connectedStop));
             }
             return math.max(0f, stopDuration * 60f);
-        }
-
-        public float DispatchFallback(Entity v, Entity line, float lineDurationFrames)
-        {
-            float estimateFrames = 0f;
-            EntityManager entityManager = m_Port.EntityManager;
-            if (entityManager.HasComponent<Transform>(v))
-            {
-                float3 vehiclePos = entityManager.GetComponentData<Transform>(v).m_Position;
-                Entity stopA = FirstStop(line);
-                if (stopA != Entity.Null && entityManager.HasComponent<Transform>(stopA))
-                {
-                    float3 stopPos = entityManager.GetComponentData<Transform>(stopA).m_Position;
-                    float distanceMeters = math.distance(vehiclePos, stopPos);
-                    estimateFrames = distanceMeters * m_Port.DispatchFallbackFramesPerMeter;
-                }
-            }
-            if (estimateFrames <= 0f && lineDurationFrames > 0f)
-                estimateFrames = lineDurationFrames * 0.2f;
-            if (estimateFrames <= 0f)
-                estimateFrames = m_Port.DispatchEstimateDefaultFrames;
-            return math.clamp(
-                estimateFrames,
-                m_Port.DispatchEstimateMinFrames,
-                m_Port.DispatchEstimateMaxFrames(TransportModeProfile.GetProfile(m_Port.ResolveMode(line)).Lifecycle));
-        }
-
-        public Entity FirstStop(Entity line)
-        {
-            EntityManager entityManager = m_Port.EntityManager;
-            if (!entityManager.HasBuffer<RouteWaypoint>(line))
-                return Entity.Null;
-
-            DynamicBuffer<RouteWaypoint> wps = entityManager.GetBuffer<RouteWaypoint>(line, true);
-            if (wps.Length == 0)
-                return Entity.Null;
-            Entity stationA = wps[0].m_Waypoint;
-            if (stationA == Entity.Null
-                || !entityManager.Exists(stationA)
-                || !entityManager.HasComponent<Connected>(stationA))
-                return Entity.Null;
-            Entity connected = entityManager.GetComponentData<Connected>(stationA).m_Connected;
-            return connected != Entity.Null && entityManager.Exists(connected)
-                ? connected
-                : Entity.Null;
         }
 
         public float Duration(Entity line)

@@ -1,4 +1,5 @@
 using Game.Routes;
+using Game.Vehicles;
 using Unity.Entities;
 
 namespace RapidTransitMod.Dispatch.Lines
@@ -14,7 +15,13 @@ namespace RapidTransitMod.Dispatch.Lines
 
         public int Count(Entity line, BufferLookup<RouteVehicle> rvBuffers)
         {
+            return Count(line, rvBuffers, out _);
+        }
+
+        public int Count(Entity line, BufferLookup<RouteVehicle> rvBuffers, out int unregistered)
+        {
             int count = 0;
+            unregistered = 0;
             if (!rvBuffers.TryGetBuffer(line, out DynamicBuffer<RouteVehicle> vehicles)) return 0;
             for (int i = 0; i < vehicles.Length; i++)
             {
@@ -33,6 +40,13 @@ namespace RapidTransitMod.Dispatch.Lines
                 }
 
                 count++;
+                if (!m_Runtime.m_VehicleView.Contains(vehicle)
+                    && m_Runtime.EntityManager.HasComponent<PublicTransport>(vehicle)
+                    && (m_Runtime.EntityManager.GetComponentData<PublicTransport>(vehicle).m_State
+                        & (PublicTransportFlags.Returning | PublicTransportFlags.AbandonRoute)) == 0)
+                {
+                    unregistered++;
+                }
             }
 
             return count;

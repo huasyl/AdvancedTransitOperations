@@ -9,9 +9,12 @@ namespace RapidTransitMod
         // 仅派生桶：不保存 Entity 到状态或模式的第二份权威值。
         private readonly Dictionary<TransitMode, HashSet<Entity>> m_ModeBuckets = new Dictionary<TransitMode, HashSet<Entity>>();
         private readonly Dictionary<VehicleState, HashSet<Entity>> m_StateBuckets = new Dictionary<VehicleState, HashSet<Entity>>();
+        private readonly Dictionary<Entity, HashSet<Entity>> m_LineBuckets = new Dictionary<Entity, HashSet<Entity>>();
 
         public IReadOnlyCollection<Entity> Mode(TransitMode mode) => Bucket(m_ModeBuckets, mode);
         public IReadOnlyCollection<Entity> State(VehicleState state) => Bucket(m_StateBuckets, state);
+        public IReadOnlyCollection<Entity> OnLine(Entity line) => m_LineBuckets.TryGetValue(line, out HashSet<Entity> vehicles)
+            ? vehicles : Array.Empty<Entity>();
         public bool TryGetMode(Entity vehicle, out TransitMode mode)
         {
             foreach (KeyValuePair<TransitMode, HashSet<Entity>> entry in m_ModeBuckets)
@@ -37,8 +40,15 @@ namespace RapidTransitMod
         }
         public void AddState(Entity vehicle, VehicleState state) => Bucket(m_StateBuckets, state).Add(vehicle);
         public void RemoveState(Entity vehicle, VehicleState state) => Bucket(m_StateBuckets, state).Remove(vehicle);
+        public void AddLine(Entity vehicle, Entity line) => Bucket(m_LineBuckets, line).Add(vehicle);
+        public void RemoveLine(Entity vehicle, Entity line)
+        {
+            if (!m_LineBuckets.TryGetValue(line, out HashSet<Entity> vehicles)) return;
+            vehicles.Remove(vehicle);
+            if (vehicles.Count == 0) m_LineBuckets.Remove(line);
+        }
         // 仅整体重置清桶；普通帧始终由 Registry 增量维护。
-        public void ResetCity() { m_ModeBuckets.Clear(); m_StateBuckets.Clear(); }
+        public void ResetCity() { m_ModeBuckets.Clear(); m_StateBuckets.Clear(); m_LineBuckets.Clear(); }
         // 销毁时清全部派生桶，不触及 VehicleStateStore。
         public void Dispose() => ResetCity();
         private static HashSet<Entity> Bucket<TKey>(Dictionary<TKey, HashSet<Entity>> buckets, TKey key) { if (!buckets.TryGetValue(key, out HashSet<Entity> bucket)) { bucket = new HashSet<Entity>(); buckets.Add(key, bucket); } return bucket; }

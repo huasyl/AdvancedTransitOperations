@@ -13,7 +13,6 @@ namespace RapidTransitMod.Dispatch.Runtime
     internal sealed class CommandHost : IPublicTransportWritePort
     {
         private readonly RailEventSource m_RailEvents;
-        private readonly RapidTransitMod.Dispatch.Diagnostics.RuntimeHotPathProbe m_HotPathProbe;
 
         public CommandHost(ModRuntimeHostSystem runtime)
         {
@@ -21,7 +20,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             SimulationSystem = runtime.m_SimulationSystem;
             Log = runtime.log;
             m_RailEvents = runtime.m_RailEventSource;
-            m_HotPathProbe = runtime.m_RuntimeHotPathProbe;
         }
 
         public EntityManager EntityManager { get; }
@@ -70,39 +68,6 @@ namespace RapidTransitMod.Dispatch.Runtime
         {
             EntityManager.SetComponentData(vehicle, value);
             m_RailEvents.RecordPathChange(vehicle);
-        }
-
-        public void CountPathDetailRead() => m_HotPathProbe.CountPathDetailRead();
-
-        public void ResetLaunchNavigation(Entity vehicle)
-        {
-            Entity head = vehicle;
-            Entity tail = vehicle;
-            if (EntityManager.HasBuffer<LayoutElement>(vehicle))
-            {
-                DynamicBuffer<LayoutElement> layout = EntityManager.GetBuffer<LayoutElement>(vehicle, true);
-                if (layout.Length != 0)
-                {
-                    head = layout[0].m_Vehicle;
-                    tail = layout[layout.Length - 1].m_Vehicle;
-                }
-            }
-
-            TrainCurrentLane headLane = EntityManager.GetComponentData<TrainCurrentLane>(head);
-            // 对齐原版寻路准备及非追加导航更新，保留到达位置与其他标志。
-            headLane.m_Front.m_LaneFlags &= ~(TrainLaneFlags.EndOfPath | TrainLaneFlags.Return);
-            headLane.m_Rear.m_LaneFlags &= ~TrainLaneFlags.EndOfPath;
-            EntityManager.SetComponentData(head, headLane);
-            if (tail != head)
-            {
-                // 原版消费新路径时可能折返，当前尾部后端随后成为实际头部前端。
-                TrainCurrentLane tailLane = EntityManager.GetComponentData<TrainCurrentLane>(tail);
-                tailLane.m_Rear.m_LaneFlags &= ~TrainLaneFlags.EndOfPath;
-                EntityManager.SetComponentData(tail, tailLane);
-            }
-
-            EntityManager.GetBuffer<TrainNavigationLane>(vehicle).Clear();
-            m_RailEvents.InvalidateProjection(vehicle);
         }
 
         public bool HasConsumedPath(Entity entity)

@@ -5,6 +5,8 @@ using Game.Routes;
 using Game.SceneFlow;
 using Game.Vehicles;
 using RapidTransitMod.Core;
+using RapidTransitMod.Dispatch.Observation;
+using RapidTransitMod.Dispatch.Scheduling;
 using Unity.Collections;
 using Unity.Entities;
 using UnityEngine;
@@ -14,6 +16,7 @@ namespace RapidTransitMod.Dispatch.Runtime
     internal sealed class RuntimeLifecycleHost
     {
         private readonly ModRuntimeHostSystem m_Runtime;
+        private readonly List<LaunchedSeed> m_LaunchedSeeds = new List<LaunchedSeed>();
 
         public RuntimeLifecycleHost(ModRuntimeHostSystem runtime)
         {
@@ -38,6 +41,15 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_ObsBuffers.LoadMonitor();
             m_Runtime.m_ObsBuffers.LoadMonitorIntegrity();
             m_Runtime.m_ObsBuffers.LoadMonitorAverages();
+            m_Runtime.m_LineTimes.RebuildAll();
+            // Temporary recovery from monitor persistence; schema changes can invalidate this mapping.
+            // Remove it when scheduled trips are persisted on vehicle components.
+            m_LaunchedSeeds.Clear();
+            foreach (MonitorTrip trip in m_Runtime.m_Observation.ActiveMonitorTrips)
+                m_LaunchedSeeds.Add(new LaunchedSeed(trip.Line, trip.Vehicle, trip.SlotMinute,
+                    trip.ServiceDateKey));
+            m_Runtime.m_DispatchScheduler.BackfillLaunched(m_LaunchedSeeds, clock);
+            m_LaunchedSeeds.Clear();
             m_Runtime.m_LineStructureInvalidator.OnObservationRestored();
             m_Runtime.log.Info("[Startup] Takeover complete, system ready");
         }
@@ -238,14 +250,14 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_TransitSignalRuntime?.Clear("tracking-cleared");
             m_Runtime.m_LineStructureInvalidator?.ResetRuntimeState();
             m_Runtime.m_LineChangeSource?.ResetPending();
-            m_Runtime.m_SpawnIntentTrace?.Clear();
             m_Runtime.m_RailEtaService?.ResetCity();
             m_Runtime.m_Observation.ClearDispatchEta();
             m_Runtime.m_Announcements.Clear();
             m_Runtime.m_VehicleRegistry.Clear();
+            m_Runtime.m_DispatchScheduler.ResetCity();
             m_Runtime.m_VehicleRegistrar.ClearRegistrationConfirmations();
             m_Runtime.m_LineServiceState.Reset();
-            m_Runtime.m_DispatchScheduler.ClearServiceWindows();
+            m_Runtime.m_ServiceCalendar.Clear();
             m_Runtime.m_ServiceWindowStore.ClearTracking();
             m_Runtime.m_RailEventSource.ResetTracking();
             m_Runtime.m_ObsPersist.ClearLaps();
@@ -260,9 +272,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_StopRuntimeState.ClearForcedMidStopGrace();
             m_Runtime.m_CommandApplier.ClearRetireHandoffState();
             m_Runtime.m_PreparingFixCooldownUntil.Clear();
-            m_Runtime.m_SpawningLines.Clear();
-            m_Runtime.m_LineSpawnRequestFrame.Clear();
-            m_Runtime.m_LastSpawnBlockedLogFrame.Clear();
+            m_Runtime.m_LineSpawnControl.Clear();
             m_Runtime.m_LastScheduleDiagnosticLogFrame.Clear();
             m_Runtime.m_LineTimes.Clear();
             m_Runtime.m_LineProfile.ClearStability();
@@ -281,14 +291,13 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_TraversalSliceObservationCacheLoaded = false;
             m_Runtime.m_BusSegObservationBufferReady = false;
             m_Runtime.m_BusSegObservationCacheLoaded = false;
-            m_Runtime.m_JustLaunched.Clear();
-            m_Runtime.m_RuntimeEngine.ClearAssistLaunchPending();
+            m_Runtime.m_RuntimeEngine.ClearRunningCommits();
             m_Runtime.m_Bypass.ClearAll();
             m_Runtime.m_TrackModel.InvalidateAll();
             m_Runtime.m_TrackProjection.Clear();
             m_Runtime.m_WaypointIndex.Clear();
             m_Runtime.m_RouteProgress.Clear();
-            m_Runtime.m_LastPuppetMasterMinute = -1;
+            m_Runtime.m_LastVehicleIntervalMinute = -1;
             m_Runtime.m_LastSchedulerTickMinute = -1;
             m_Runtime.m_SelectPanel.ClearDebugSummaries();
             m_Runtime.m_StationContextQuery.Clear();
@@ -309,13 +318,15 @@ namespace RapidTransitMod.Dispatch.Runtime
                 {
                     if (!m_Runtime.EntityManager.Exists(line))
                         continue;
+                    if (!m_Runtime.m_LineView.Applied(line)
+                        || !m_Runtime.m_LineServiceState.IsOperational(line))
+                        continue;
 
                     int actualCount = m_Runtime.m_LineVehicles.Count(line, routeVehicles);
-                    if (!m_Runtime.m_SpawningLines.ContainsKey(line))
+                    if (m_Runtime.m_LineSpawnControl.DisplayTarget(line) == 0)
                     {
-                        m_Runtime.m_SpawningLines[line] = actualCount + 1;
-                        m_Runtime.m_LineSpawnRequestFrame[line] = m_Runtime.m_SimulationSystem.frameIndex;
-                        m_Runtime.log.Info("[F8] 线路" + line.Index + " 触发产车+1 (当前=" + actualCount + ")");
+                        m_Runtime.m_LineSpawnControl.AddWithoutSlot(line, m_Runtime.m_SimulationSystem.frameIndex);
+                        m_Runtime.log.Info("[F8] Spawn requested line=" + line.Index + " current=" + actualCount);
                     }
 
                     break;

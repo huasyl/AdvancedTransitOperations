@@ -6,5 +6,6 @@ namespace RapidTransitMod.Dispatch.Lines
         public float m_BaseLoopFrames;
         public int m_Offset;
         public int m_Count;
+        public byte m_EtaSource;
     }
 }

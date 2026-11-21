@@ -5,7 +5,6 @@ using Game.Objects;
 using Game.Net;
 using Game.Routes;
 using Game.Vehicles;
-using RapidTransitMod.Bypass;
 using RapidTransitMod.Runtime;
 using Unity.Entities;
 using Unity.Mathematics;
@@ -364,9 +363,6 @@ namespace RapidTransitMod.Dispatch.Runtime
                     framePlan.AddStage(row.Vehicle, RuntimeStageMask.Dispatch);
                 if ((row.Demands & RuntimeDemandMask.DeparturePending) != 0)
                     framePlan.AddStage(row.Vehicle, RuntimeStageMask.Stop);
-                if (row.RegistryState != VehicleState.Running
-                    && (row.Demands & RuntimeDemandMask.OriginCandidate) != 0)
-                    framePlan.AddStage(row.Vehicle, RuntimeStageMask.Dispatch);
             }
         }
 
@@ -375,7 +371,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             FramePlanEntry entry,
             uint nowFrame,
             Func<Entity, bool> hasOpenStopSession,
-            Func<Entity, bool> hasInvalidatedRecovery,
             Func<Entity, bool> isDeparturePending,
             Func<Entity, uint, bool> forcedMidStopGraceActive,
             out StopInput input,
@@ -422,8 +417,6 @@ namespace RapidTransitMod.Dispatch.Runtime
                     && targetResolved
                     && waypointCount >= 2,
                 OfficialBoarding(row),
-                m_Runtime.m_VehicleView.TryGetCooldown(row.Vehicle, out uint cooldown)
-                    && nowFrame < cooldown,
                 previousWaypoint,
                 targetResolved ? currentWaypoint : -1,
                 targetResolved ? currentWaypoint : -1,
@@ -439,7 +432,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             FramePlanEntry entry,
             uint nowFrame,
             IReadOnlyDictionary<Entity, StopFrameState> stopStates,
-            IReadOnlyDictionary<Entity, BypassControlResult> bypassControls,
             out DispatchInput input)
         {
             input = default;
@@ -457,68 +449,40 @@ namespace RapidTransitMod.Dispatch.Runtime
             bool running = row.RegistryState == VehicleState.Running;
             bool targetResolved = hasWaypoints
                 && TryResolveTargetWaypoint(row.Vehicle, waypoints, out currentWaypoint);
-            int previousWaypoint = row.CachedWaypoint;
             bool hasStopState = stopStates.TryGetValue(row.Vehicle, out StopFrameState stop);
             bool boarding = running && hasStopState
                 ? stop.Boarding
                 : OfficialBoarding(row);
-            int targetMinute = running
-                && m_Runtime.m_VehicleView.TryGetTarget(row.Vehicle, out int target)
-                ? target
-                : -1;
-            bool targetAtOrigin = running
-                ? row.OriginTargetMatched
-                : targetResolved && currentWaypoint == 0;
-            bool runningOriginDetail = running && targetAtOrigin;
+            bool atOrigin = m_Runtime.m_StopRuntime.TryGetSession(row.Vehicle,
+                out Entity sessionLine, out int sessionWaypoint, out uint arrivalFrame)
+                && sessionLine == row.RegisteredLine && sessionWaypoint == 0;
+            bool originDepartureConfirmed = m_Runtime.m_StopRuntime.TryGetOriginDepartureFrame(
+                row.Vehicle, row.RegisteredLine, out uint movingFrame);
             bool preparingAtOrigin = row.RegistryState == VehicleState.Preparing
-                && targetResolved
-                && currentWaypoint == 0
-                && boarding;
-            bool atOrigin = targetAtOrigin && boarding;
-            bool originBusy = false;
+                && atOrigin;
             bool preparingRouteNeedsRepair = row.RegistryState == VehicleState.Preparing
                 && (nowFrame & 15u) == 1u
                 && !preparingAtOrigin;
-            bool shouldEvaluateOriginSettle = runningOriginDetail;
-            BypassControlResult bypass = new BypassControlResult(
-                false,
-                row.Vehicle,
-                route,
-                targetResolved ? currentWaypoint : -1,
-                false,
-                false,
-                Entity.Null,
-                true,
-                null);
             int rowIndex = m_FrameRowIndex[row.Vehicle];
             m_FrameRows[rowIndex] = row;
             input = new DispatchInput(
                 row.Vehicle,
                 row.RegisteredLine,
-                route,
                 row.InputValid
                     && row.HasPublicTransport
                     && targetResolved
                     && route == row.RegisteredLine
                     && waypointCount >= 2,
                 boarding,
-                previousWaypoint,
                 targetResolved ? currentWaypoint : -1,
-                waypointCount,
                 atOrigin,
-                targetAtOrigin,
-                preparingAtOrigin,
-                originBusy,
+                targetResolved && currentWaypoint == 0,
+                arrivalFrame,
+                movingFrame,
+                m_Runtime.m_StopRuntime.IsOriginSessionRecoveredAway(row.Vehicle, row.RegisteredLine),
                 preparingRouteNeedsRepair,
-                shouldEvaluateOriginSettle,
-                runningOriginDetail,
-                stop.HadStopSession,
-                stop.BoardingChanged,
-                m_Runtime.m_StopRuntime.IsDeparturePending(row.Vehicle),
-                m_Runtime.m_StopRuntime.IsOriginDepartureConfirmed(row.Vehicle, row.RegisteredLine),
-                false,
-                0d,
-                bypass);
+                originDepartureConfirmed,
+                false);
             return true;
         }
 

@@ -84,7 +84,6 @@ namespace RapidTransitMod
             StopFact restoredStop = m_Runtime.m_StopRuntime.RestoreRegistration(vehicle, line, boarding, waypoint, frame);
             if (restoredStop.Exists)
             {
-                registrar.SetRegistrationReady(vehicle, restoredStop.WaypointIndex, m_Runtime.m_VehicleView.GetState(vehicle), frame);
                 m_Runtime.PublishStopFact(restoredStop);
             }
             else if (boarding && waypoint < 0)

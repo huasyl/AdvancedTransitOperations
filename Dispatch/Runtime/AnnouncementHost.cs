@@ -9,6 +9,7 @@ using Game.Simulation;
 using Game.UI.InGame;
 using RapidTransitMod.Broadcasting;
 using RapidTransitMod.Core;
+using RapidTransitMod.Dispatch.Lines;
 using RapidTransitMod.Dispatch.Runtime;
 using RapidTransitMod.TrackModel;
 using RapidTransitMod.TrackProjection;
@@ -268,7 +269,9 @@ namespace RapidTransitMod
                 DynamicBuffer<RouteWaypoint> waypoints,
                 uint nowFrame)
             {
-                return m_Host.m_LineTimes.Prep(vehicle, line, waypoints, LapFrames(line));
+                ArrivalKind kind = m_Host.m_LineTimes.Arrival(vehicle, line, out uint frame);
+                return kind == ArrivalKind.InStation ? 0f : kind == ArrivalKind.Estimated
+                    ? math.max(0f, unchecked((int)(frame - nowFrame))) : float.MaxValue;
             }
 
             internal override float LapFrames(Entity line) => m_Host.m_LapCache.Read(line);

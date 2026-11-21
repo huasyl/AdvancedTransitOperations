@@ -92,7 +92,6 @@ namespace RapidTransitMod.RailEta.BuiltIn
         private long m_PredictorGeneration;
         private uint m_IndexOriginFrame;
         private uint m_RequestStartFrame;
-        private long m_BatchStartTicks;
         private long m_IndexStartTicks;
         private long m_IndexWallTicks;
         private RailEtaService m_BatchService;
@@ -177,7 +176,7 @@ namespace RapidTransitMod.RailEta.BuiltIn
                 if (BatchExpired())
                 {
                     FailBatch(service, RailEtaFailure.FuturePathfindFailed,
-                        "Theory batch exceeded the 8-second wall-clock budget.");
+                        "Theory batch exceeded the 1536-frame simulation budget.");
                     return;
                 }
             }
@@ -220,7 +219,6 @@ namespace RapidTransitMod.RailEta.BuiltIn
             if (runtimeFacts == null) return;
             if (!service.TryDrain(out RailEtaRequestEnvelope envelope)) return;
             m_BatchId = service.NextBatchId();
-            m_BatchStartTicks = Stopwatch.GetTimestamp();
             m_TheoryFailureLogged = false;
             // HotModule admits one active ticket. Theory keeps adjacent path slots inside the
             // ticket, then creates one synthetic controller per actual stop-to-stop segment.
@@ -475,22 +473,19 @@ namespace RapidTransitMod.RailEta.BuiltIn
 
         private bool BatchExpired()
         {
-            return m_BatchStartTicks > 0
-                && (Stopwatch.GetTimestamp() - m_BatchStartTicks) * 1000d / Stopwatch.Frequency
-                    >= RailEtaLimits.TheoryBatchTimeoutMilliseconds;
+            return unchecked(m_Simulation.frameIndex - m_RequestStartFrame) >= RailEtaLimits.TheoryBatchTimeoutFrames;
         }
 
         private static bool WorkCancelled(
             RailEtaService service,
             RailEtaMode mode,
-            long batchStartTicks,
+            uint batchStartFrame,
             List<RailEtaBatchRequest> requests)
         {
             if (service == null || service.IsDisposed || service.WorkerLost)
                 return true;
-            if (mode == RailEtaMode.Theory && batchStartTicks > 0
-                && (Stopwatch.GetTimestamp() - batchStartTicks) * 1000d / Stopwatch.Frequency
-                    >= RailEtaLimits.TheoryBatchTimeoutMilliseconds)
+            if (mode == RailEtaMode.Theory
+                && unchecked(service.LastObservedFrame - batchStartFrame) >= RailEtaLimits.TheoryBatchTimeoutFrames)
                 return true;
             if (requests == null || requests.Count == 0)
                 return false;
@@ -1393,7 +1388,7 @@ namespace RapidTransitMod.RailEta.BuiltIn
 
         private void EnqueueScope(RailEtaService service)
         {
-            RailEtaScopeWork work = new RailEtaScopeWork { Mode = m_Mode, BatchId = m_BatchId, BatchStartTicks = m_BatchStartTicks, IndexOriginFrame = m_IndexOriginFrame, Generation = m_Generation, Requests = m_Requests, Staging = m_Staging, RequestFrameFacts = m_FrozenRuntimeFacts,
+            RailEtaScopeWork work = new RailEtaScopeWork { Mode = m_Mode, BatchId = m_BatchId, BatchStartFrame = m_RequestStartFrame, IndexOriginFrame = m_IndexOriginFrame, Generation = m_Generation, Requests = m_Requests, Staging = m_Staging, RequestFrameFacts = m_FrozenRuntimeFacts,
                 ExcludedVehicles = new HashSet<Entity>(), VehiclePathFailures = new List<RailEtaVehiclePathFailure>(), TicketFailures = new List<RailEtaTicketFailure>(), FailedSegments = new HashSet<RailEtaFailedSegmentKey>() };
             m_Staging = null;
             m_FrozenRuntimeFacts = null;
@@ -1402,7 +1397,7 @@ namespace RapidTransitMod.RailEta.BuiltIn
                 RailEtaScopeResult result;
                 try
                 {
-                    if (WorkCancelled(service, work.Mode, work.BatchStartTicks, work.Requests))
+                    if (WorkCancelled(service, work.Mode, work.BatchStartFrame, work.Requests))
                         result = new RailEtaScopeResult { Mode = work.Mode, BatchId = work.BatchId, IndexOriginFrame = work.IndexOriginFrame, Generation = work.Generation, Requests = work.Requests, Staging = work.Staging, Failure = RailEtaFailure.Cancelled, Detail = "Theory batch was cancelled or timed out." };
                     else
                     {
@@ -1458,14 +1453,14 @@ namespace RapidTransitMod.RailEta.BuiltIn
 
         private void EnqueueMaterialize(RailEtaService service, RailEtaScopeResult scope)
         {
-            RailEtaMaterializeWork work = new RailEtaMaterializeWork { Scope = scope, OriginFrame = scope.IndexOriginFrame, IndexWallTicks = m_IndexWallTicks, BatchStartTicks = m_BatchStartTicks };
+            RailEtaMaterializeWork work = new RailEtaMaterializeWork { Scope = scope, OriginFrame = scope.IndexOriginFrame, IndexWallTicks = m_IndexWallTicks, BatchStartFrame = m_RequestStartFrame };
             if (!service.Worker.TryEnqueue(() =>
             {
                 RailEtaMaterializeResult result;
                 try
                 {
                     long materializeStart = Stopwatch.GetTimestamp();
-                    if (WorkCancelled(service, work.Scope?.Mode ?? RailEtaMode.Full, work.BatchStartTicks, work.Scope?.Requests))
+                    if (WorkCancelled(service, work.Scope?.Mode ?? RailEtaMode.Full, work.BatchStartFrame, work.Scope?.Requests))
                         result = new RailEtaMaterializeResult { Scope = work.Scope, Failure = RailEtaFailure.Cancelled, Detail = "Theory batch was cancelled or timed out." };
                     else
                     {
@@ -2331,7 +2326,7 @@ namespace RapidTransitMod.RailEta.BuiltIn
             try
             {
                 prediction = predictor.Predict(world, snapshot, request, workspace, new RailEtaCancellation(() =>
-                    WorkCancelled(service, RailEtaMode.Theory, work.BatchStartTicks, work.Scope?.Requests)));
+                    WorkCancelled(service, RailEtaMode.Theory, work.BatchStartFrame, work.Scope?.Requests)));
             }
             catch (Exception ex)
             {
@@ -2599,7 +2594,7 @@ namespace RapidTransitMod.RailEta.BuiltIn
             RailEtaPredictionWork predictionWork = new RailEtaPredictionWork
             {
                 Scope = scope,
-                BatchStartTicks = m_BatchStartTicks,
+                BatchStartFrame = m_RequestStartFrame,
                 Snapshot = result.Snapshot,
                 FrozenWorld = result.FrozenWorld,
                 IndexWallTicks = m_IndexWallTicks,
@@ -2615,7 +2610,7 @@ namespace RapidTransitMod.RailEta.BuiltIn
                 RailEtaPredictionResult predictionResult;
                 try
                 {
-                    if (WorkCancelled(service, predictionWork.Scope?.Mode ?? RailEtaMode.Full, predictionWork.BatchStartTicks, predictionWork.Scope?.Requests))
+                    if (WorkCancelled(service, predictionWork.Scope?.Mode ?? RailEtaMode.Full, predictionWork.BatchStartFrame, predictionWork.Scope?.Requests))
                     {
                         predictionResult = new RailEtaPredictionResult
                         {
@@ -2884,7 +2879,6 @@ namespace RapidTransitMod.RailEta.BuiltIn
             m_TheoryLine = Entity.Null;
             m_FrozenRuntimeFacts = null;
             m_RequestStartFrame = 0;
-            m_BatchStartTicks = 0;
             m_BatchService = null;
             m_BatchServiceId = 0;
         }

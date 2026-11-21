@@ -22,7 +22,6 @@ namespace RapidTransitMod.Runtime
         DeparturePending = 1 << 0,
         BypassWatch = 1 << 1,
         BypassActive = 1 << 2,
-        OriginCandidate = 1 << 3,
         InboundWatch = 1 << 4
     }
 

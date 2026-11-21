@@ -28,7 +28,7 @@ namespace RapidTransitMod.RailEta.BuiltIn
         public const int MaxCheckpoints = 2048;
         public const int MaxTheoryPathFacts = RailEtaTheorySignatures.MaxPathFacts;
         public const int WorkerWatchdogMilliseconds = 10000;
-        public const int TheoryBatchTimeoutMilliseconds = 8000;
+        public const uint TheoryBatchTimeoutFrames = 1536u;
     }
 
     public readonly struct RailEtaTicket

@@ -87,7 +87,6 @@ namespace RapidTransitMod.Dispatch.Runtime
         public readonly VehicleState State;
         public readonly bool InputValid;
         public readonly bool OfficialBoarding;
-        public readonly bool CooldownActive;
         public readonly int PreviousWaypoint;
         public readonly int CurrentWaypoint;
         public readonly int RecoveryWaypoint;
@@ -104,7 +103,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             VehicleState state,
             bool inputValid,
             bool officialBoarding,
-            bool cooldownActive,
             int previousWaypoint,
             int currentWaypoint,
             int recoveryWaypoint,
@@ -120,7 +118,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             State = state;
             InputValid = inputValid;
             OfficialBoarding = officialBoarding;
-            CooldownActive = cooldownActive;
             PreviousWaypoint = previousWaypoint;
             CurrentWaypoint = currentWaypoint;
             RecoveryWaypoint = recoveryWaypoint;
@@ -316,6 +313,8 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly Action<Entity, bool> m_PublishDeparturePending;
         private readonly List<StopFact> m_Facts = new List<StopFact>();
         private readonly List<StopControlResult> m_Controls = new List<StopControlResult>();
+        private readonly List<StopControlResult> m_OriginControls = new List<StopControlResult>();
+        private readonly Dictionary<Entity, uint> m_OriginHoldFrames = new Dictionary<Entity, uint>();
         private readonly List<Entity> m_DepartureCandidates = new List<Entity>();
         private readonly HashSet<Entity> m_DepartureCandidateSet = new HashSet<Entity>();
         private readonly List<StopDeparture> m_ResolvedDepartures = new List<StopDeparture>();
@@ -330,6 +329,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly Dictionary<Entity, (uint Frame, double ElapsedMinutes)> m_DwellClock =
             new Dictionary<Entity, (uint Frame, double ElapsedMinutes)>();
         private Func<Entity, int> m_LineDwellMinutes;
+        private Func<Entity, int> m_LineMinimumDwellMinutes;
         private Func<float, float> m_ToFramesCeil;
         private ObservedDwellReader m_TryObservedDwellFrames;
         private Func<Entity, uint?> m_TakeLegacyDwellStart;
@@ -359,12 +359,14 @@ namespace RapidTransitMod.Dispatch.Runtime
             Func<Entity, int> lineDwellMinutes,
             Func<float, float> toFramesCeil,
             ObservedDwellReader tryObservedDwellFrames,
-            Func<Entity, uint?> takeLegacyDwellStart)
+            Func<Entity, uint?> takeLegacyDwellStart,
+            Func<Entity, int> lineMinimumDwellMinutes)
         {
             m_LineDwellMinutes = lineDwellMinutes;
             m_ToFramesCeil = toFramesCeil;
             m_TryObservedDwellFrames = tryObservedDwellFrames;
             m_TakeLegacyDwellStart = takeLegacyDwellStart;
+            m_LineMinimumDwellMinutes = lineMinimumDwellMinutes;
         }
 
         internal void BindClock(Func<ClockSnapshot> clock, Func<uint> frame)
@@ -372,6 +374,101 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Clock = clock ?? throw new ArgumentNullException(nameof(clock));
             m_Frame = frame ?? throw new ArgumentNullException(nameof(frame));
         }
+
+        internal IReadOnlyList<StopControlResult> ApplyOriginPlans(
+            IReadOnlyList<OriginPlanChange> changes, LineView lines, ClockSnapshot clock, uint nowFrame)
+        {
+            m_OriginControls.Clear();
+            for (int i = 0; i < changes.Count; i++)
+            {
+                OriginPlanChange change = changes[i];
+                ApplyOriginPlan(change.Vehicle, change.Line, change.HasSlot, change.Slot,
+                    change.IdleUntilFrame, lines, clock, nowFrame);
+            }
+            return m_OriginControls;
+        }
+
+        internal IReadOnlyList<StopControlResult> ApplySlotChanges(
+            IReadOnlyList<SlotChange> changes, LineView lines, ClockSnapshot clock, uint nowFrame)
+        {
+            m_OriginControls.Clear();
+            for (int i = 0; i < changes.Count; i++)
+            {
+                SlotChange change = changes[i];
+                ApplyOriginPlan(change.Vehicle, change.Line, change.HasSlot, change.Slot,
+                    0u, lines, clock, nowFrame);
+            }
+            return m_OriginControls;
+        }
+
+        private void ApplyOriginPlan(Entity vehicle, Entity line, bool hasSlot, SlotKey slot,
+            uint idleUntil, LineView lines, ClockSnapshot clock, uint nowFrame)
+        {
+            if (!HasActiveStopSession(vehicle, line, 0))
+                return;
+            if (!hasSlot)
+            {
+                ClearTimedPlan(vehicle);
+                uint holdFrame = AddFrames(idleUntil == 0u ? nowFrame : idleUntil, OriginMargin(clock));
+                m_OriginHoldFrames[vehicle] = holdFrame;
+                m_OriginControls.Add(new StopControlResult(vehicle, 0, false, holdUntilFrame: holdFrame));
+                return;
+            }
+            if (!lines.TryLaunchRows(line, slot.Minute, out AppliedRunRow row, out AppliedMonitorRow monitor)
+                || monitor.Stops.Length == 0)
+                return;
+
+            bool detailed = row.TimedStops.Length > 0;
+            int count = detailed ? row.TimedStops.Length : 1;
+            TimedStop[] stops = new TimedStop[count];
+            int[] waypoints = new int[count];
+            for (int i = 0; i < count; i++)
+            {
+                stops[i] = detailed ? row.TimedStops[i].Clone()
+                    : new TimedStop { StopKey = monitor.Stops[0].StopKey };
+                waypoints[i] = detailed ? row.WaypointIndices[i] : 0;
+            }
+            stops[0].Depart = slot.Minute;
+            waypoints[0] = 0;
+            ClearTimedPlan(vehicle);
+            m_State.DwellTimedOutLatched.Remove(vehicle);
+            ClearForcedMidStop(vehicle);
+            TimedStopPlan plan = new TimedStopPlan
+            {
+                Line = line,
+                RowId = row.RowId,
+                StopSig = row.StopSig,
+                ServiceDate = slot.Date,
+                SlotMinute = slot.Minute,
+                Stops = stops,
+                WaypointIndices = waypoints,
+                NextStopOrder = 1,
+                ActiveStopOrder = 0,
+                MinimumStopMinutes = lines.OriginMinDwell(line),
+                ClockEpoch = clock.ClockEpoch,
+                CanBypass = TransportModeProfile.GetProfile(monitor.LineKey).CanBypass
+            };
+            m_State.TimedPlans[vehicle] = plan;
+            SetTimedDeadline(vehicle, plan, nowFrame, clock);
+            plan.HoldApplied = true;
+            m_OriginHoldFrames[vehicle] = plan.EarliestReleaseFrame;
+            m_OriginControls.Add(new StopControlResult(vehicle, 0, false, holdUntilFrame: plan.EarliestReleaseFrame));
+        }
+
+        internal bool TryGetOriginRelease(Entity vehicle, out uint releaseFrame)
+        {
+            if (TryGetSessionWaypoint(vehicle, out int waypoint) && waypoint == 0
+                && m_State.TimedPlans.TryGetValue(vehicle, out TimedStopPlan plan)
+                && plan.ActiveStopOrder == 0)
+            {
+                releaseFrame = plan.EarliestReleaseFrame;
+                return true;
+            }
+            releaseFrame = 0u;
+            return false;
+        }
+
+        private static uint OriginMargin(ClockSnapshot clock) => unchecked(clock.ToFramesCeil(1d) + 16u);
 
         internal void Process(IReadOnlyList<StopInput> inputs, uint nowFrame)
         {
@@ -399,10 +496,9 @@ namespace RapidTransitMod.Dispatch.Runtime
 
                 m_InputByVehicle[vehicle] = input;
                 ObserveOfficialBoarding(vehicle, input.OfficialBoarding);
-                if (input.State != VehicleState.Running)
-                    ClearTimedPlan(vehicle);
                 if (input.State == VehicleState.Retiring)
                 {
+                    ClearTimedPlan(vehicle);
                     ClearDwell(vehicle);
                     m_FrameStates[vehicle] = new StopFrameState(
                         input.OfficialBoarding,
@@ -419,12 +515,12 @@ namespace RapidTransitMod.Dispatch.Runtime
                 }
 
                 bool lastEffectiveBoarding = ReadEffectiveBoarding(vehicle);
-                bool boardingChanged = !input.CooldownActive && boarding != lastEffectiveBoarding;
+                bool boardingChanged = boarding != lastEffectiveBoarding;
                 int previousWaypoint = input.PreviousWaypoint;
                 int waypoint = previousWaypoint;
                 bool lastBoarding = HasOpenStopSession(vehicle);
                 SetEffectiveBoarding(vehicle, boarding);
-                if (boardingChanged && input.State != VehicleState.Idle)
+                if (boardingChanged)
                 {
                     if (boarding)
                     {
@@ -435,6 +531,10 @@ namespace RapidTransitMod.Dispatch.Runtime
                                 ? sessionWaypoint
                                 : previousWaypoint;
                             QueueCachedWaypoint(vehicle, waypoint);
+                            if (waypoint == 0 && m_OriginHoldFrames.TryGetValue(vehicle, out uint holdFrame))
+                                QueueControl(new StopControlResult(vehicle, 0, false, holdUntilFrame: holdFrame));
+                            if (m_State.TimedPlans.TryGetValue(vehicle, out TimedStopPlan resumedPlan))
+                                resumedPlan.HoldApplied = false;
                         }
                         else
                         {
@@ -474,9 +574,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                     }
                 }
 
-                if (input.State == VehicleState.Running
-                    && boarding
-                    && waypoint < 0
+                if (boarding
                     && !lastBoarding
                     && HasInvalidatedRecovery(vehicle)
                     && TryRecoverInvalidatedMidStopSession(
@@ -613,30 +711,44 @@ namespace RapidTransitMod.Dispatch.Runtime
                     continue;
                 }
 
-                if (nowFrame < plan.EarliestReleaseFrame)
+                if (unchecked((int)(nowFrame - plan.EarliestReleaseFrame)) < 0)
                 {
                     continue;
                 }
 
-                if (bypassControls.TryGetValue(vehicle, out BypassControlResult bypass)
+                if (waypoint > 0 && bypassControls.TryGetValue(vehicle, out BypassControlResult bypass)
                     && bypass.Evaluated
                     && bypass.ShouldHold
                     && !bypass.CanClearAfterExit)
                 {
                     continue;
                 }
-                if (plan.CanBypass
+                if (waypoint > 0 && plan.CanBypass
                     && (!bypassControls.TryGetValue(vehicle, out BypassControlResult evaluated)
                         || !evaluated.Evaluated))
                 {
                     continue;
                 }
 
+                if (TryGetForcedMidStopGrace(vehicle, out uint retryFrame)
+                    && unchecked((int)(nowFrame - retryFrame)) < 0)
+                    continue;
+
                 SetForcedMidStopGrace(
                     vehicle,
                     AddFrames(nowFrame, ModRuntimeHostSystem.FORCED_MIDSTOP_BV_GRACE_FRAMES));
                 StartDeparturePending(vehicle, nowFrame);
                 bool firstTimeout = m_State.DwellTimedOutLatched.Add(vehicle);
+                uint waitedFrames = unchecked(nowFrame - plan.EarliestReleaseFrame);
+                if (waypoint == 0 && !plan.StallLogged
+                    && waitedFrames >= ModRuntimeHostSystem.FORCED_MIDSTOP_BV_GRACE_FRAMES)
+                {
+                    plan.StallLogged = true;
+                    Mod.log.Info("[OriginDepartureStalled]"
+                        + " line=" + line.Index + " vehicle=" + vehicle.Index
+                        + " slot=" + plan.SlotMinute + " releaseFrame=" + plan.EarliestReleaseFrame
+                        + " frame=" + nowFrame + " waitedFrames=" + waitedFrames);
+                }
                 m_ResolvedTimedStops.Add(new StopDwellTimeout(
                     firstTimeout
                         ? new StopFact(
@@ -670,20 +782,6 @@ namespace RapidTransitMod.Dispatch.Runtime
                 if (!m_DepartureCandidateSet.Contains(vehicle)
                     || !m_InputByVehicle.TryGetValue(vehicle, out StopInput input))
                     continue;
-                if (bypassControls.TryGetValue(vehicle, out BypassControlResult bypass)
-                    && bypass.ShouldHold
-                    && !bypass.CanClearAfterExit)
-                {
-                    continue;
-                }
-
-                if (HasActiveTimedStop(vehicle)
-                    && m_State.TimedPlans.TryGetValue(vehicle, out TimedStopPlan timedPlan)
-                    && nowFrame < timedPlan.EarliestReleaseFrame)
-                {
-                    continue;
-                }
-
                 if (!IsDeparturePending(vehicle))
                     StartDeparturePending(vehicle, nowFrame);
 
@@ -717,7 +815,19 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         internal bool IsDepartureCandidate(Entity vehicle) => m_DepartureCandidateSet.Contains(vehicle);
 
-        internal bool IsOriginDepartureConfirmed(Entity vehicle, Entity line)
+        internal bool IsOriginSessionRecoveredAway(Entity vehicle, Entity line)
+        {
+            for (int i = 0; i < m_Facts.Count; i++)
+            {
+                StopFact fact = m_Facts[i];
+                if (fact.Vehicle == vehicle && fact.Line == line
+                    && fact.Kind == StopFactKind.Recovered && fact.WaypointIndex > 0)
+                    return true;
+            }
+            return false;
+        }
+
+        internal bool TryGetOriginDepartureFrame(Entity vehicle, Entity line, out uint movingFrame)
         {
             for (int i = 0; i < m_ResolvedDepartures.Count; i++)
             {
@@ -726,10 +836,12 @@ namespace RapidTransitMod.Dispatch.Runtime
                     && fact.Line == line
                     && fact.WaypointIndex == 0)
                 {
+                    movingFrame = fact.Frame;
                     return true;
                 }
             }
 
+            movingFrame = 0u;
             return false;
         }
 
@@ -740,6 +852,8 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         internal void ResetCity()
         {
+            m_OriginHoldFrames.Clear();
+            m_OriginControls.Clear();
             m_DwellTimeoutQueue.Clear();
             m_TimedStopResolved.Clear();
             m_InvalidatedTimedPlans.Clear();
@@ -750,58 +864,11 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         internal void ClearTimedDeadlines()
         {
+            m_OriginHoldFrames.Clear();
             m_InvalidatedTimedPlans.Clear();
             m_DwellClock.Clear();
             m_State.ClearTimedPlans();
             m_FramePlan.ClearDeadlines(DeadlineKind.TimedStop);
-        }
-
-        internal void StartTimedPlan(
-            Entity vehicle,
-            Entity line,
-            AppliedRunRow row,
-            ClockSnapshot clock,
-            uint nowFrame,
-            bool canBypass)
-        {
-            ClearTimedPlan(vehicle);
-            if (vehicle == Entity.Null
-                || line == Entity.Null
-                || string.IsNullOrEmpty(row.RowId)
-                || string.IsNullOrEmpty(row.StopSig)
-                || row.TimedStops.Length == 0
-                || row.TimedStops.Length != row.WaypointIndices.Length)
-            {
-                return;
-            }
-
-            DateTime serviceDate = RapidTransitMod.Dispatch.Scheduling.ScheduleClock.ServiceDate(
-                clock,
-                row.SlotMinute);
-
-            TimedStop[] stops = new TimedStop[row.TimedStops.Length];
-            int[] waypoints = new int[row.WaypointIndices.Length];
-            for (int i = 0; i < stops.Length; i++)
-            {
-                stops[i] = row.TimedStops[i]?.Clone();
-                waypoints[i] = row.WaypointIndices[i];
-                if (stops[i] == null || string.IsNullOrEmpty(stops[i].StopKey))
-                    return;
-            }
-
-            m_State.TimedPlans[vehicle] = new TimedStopPlan
-            {
-                Line = line,
-                RowId = row.RowId,
-                StopSig = row.StopSig,
-                ServiceDate = serviceDate,
-                SlotMinute = row.SlotMinute,
-                Stops = stops,
-                WaypointIndices = waypoints,
-                NextStopOrder = Math.Min(1, stops.Length),
-                ClockEpoch = clock.ClockEpoch,
-                CanBypass = canBypass
-            };
         }
 
         internal void ClearTimedPlan(Entity vehicle)
@@ -837,6 +904,22 @@ namespace RapidTransitMod.Dispatch.Runtime
                 || waypointIndices == null
                 || !TryProjectPlanWaypoints(plan.Stops.Length, waypointIndices, out int[] projected))
             {
+                if (!string.IsNullOrEmpty(stopSig)
+                    && waypointIndices != null && waypointIndices.Length > 0 && waypointIndices[0] == 0
+                    && plan.ActiveStopOrder == 0
+                    && plan.WaypointIndices[0] == 0
+                    && (HasActiveStopSession(vehicle, plan.Line, 0)
+                        || m_State.InvalidatedMidStopRecoveryPending.Contains(vehicle)))
+                {
+                    plan.StopSig = stopSig;
+                    plan.Stops = new[] { plan.Stops[0] };
+                    plan.WaypointIndices = new[] { 0 };
+                    plan.NextStopOrder = 1;
+                    plan.HoldApplied = false;
+                    SetTimedDeadline(vehicle, plan, nowFrame, m_Clock());
+                    m_OriginHoldFrames[vehicle] = plan.EarliestReleaseFrame;
+                    return TimedPlanChangeKind.Reprojected;
+                }
                 ClearTimedPlan(vehicle);
                 QueueExpiredDwell(vehicle, nowFrame);
                 return TimedPlanChangeKind.Cleared;
@@ -907,8 +990,9 @@ namespace RapidTransitMod.Dispatch.Runtime
                 || snapshot.NextStopOrder > snapshot.Stops.Length
                 || snapshot.ActiveStopOrder < -1
                 || snapshot.ActiveStopOrder >= snapshot.Stops.Length
-                || (snapshot.MinimumStopMinutes != ScheduleLimitPolicy.StoredMinimum
-                    && snapshot.MinimumStopMinutes != ScheduleLimitPolicy.DefaultMinimum)
+                || (snapshot.MinimumStopMinutes != 1
+                    && snapshot.MinimumStopMinutes != 2
+                    && snapshot.MinimumStopMinutes != 5)
                 || snapshot.ClockTicksPerDay <= 0
                 || (snapshot.ActiveStopOrder >= 0
                     && (double.IsNaN(snapshot.ArrivalWaitMinutes)
@@ -1194,7 +1278,17 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_State.StopSessionArrivalFrame[vehicle] = nowFrame;
             m_State.StopSessionBoardingChangeCount[vehicle] = 0;
             CancelDeparturePending(vehicle);
-            uint holdUntil = PrepareTimedStop(vehicle, line, waypoint, nowFrame);
+            uint holdUntil;
+            if (waypoint == 0)
+            {
+                ClearTimedPlan(vehicle);
+                holdUntil = AddFrames(nowFrame, OriginMargin(m_Clock()));
+                m_OriginHoldFrames[vehicle] = holdUntil;
+            }
+            else
+            {
+                holdUntil = PrepareTimedStop(vehicle, line, waypoint, nowFrame);
+            }
             return new StopControlResult(
                 vehicle,
                 waypoint,
@@ -1258,7 +1352,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             control = default;
             if (vehicle == Entity.Null
                 || line == Entity.Null
-                || recoveryWaypoint <= 0
+                || recoveryWaypoint < 0
                 || HasOpenStopSession(vehicle)
                 || !m_State.InvalidatedMidStopRecoveryPending.Contains(vehicle))
             {
@@ -1274,8 +1368,14 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_State.StopSessionArrivalFrame[vehicle] = arrivalFrame;
             m_State.StopSessionBoardingChangeCount[vehicle] = 0;
             CancelDeparturePending(vehicle);
-            SetDwellDeadline(vehicle, line, recoveryWaypoint, arrivalFrame);
-            QueueExpiredDwell(vehicle, nowFrame);
+            if (recoveryWaypoint > 0)
+            {
+                if (m_State.TimedPlans.TryGetValue(vehicle, out TimedStopPlan originPlan)
+                    && originPlan.ActiveStopOrder == 0 && originPlan.WaypointIndices[0] == 0)
+                    ClearTimedPlan(vehicle);
+                SetDwellDeadline(vehicle, line, recoveryWaypoint, arrivalFrame);
+                QueueExpiredDwell(vehicle, nowFrame);
+            }
             fact = new StopFact(
                 StopFactKind.Recovered,
                 vehicle,
@@ -1289,7 +1389,9 @@ namespace RapidTransitMod.Dispatch.Runtime
                 clearForcedMidStop: true,
                 noteProgressSuspect: true,
                 writeCachedWaypoint: true,
-                cachedWaypointIndex: recoveryWaypoint);
+                cachedWaypointIndex: recoveryWaypoint,
+                holdUntilFrame: recoveryWaypoint == 0 && m_OriginHoldFrames.TryGetValue(vehicle, out uint holdFrame)
+                    ? holdFrame : 0u);
             return true;
         }
 
@@ -1448,7 +1550,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_State.InvalidatedMidStopRecoveryPending.Remove(vehicle);
             bool preserveArrival = false;
             if (m_State.StopSessionWaypointIndex.TryGetValue(vehicle, out int stopSessionWaypoint)
-                && stopSessionWaypoint > 0
+                && stopSessionWaypoint >= 0
                 && !m_State.DeparturePendingSinceFrame.ContainsKey(vehicle))
             {
                 m_State.InvalidatedMidStopRecoveryPending.Add(vehicle);
@@ -1473,6 +1575,7 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         private void ClearSession(Entity vehicle)
         {
+            m_OriginHoldFrames.Remove(vehicle);
             ClearDwell(vehicle);
             m_State.StopSessionLine.Remove(vehicle);
             m_State.StopSessionWaypointIndex.Remove(vehicle);
@@ -1490,6 +1593,8 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         private void MaintainDwell(Entity vehicle, StopInput input, bool boarding, uint nowFrame)
         {
+            if (HasActiveStopSession(vehicle, input.Line, 0))
+                return;
             if (input.State != VehicleState.Running
                 || !boarding
                 || !m_State.StopSessionLine.TryGetValue(vehicle, out Entity line)
@@ -1507,22 +1612,23 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         private void MaintainTimedHold(Entity vehicle, StopInput input, bool boarding, uint nowFrame)
         {
-            if (!boarding
-                || !m_State.TimedPlans.TryGetValue(vehicle, out TimedStopPlan plan)
+            if (!m_State.TimedPlans.TryGetValue(vehicle, out TimedStopPlan plan)
                 || plan.Line != input.Line
                 || plan.ActiveStopOrder < 0
-                || plan.HoldApplied
                 || !TryGetSessionWaypoint(vehicle, out int waypoint)
                 || waypoint != plan.WaypointIndices[plan.ActiveStopOrder])
             {
                 return;
             }
 
-            if (nowFrame >= plan.EarliestReleaseFrame)
+            if (unchecked((int)(nowFrame - plan.EarliestReleaseFrame)) >= 0)
             {
                 m_State.TimedStopPending.Add(vehicle);
                 return;
             }
+
+            if (plan.HoldApplied)
+                return;
 
             plan.HoldApplied = true;
             QueueControl(new StopControlResult(
@@ -1558,9 +1664,9 @@ namespace RapidTransitMod.Dispatch.Runtime
                 }
 
                 plan.ActiveStopOrder = i;
-                plan.MinimumStopMinutes = ScheduleLimitPolicy.EditMinimum;
+                plan.MinimumStopMinutes = m_LineMinimumDwellMinutes(line);
                 SetTimedDeadline(vehicle, plan, nowFrame, m_Clock());
-                if (nowFrame >= plan.EarliestReleaseFrame)
+                if (unchecked((int)(nowFrame - plan.EarliestReleaseFrame)) >= 0)
                 {
                     m_State.TimedStopPending.Add(vehicle);
                     return 0;
@@ -1717,12 +1823,18 @@ namespace RapidTransitMod.Dispatch.Runtime
                     ? arrived
                     : nowFrame;
                 arrivalDeadline = AddFrames(arrivalFrame, clock.ToFramesCeil(plan.MinimumStopMinutes));
+                if (plan.ActiveStopOrder == 0 && m_DwellClock.TryGetValue(vehicle, out var timing))
+                {
+                    double elapsed = timing.ElapsedMinutes + clock.ToMinutes(unchecked(nowFrame - timing.Frame));
+                    arrivalDeadline = AddFrames(nowFrame, clock.ToFramesCeil(Math.Max(0d, plan.MinimumStopMinutes - elapsed)));
+                }
             }
 
-            plan.EarliestReleaseFrame = Math.Max(scheduled, arrivalDeadline.Value);
+            plan.EarliestReleaseFrame = unchecked((int)(scheduled - arrivalDeadline.Value)) >= 0
+                ? scheduled : arrivalDeadline.Value;
             plan.ClockEpoch = clock.ClockEpoch;
             m_FramePlan.SetDeadline(vehicle, DeadlineKind.TimedStop, plan.EarliestReleaseFrame);
-            if (nowFrame >= plan.EarliestReleaseFrame)
+            if (unchecked((int)(nowFrame - plan.EarliestReleaseFrame)) >= 0)
                 m_State.TimedStopPending.Add(vehicle);
         }
 
@@ -1731,6 +1843,23 @@ namespace RapidTransitMod.Dispatch.Runtime
             foreach (var entry in m_State.TimedPlans.ToArray())
             {
                 TimedStopPlan plan = entry.Value;
+                if (plan.ActiveStopOrder == 0 && plan.WaypointIndices[0] == 0
+                    && ((TryGetSessionWaypoint(entry.Key, out int waypoint) && waypoint == 0)
+                        || m_State.InvalidatedMidStopRecoveryPending.Contains(entry.Key)))
+                {
+                    uint nowFrame = m_Frame();
+                    uint arrival = m_State.StopSessionArrivalFrame[entry.Key];
+                    double elapsed = m_DwellClock.TryGetValue(entry.Key, out var timing)
+                        ? timing.ElapsedMinutes + oldClock.ToMinutes(unchecked(nowFrame - timing.Frame))
+                        : oldClock.ToMinutes(unchecked(nowFrame - arrival));
+                    m_DwellClock[entry.Key] = (nowFrame, elapsed);
+                    uint minimum = AddFrames(nowFrame, newClock.ToFramesCeil(Math.Max(0d, plan.MinimumStopMinutes - elapsed)));
+                    SetTimedDeadline(entry.Key, plan, nowFrame, newClock, minimum);
+                    plan.HoldApplied = false;
+                    m_OriginHoldFrames[entry.Key] = plan.EarliestReleaseFrame;
+                    m_FramePlan.AddStage(entry.Key, RuntimeStageMask.Stop);
+                    continue;
+                }
                 InvalidateTimedPlan(entry.Key,
                     plan.ActiveStopOrder >= 0 && (plan.HoldApplied || plan.RestorePending));
             }
@@ -1784,7 +1913,7 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         private static uint AddFrames(uint frame, uint delta)
         {
-            return delta > uint.MaxValue - frame ? uint.MaxValue : frame + delta;
+            return unchecked(frame + delta);
         }
 
         private void SetDwellDeadline(Entity vehicle, Entity line, int waypoint, uint sinceFrame)

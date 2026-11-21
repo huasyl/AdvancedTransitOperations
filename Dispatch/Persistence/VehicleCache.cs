@@ -38,7 +38,7 @@ namespace RapidTransitMod.Dispatch.Persistence
             if (!m_Runtime.EntityManager.HasBuffer<VehicleStateCacheElement>(city))
             {
                 m_Runtime.EntityManager.AddBuffer<VehicleStateCacheElement>(city);
-                m_Runtime.log.Info("[缓存] 已在城市实体上创建 VehicleStateCacheElement Buffer");
+                m_Runtime.log.Info("[VehicleCache] Created VehicleStateCacheElement buffer on city entity");
             }
             if (!m_Runtime.EntityManager.HasBuffer<TimedPlanCacheElement>(city))
                 m_Runtime.EntityManager.AddBuffer<TimedPlanCacheElement>(city);
@@ -183,7 +183,8 @@ namespace RapidTransitMod.Dispatch.Persistence
                 if (cachedState == VehicleState.Holding)
                 {
                     m_Runtime.m_StopRuntime.ClearTimedPlan(v);
-                    m_Runtime.m_RuntimeEngine.RestoreHold(v, cachedTarget);
+                    m_Runtime.m_RuntimeEngine.RestoreHold(v);
+                    m_Runtime.m_DispatchScheduler.RestoreFormal(v, line, cachedTarget, m_Runtime.m_SimClock.Snapshot);
                     restoredState = cachedState;
                     return true;
                 }
@@ -226,8 +227,8 @@ namespace RapidTransitMod.Dispatch.Persistence
             m_Runtime.m_ObsPersist.MarkLapRestored(v);
             if (RtLog.VerboseEnabled)
             {
-                m_Runtime.log.Info("[恢复] 线路" + line.Index + " 车辆" + v.Index
-                    + " Running lapDist=" + cachedLapDist.ToString("F1")
+                m_Runtime.log.Info("[VehicleRestore] line=" + line.Index + " vehicle=" + v.Index
+                    + " state=Running lapDist=" + cachedLapDist.ToString("F1")
                     + " lapStart=" + (restoredLapStart ? "ok" : "missing-odometer")
                     + " startFrame=" + (restoredLapStart ? m_Runtime.m_SimulationSystem.frameIndex.ToString() : "-"));
             }
@@ -277,7 +278,7 @@ namespace RapidTransitMod.Dispatch.Persistence
             DateTime serviceDate = new DateTime(header.m_ServiceDateTicks).Date;
             if (header.m_ClockTicksPerDay != clock.TicksPerDay
                 || ScheduleClock.GameDay(serviceDate, clock.DaysPerYear)
-                    > ScheduleClock.GameDay(clock.NowDate, clock.DaysPerYear))
+                    > ScheduleClock.GameDay(clock.NowDate, clock.DaysPerYear) + 1)
             {
                 m_Runtime.m_StopRuntime.InvalidateTimedPlan(
                     vehicle, header.m_ActiveStopOrder >= 0);
@@ -380,8 +381,8 @@ namespace RapidTransitMod.Dispatch.Persistence
 
             if (RtLog.VerboseEnabled)
             {
-                m_Runtime.log.Info("[恢复] 线路" + line.Index + " 车辆" + v.Index
-                    + " Running进度恢复"
+                m_Runtime.log.Info("[VehicleRestore] line=" + line.Index + " vehicle=" + v.Index
+                    + " state=Running reason=progress-restored"
                     + " progress=" + progress.ToString("F2")
                     + " wp=" + nextWaypointIndex
                     + " seg=" + segmentPosition.ToString("F2")

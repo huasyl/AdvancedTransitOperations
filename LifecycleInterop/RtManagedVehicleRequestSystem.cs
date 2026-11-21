@@ -66,7 +66,7 @@ namespace RapidTransitMod
             int recordCount = m_SaveRestoreRecords.Count;
             if (recordCount == 0)
             {
-                Mod.log.Info("[RtRequestSave] 写入后恢复完成 记录=0 已恢复=0 已重新许可=0 跳过=0 失败=0");
+                Mod.log.Info("[RtRequestSave] post-save restore complete records=0 restored=0 promoted=0 skipped=0 failed=0");
                 return;
             }
 
@@ -80,7 +80,7 @@ namespace RapidTransitMod
                 LifecyclePort lifecycle = LifecyclePort.Current;
                 ManagedRequestPort managedRequests = lifecycle != null ? lifecycle.ManagedRequests : null;
                 if (managedRequests == null)
-                    Mod.log.Info("[RtRequestSave] 生命周期端口不可用，按保存事务所有权只恢复哨兵，不重新提升许可");
+                    Mod.log.Info("[RtRequestSave] lifecycle port unavailable; restoring save-transaction sentinels without promoting permits");
 
                 for (int i = 0; i < m_SaveRestoreRecords.Count; i++)
                 {
@@ -96,7 +96,7 @@ namespace RapidTransitMod
                     catch (Exception ex)
                     {
                         failedCount++;
-                        Mod.log.Info("[RtRequestSave] 哨兵恢复失败 line=" + record.Line.Index
+                        Mod.log.Info("[RtRequestSave] sentinel restore failed line=" + record.Line.Index
                             + " kind=" + record.Kind + " -> " + ex.GetType().Name + ": " + ex.Message);
                     }
 
@@ -133,7 +133,7 @@ namespace RapidTransitMod
                         catch (Exception ex)
                         {
                             failedCount++;
-                            Mod.log.Info("[RtRequestSave] 许可恢复失败 line=" + record.Line.Index
+                            Mod.log.Info("[RtRequestSave] permit restore failed line=" + record.Line.Index
                                 + " -> " + ex.GetType().Name + ": " + ex.Message);
                         }
                     }
@@ -141,7 +141,7 @@ namespace RapidTransitMod
                 catch (Exception ex)
                 {
                     failedCount++;
-                    Mod.log.Info("[RtRequestSave] 写入后重建许可集合失败 -> "
+                    Mod.log.Info("[RtRequestSave] post-save permit set rebuild failed -> "
                         + ex.GetType().Name + ": " + ex.Message);
                 }
                 finally
@@ -152,11 +152,11 @@ namespace RapidTransitMod
             }
             finally
             {
-                Mod.log.Info("[RtRequestSave] 写入后恢复完成 记录=" + recordCount
-                    + " 已恢复=" + restoredCount
-                    + " 已重新许可=" + promotedCount
-                    + " 跳过=" + skippedCount
-                    + " 失败=" + failedCount);
+                Mod.log.Info("[RtRequestSave] post-save restore complete records=" + recordCount
+                    + " restored=" + restoredCount
+                    + " promoted=" + promotedCount
+                    + " skipped=" + skippedCount
+                    + " failed=" + failedCount);
                 m_SaveRestoreRecords.Clear();
             }
         }
@@ -268,11 +268,11 @@ namespace RapidTransitMod
                         destroyedCount++;
                 }
 
-                Mod.log.Info("[RtRequestSave] 保存前清理完成 记录=" + m_SaveRestoreRecords.Count
-                    + " 哨兵=" + sentinelCount
-                    + " 早期许可=" + permitCount
-                    + " 已销毁=" + destroyedCount
-                    + " 未完成=" + (m_SaveRestoreRecords.Count - destroyedCount));
+                Mod.log.Info("[RtRequestSave] pre-save cleanup complete records=" + m_SaveRestoreRecords.Count
+                    + " sentinels=" + sentinelCount
+                    + " earlyPermits=" + permitCount
+                    + " destroyed=" + destroyedCount
+                    + " incomplete=" + (m_SaveRestoreRecords.Count - destroyedCount));
             }
         }
 
@@ -284,13 +284,13 @@ namespace RapidTransitMod
                     || !EntityManager.Exists(request)
                     || EntityManager.HasComponent<Deleted>(request))
                 {
-                    LogSaveCandidateRejected(request, Entity.Null, kind, "请求实体不存在或已删除");
+                    LogSaveCandidateRejected(request, Entity.Null, kind, "request entity missing or deleted");
                     return;
                 }
 
                 if (!EntityManager.HasComponent<TransportVehicleRequest>(request))
                 {
-                    LogSaveCandidateRejected(request, Entity.Null, kind, "缺少 TransportVehicleRequest");
+                    LogSaveCandidateRejected(request, Entity.Null, kind, "missing TransportVehicleRequest");
                     return;
                 }
 
@@ -318,14 +318,14 @@ namespace RapidTransitMod
                     || EntityManager.HasComponent<Deleted>(line)
                     || !EntityManager.HasComponent<TransportLine>(line))
                 {
-                    LogSaveCandidateRejected(request, line, kind, "线路实体不存在、已删除或缺少 TransportLine");
+                    LogSaveCandidateRejected(request, line, kind, "line entity missing, deleted, or missing TransportLine");
                     return;
                 }
 
                 TransportLine transportLine = EntityManager.GetComponentData<TransportLine>(line);
                 if (transportLine.m_VehicleRequest != request)
                 {
-                    LogSaveCandidateRejected(request, line, kind, "线路请求引用不精确指向候选实体");
+                    LogSaveCandidateRejected(request, line, kind, "line request reference does not point to the candidate entity");
                     return;
                 }
 
@@ -362,7 +362,7 @@ namespace RapidTransitMod
                         + " requestDestroyed=" + record.RequestDestroyed;
                 }
 
-                Mod.log.Info("[RtRequestSave] 保存前清理失败 request=" + request.Index
+                Mod.log.Info("[RtRequestSave] pre-save cleanup failed request=" + request.Index
                     + " kind=" + kind + state + " -> " + ex.GetType().Name + ": " + ex.Message);
             }
         }
@@ -378,8 +378,8 @@ namespace RapidTransitMod
                 || EntityManager.HasComponent<Deleted>(line)
                 || !EntityManager.HasComponent<TransportLine>(line))
             {
-                Mod.log.Info("[RtRequestSave] 哨兵恢复跳过 line=" + line.Index
-                    + " kind=" + kind + "：线路不存在或已删除");
+                Mod.log.Info("[RtRequestSave] sentinel restore skipped line=" + line.Index
+                    + " kind=" + kind + ": line missing or deleted");
                 return Entity.Null;
             }
 
@@ -390,7 +390,7 @@ namespace RapidTransitMod
                 if (!EntityManager.HasComponent<TransportVehicleRequest>(originalRequest)
                     || EntityManager.GetComponentData<TransportVehicleRequest>(originalRequest).m_Route != line)
                 {
-                    Mod.log.Info("[RtRequestSave] 原请求仍存活但线路不匹配，拒绝新建请求 line=" + line.Index
+                    Mod.log.Info("[RtRequestSave] original request still live with a different line; new request rejected line=" + line.Index
                         + " kind=" + kind + " request=" + originalRequest.Index);
                     return Entity.Null;
                 }
@@ -400,29 +400,29 @@ namespace RapidTransitMod
 
                 if (IsLiveRequest(transportLine.m_VehicleRequest))
                 {
-                    Mod.log.Info("[RtRequestSave] 原请求仍存活且线路已有其他请求，拒绝新建请求 line="
+                    Mod.log.Info("[RtRequestSave] original request still live and line has another request; new request rejected line="
                         + line.Index + " kind=" + kind + " request=" + originalRequest.Index);
                     return Entity.Null;
                 }
 
                 transportLine.m_VehicleRequest = originalRequest;
                 EntityManager.SetComponentData(line, transportLine);
-                Mod.log.Info("[RtRequestSave] 已回接保存前仍存活的原请求 line=" + line.Index
+                Mod.log.Info("[RtRequestSave] reattached original request still live from before save line=" + line.Index
                     + " kind=" + kind + " request=" + originalRequest.Index);
                 return originalRequest;
             }
 
             if (IsLiveRequest(transportLine.m_VehicleRequest))
             {
-                Mod.log.Info("[RtRequestSave] 哨兵恢复跳过 line=" + line.Index
-                    + " kind=" + kind + "：线路已有有效请求");
+                Mod.log.Info("[RtRequestSave] sentinel restore skipped line=" + line.Index
+                    + " kind=" + kind + ": line already has a live request");
                 return Entity.Null;
             }
 
             if (managedRequests != null && !managedRequests.IsManagedLine(line))
             {
-                Mod.log.Info("[RtRequestSave] 哨兵恢复跳过 line=" + line.Index
-                    + " kind=" + kind + "：线路不再受模组管理");
+                Mod.log.Info("[RtRequestSave] sentinel restore skipped line=" + line.Index
+                    + " kind=" + kind + ": line is no longer managed");
                 return Entity.Null;
             }
 
@@ -435,8 +435,8 @@ namespace RapidTransitMod
             SaveRestoreKind kind,
             string reason)
         {
-            Mod.log.Info("[RtRequestSave] 保存前保留候选 request=" + request.Index
-                + " line=" + line.Index + " kind=" + kind + "：" + reason);
+            Mod.log.Info("[RtRequestSave] pre-save candidate retained request=" + request.Index
+                + " line=" + line.Index + " kind=" + kind + ": " + reason);
         }
 
         private NativeHashSet<Entity> BuildSpawnPermitLineSet()
@@ -667,17 +667,16 @@ namespace RapidTransitMod
             TransportLine transportLine,
             NativeHashSet<Entity> spawnPermitLines)
         {
+            if (managedRequests.SpawnDeficit(line) <= 0)
+                return false;
+
             if (spawnPermitLines.Contains(line))
                 return false;
 
             if (HasLiveVanillaRequest(line, transportLine))
                 return false;
 
-            if (!managedRequests.TryGetSpawnTarget(line, out int targetCount))
-                return false;
-
-            int actualCount = managedRequests.CountActiveVehicles(line);
-            return targetCount > actualCount;
+            return true;
         }
 
         private void PromoteSentinelToSpawnPermit(Entity request, Entity line)
@@ -706,8 +705,7 @@ namespace RapidTransitMod
         {
             bool committed = EntityManager.HasComponent<PathInformation>(request)
                 || EntityManager.HasComponent<Dispatched>(request);
-            bool stillRequired = managedRequests.TryGetSpawnTarget(line, out int targetCount)
-                && targetCount > managedRequests.CountActiveVehicles(line);
+            bool stillRequired = managedRequests.SpawnDeficit(line) > 0;
             if (committed || stillRequired)
             {
                 if ((transportLine.m_Flags & TransportLineFlags.RequireVehicles) == 0)

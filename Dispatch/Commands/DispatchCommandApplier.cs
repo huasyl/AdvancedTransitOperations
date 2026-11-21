@@ -59,27 +59,6 @@ namespace RapidTransitMod
                 : m_RetireHandoff.ServiceActive(vehicle);
         }
 
-        internal void HoldDeparture(
-            Entity vehicle,
-            ref Game.Vehicles.PublicTransport publicTransport,
-            uint nowFrame,
-            EntityCommandBuffer ecb)
-        {
-            if (!TryGetDispatchActions(vehicle, out DispatchActions actions, out bool isRoad))
-                return;
-
-            if (isRoad)
-                actions.HoldDeparture(vehicle, nowFrame, ecb);
-            else
-                actions.HoldDeparture(vehicle, ref publicTransport, nowFrame, ecb);
-        }
-
-        internal void HoldDeparture(Entity vehicle, uint nowFrame, EntityCommandBuffer ecb)
-        {
-            if (TryGetDispatchActions(vehicle, out DispatchActions actions, out _))
-                actions.HoldDeparture(vehicle, nowFrame, ecb);
-        }
-
         internal void ReleaseDeparture(Entity vehicle, uint nowFrame, EntityCommandBuffer ecb)
         {
             if (TryGetDispatchActions(vehicle, out DispatchActions actions, out _))
@@ -128,23 +107,11 @@ namespace RapidTransitMod
                 actions.ForceDepart(vehicle, nowFrame, ecb);
         }
 
-        internal void CommitAssistLaunch(Entity vehicle, uint nowFrame, EntityCommandBuffer ecb)
-        {
-            if (TryGetDispatchActions(vehicle, out DispatchActions actions, out _))
-                actions.CommitAssistLaunch(vehicle, nowFrame, ecb);
-        }
-
-        internal void KeepDepartureHeld(Entity vehicle, uint nowFrame, EntityCommandBuffer ecb)
-        {
-            if (TryGetDispatchActions(vehicle, out DispatchActions actions, out _))
-                actions.HoldDeparture(vehicle, nowFrame, ecb);
-        }
-
         internal void Retire(Entity vehicle, string reason)
         {
             if (!RuntimePorts.TryResolveVehicleLifecycle(m_Runtime, vehicle, out LifecycleKind lifecycle))
             {
-                LogRoadCommand(vehicle, "车辆生命周期解析失败，拒绝退役交接");
+                LogRoadCommand(vehicle, "lifecycle-resolution-failed action=retire");
                 return;
             }
 
@@ -187,17 +154,6 @@ namespace RapidTransitMod
                 reason);
             if (m_RetireHost.BeginRetire(railInput, out RetireStartContext railStart))
                 m_RetireHandoff.Begin(railInput, railStart);
-        }
-
-        internal void Launch(Entity vehicle, Entity line, int waypoint, EntityCommandBuffer ecb)
-        {
-            if (!TryGetDispatchActions(vehicle, out DispatchActions actions, out bool isRoad))
-                return;
-
-            if (isRoad)
-                actions.ReleaseDeparture(vehicle, m_RoadCommandHost.Frame, ecb);
-            else
-                m_LaunchActions.Launch(vehicle, line, waypoint, ecb);
         }
 
         internal bool EnsurePreparingRoute(
@@ -280,7 +236,7 @@ namespace RapidTransitMod
             isRoad = false;
             if (!RuntimePorts.TryResolveVehicleLifecycle(m_Runtime, vehicle, out LifecycleKind lifecycle))
             {
-                LogRoadCommand(vehicle, "车辆生命周期解析失败，拒绝道路命令");
+                LogRoadCommand(vehicle, "lifecycle-resolution-failed action=command");
                 return false;
             }
 
@@ -297,7 +253,7 @@ namespace RapidTransitMod
             if (!ShouldLogRoadCommand(vehicle, "command"))
                 return;
 
-            m_RoadCommandHost.Log.Info("[RoadCommand] 车辆" + vehicle.Index + " " + message);
+            m_RoadCommandHost.Log.Info("[RoadCommand] vehicle=" + vehicle.Index + " " + message);
         }
 
         private void LogRoadPreparing(
@@ -314,27 +270,27 @@ namespace RapidTransitMod
             {
                 case RoadPreparingResult.Pin:
                     action = "pin";
-                    message = "钉住始发RequireStop";
+                    message = "origin-require-stop-pinned";
                     break;
                 case RoadPreparingResult.Retarget:
                     action = "retarget";
-                    message = "目标纠正到wp0并钉住RequireStop";
+                    message = "target-corrected-to-origin requireStop=pinned";
                     break;
                 case RoadPreparingResult.Pending:
                     action = "pending";
-                    message = "PathOwner仍在Pending，等待下一偏移1轮次";
+                    message = "path-pending wait-for-next-source-frame";
                     break;
                 case RoadPreparingResult.Stuck:
                     action = "stuck";
-                    message = "PathOwner为Stuck，拒绝纠偏";
+                    message = "path-stuck repair-skipped";
                     break;
                 case RoadPreparingResult.UnsafeState:
                     action = "unsafe-state";
-                    message = "已进入Testing/Arriving/Boarding，拒绝修改旧异常车";
+                    message = "active-stop-state repair-skipped";
                     break;
                 case RoadPreparingResult.InvalidOrigin:
                     action = "invalid-origin";
-                    message = "wp0或车辆组件不满足Preparing始发纠偏契约";
+                    message = "origin-or-vehicle-components-invalid";
                     break;
                 default:
                     return;
@@ -383,8 +339,8 @@ namespace RapidTransitMod
             if (!m_RetireHandoff.TryGetForceRetireVehicle(out Entity vehicle))
                 return;
 
-            m_CommandHost.Log.Info("[F7] 强制回库车辆" + vehicle.Index);
-            Retire(vehicle, "F7强制");
+            m_CommandHost.Log.Info("[F7] force-retire vehicle=" + vehicle.Index);
+            Retire(vehicle, "debug-force-retire");
         }
 
         internal void TickRetireHandoffStages(uint nowFrame, IReadOnlyList<FramePlanEntry> candidates)

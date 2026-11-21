@@ -103,10 +103,8 @@ namespace RapidTransitMod.Dispatch.Diagnostics
         private ulong m_DeparturePendingDemand;
         private ulong m_BypassWatchDemand;
         private ulong m_BypassActiveDemand;
-        private ulong m_OriginCandidateDemand;
         private ulong m_InboundWatchDemand;
         private ulong m_HeavyDetailReads;
-        private ulong m_PathDetailReads;
         private ulong m_NavigationDetailReads;
         private ulong m_BusinessFacts;
         private ulong m_DueDeadlines;
@@ -371,13 +369,7 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             if ((demand & RuntimeDemandMask.DeparturePending) != 0) m_DeparturePendingDemand++;
             if ((demand & RuntimeDemandMask.BypassWatch) != 0) m_BypassWatchDemand++;
             if ((demand & RuntimeDemandMask.BypassActive) != 0) m_BypassActiveDemand++;
-            if ((demand & RuntimeDemandMask.OriginCandidate) != 0) m_OriginCandidateDemand++;
             if ((demand & RuntimeDemandMask.InboundWatch) != 0) m_InboundWatchDemand++;
-        }
-
-        internal void CountPathDetailRead()
-        {
-            if (Enabled()) m_PathDetailReads++;
         }
 
         internal void CountHeavyDetailRead()
@@ -661,8 +653,8 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                     + " ensureFrameRow=" + m_EnsureFrameRows
                     + " changes=" + m_OfficialBoardingChanged + "/" + m_MovingChanged
                     + " demands=" + m_DeparturePendingDemand + "/" + m_BypassWatchDemand + "/" + m_BypassActiveDemand
-                    + "/" + m_OriginCandidateDemand + "/" + m_InboundWatchDemand
-                    + " detail=" + m_HeavyDetailReads + "/" + m_PathDetailReads + "/" + m_NavigationDetailReads
+                    + "/" + m_InboundWatchDemand
+                    + " detail=" + m_HeavyDetailReads + "/" + m_NavigationDetailReads
                     + " facts=" + m_BusinessFacts
                     + " due=" + m_DueDeadlines
                     + " stagePlan=" + m_StopStagePlans + "/" + m_RescueStagePlans + "/" + m_BypassStagePlans
@@ -695,10 +687,8 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             m_DeparturePendingDemand = 0;
             m_BypassWatchDemand = 0;
             m_BypassActiveDemand = 0;
-            m_OriginCandidateDemand = 0;
             m_InboundWatchDemand = 0;
             m_HeavyDetailReads = 0;
-            m_PathDetailReads = 0;
             m_NavigationDetailReads = 0;
             m_BusinessFacts = 0;
             m_DueDeadlines = 0;
@@ -1066,10 +1056,8 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 || m_DeparturePendingDemand > 0
                 || m_BypassWatchDemand > 0
                 || m_BypassActiveDemand > 0
-                || m_OriginCandidateDemand > 0
                 || m_InboundWatchDemand > 0
                 || m_HeavyDetailReads > 0
-                || m_PathDetailReads > 0
                 || m_NavigationDetailReads > 0
                 || m_BusinessFacts > 0
                 || m_DueDeadlines > 0

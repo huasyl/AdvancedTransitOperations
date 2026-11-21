@@ -699,12 +699,12 @@ namespace RapidTransitMod.Dispatch.Persistence
                         : "hold";
             if (RtLog.VerboseEnabled)
             {
-                m_Runtime.log.Info("[出库缓存] 线路" + line.Index
+                m_Runtime.log.Info("[DispatchCacheUpdate] line=" + line.Index
                     + " depot=" + depotId
-                    + " 样本=" + m_Runtime.m_SimClock.ToMinutes(sampleFrames).ToString("F1") + "分钟"
-                    + " 最近" + sampleCount + "条"
-                    + " ETA=" + m_Runtime.m_SimClock.ToMinutes(newFrames).ToString("F1") + "分钟"
-                    + (oldFrames > 0 ? " 旧值" + m_Runtime.m_SimClock.ToMinutes(oldFrames).ToString("F1") + "分钟" : "")
+                    + " sample=" + m_Runtime.m_SimClock.ToMinutes(sampleFrames).ToString("F1") + "min"
+                    + " samples=" + sampleCount
+                    + " eta=" + m_Runtime.m_SimClock.ToMinutes(newFrames).ToString("F1") + "min"
+                    + (oldFrames > 0 ? " old=" + m_Runtime.m_SimClock.ToMinutes(oldFrames).ToString("F1") + "min" : "")
                     + " mode=" + mode);
             }
         }

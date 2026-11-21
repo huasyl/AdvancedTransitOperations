@@ -6,14 +6,10 @@ namespace RapidTransitMod.Runtime
     internal enum DeadlineKind : byte
     {
         Dwell,
-        Ready,
         Idle,
-        LaunchCooldown,
         PreparingCooldown,
-        OriginBoardingGrace,
         ForcedMidStopBoardingGrace,
         TimedStop,
-        OriginSettle,
         RetireBoundary,
         RetireHardAck,
         RescueProbe,
