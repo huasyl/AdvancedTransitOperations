@@ -19,7 +19,11 @@ export default function ScheduleSidebar({ controller, activeTransportMode, onTra
     <OverviewModeRail modes={modes} activeMode={selectedMode} onModeChange={(mode) => onTransportModeChange?.(mode.toLowerCase())} showMetrics={false} compact={compact} />
     <WorkbenchScrollArea className="dw-departure-sidebar-scroll" metricsKey={topbar.lineOptions.length}>
       <div className="dw-departure-lines">
-        {sortLineOptions(topbar.lineOptions, t).map((option) => <button key={option.id} type="button" className={`dw-departure-line-button ${line.view === "line" && option.id === topbar.selectedLineId ? "is-active" : ""}`} onClick={() => { actions.selectLine(option.id); actions.setScheduleView("line"); }}>
+        {sortLineOptions(topbar.lineOptions, t).map((option) => <button key={option.id} type="button" className={`dw-departure-line-button ${line.view === "line" && option.id === topbar.selectedLineId ? "is-active" : ""}`} onClick={() => {
+          actions.selectLine(option.id);
+          actions.setScheduleView("line");
+          actions.refreshNames();
+        }}>
           <span className="dw-demo-dot" style={{ backgroundColor: option.color }} /><span className="dw-departure-line-name">{getLocalizedLineName(option, t)}</span>{Object.values(line.issues.get(option.id) || {}).some(Boolean) ? <span className="dw-departure-line-mark">!</span> : null}
         </button>)}
       </div>

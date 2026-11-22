@@ -56,7 +56,7 @@ export const nativeScheduleTranslationsEnUs = {
   "nativeSchedule.topbar.origin": "Origin",
   "nativeSchedule.topbar.depot": "Depot",
   "nativeSchedule.topbar.holdMinutes": "Max Origin Wait",
-  "nativeSchedule.topbar.holdMinutes.tooltip": "The longest a train will wait at the origin. A train that would need to wait longer for its next trip is sent back to the depot. Trains dispatched from the depot usually reach the origin this many minutes before departure.",
+  "nativeSchedule.topbar.holdMinutes.tooltip": "The longest a train will wait at the origin. A train that would need to wait longer for its next trip is sent back to the depot.",
   "nativeSchedule.topbar.dwellMinutes": "Max Dwell",
   "nativeSchedule.topbar.dwellMinutes.tooltip": "The longest a train will stop at an intermediate station. Once a timetable is added, dwell times follow the timetable.",
   "nativeSchedule.topbar.runtimeFeatures": "Systems",

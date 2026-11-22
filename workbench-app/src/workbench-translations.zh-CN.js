@@ -56,7 +56,7 @@ export const nativeScheduleTranslationsZhCn = {
   "nativeSchedule.topbar.origin": "始发站",
   "nativeSchedule.topbar.depot": "停放车库",
   "nativeSchedule.topbar.holdMinutes": "始发等候上限",
-  "nativeSchedule.topbar.holdMinutes.tooltip": "列车在始发站最多等候的时间。离下一班还要等更久的列车会被安排回库。从车库派出的列车，通常会按此时长提前到达始发站。",
+  "nativeSchedule.topbar.holdMinutes.tooltip": "列车在始发站最多等候的时间。离下一班还要等更久的列车会被安排回库。",
   "nativeSchedule.topbar.dwellMinutes": "最长停站",
   "nativeSchedule.topbar.dwellMinutes.tooltip": "列车在中途站最多停靠的时间。添加时刻表后，改按时刻表停站。",
   "nativeSchedule.topbar.runtimeFeatures": "系统开关",

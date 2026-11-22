@@ -56,7 +56,7 @@ export const nativeScheduleTranslationsJaJp = {
   "nativeSchedule.topbar.origin": "始発駅",
   "nativeSchedule.topbar.depot": "車庫",
   "nativeSchedule.topbar.holdMinutes": "始発待機上限",
-  "nativeSchedule.topbar.holdMinutes.tooltip": "列車が始発駅で待機できる最長時間です。次の便までこれより長く待つ必要がある列車は、車庫へ回送されます。車庫から出庫する列車は、通常この時間分だけ早く始発駅に到着します。",
+  "nativeSchedule.topbar.holdMinutes.tooltip": "列車が始発駅で待機できる最長時間です。次の便までこれより長く待つ必要がある列車は、車庫へ回送されます。",
   "nativeSchedule.topbar.dwellMinutes": "最大停車時間",
   "nativeSchedule.topbar.dwellMinutes.tooltip": "列車が途中駅で停車できる最長時間です。時刻表を追加すると、時刻表どおりに停車します。",
   "nativeSchedule.topbar.runtimeFeatures": "機能切替",
