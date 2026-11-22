@@ -42,6 +42,9 @@ namespace RapidTransitMod
 
     internal sealed class MigrationReport
     {
+        // Migration troubleshooting has its own opt-in, separate from player verbose logging.
+        internal static readonly bool DetailsEnabled = false;
+
         private readonly List<MigrationEntry> m_Entries = new List<MigrationEntry>();
         private readonly HashSet<string> m_Seen = new HashSet<string>(System.StringComparer.Ordinal);
 

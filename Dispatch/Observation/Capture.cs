@@ -1190,9 +1190,6 @@ namespace RapidTransitMod.Dispatch.Observation
 
         internal void ClearVehicleTraversalSliceLapDebug(Entity vehicle)
         {
-            if (!RtLog.VerboseEnabled)
-                return;
-
             if (vehicle == Entity.Null || m_Slices.LapDebug.Count == 0)
                 return;
 

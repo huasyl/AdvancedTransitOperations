@@ -208,6 +208,7 @@ namespace RapidTransitMod
         private readonly Dictionary<Entity, PendingRequestRouteSetupCacheEntry> m_FramePendingRequestRouteSetupByLine = new Dictionary<Entity, PendingRequestRouteSetupCacheEntry>();
         private readonly Dictionary<DepotLineCacheKey, Entity> m_FrameReusableConfiguredSourceByDepotLine = new Dictionary<DepotLineCacheKey, Entity>();
         private readonly Dictionary<Entity, LineRuntimeSnapshot> m_LineRuntimeSnapshots = new Dictionary<Entity, LineRuntimeSnapshot>();
+        private int m_LineRuntimeSnapshotCleanupCountdown = LINE_RUNTIME_SNAPSHOT_CLEANUP_INTERVAL_FRAMES;
         private int m_FrameCacheLogCountdown = DEPOT_FRAME_CACHE_LOG_INTERVAL_FRAMES;
         private int m_ConfiguredDepotFrameCacheHits;
         private int m_ConfiguredDepotFrameCacheMisses;
@@ -222,11 +223,13 @@ namespace RapidTransitMod
         private int m_BlockedRequestProbeReleases;
         private const byte CONFIGURED_DEPOT_BRANCH_BLOCK_COOLDOWN = 16;
         private const int CONFIGURED_DEPOT_OUTBOUND_PATH_LOOKAHEAD = 8;
+        private const int UPDATE_INTERVAL_FRAMES = 16;
+        private const int LINE_RUNTIME_SNAPSHOT_CLEANUP_INTERVAL_FRAMES = 3600;
         private const int DEPOT_FRAME_CACHE_LOG_INTERVAL_FRAMES = 3600;
 
         public override int GetUpdateInterval(SystemUpdatePhase phase)
         {
-            return 16;
+            return UPDATE_INTERVAL_FRAMES;
         }
 
         protected override void OnCreate()
@@ -263,21 +266,21 @@ namespace RapidTransitMod
             if (control != null && !control.m_Features.DepotLock())
             {
                 ClearConfiguredSourceRetries();
-                TickDepotFrameCacheLogging();
+                MaintainDepotCaches();
                 return;
             }
 
             if ((m_RtSpawnPermitRequestQuery.IsEmptyIgnoreFilter && m_ConfiguredDispatchRequestQuery.IsEmptyIgnoreFilter)
                 || m_LineQuery.IsEmptyIgnoreFilter)
             {
-                TickDepotFrameCacheLogging();
+                MaintainDepotCaches();
                 return;
             }
 
             BuildPendingRequestFrameState();
             QueueConfiguredDepotRequests();
             GateConfiguredDepotDispatchRequests();
-            TickDepotFrameCacheLogging();
+            MaintainDepotCaches();
         }
 
         private void ClearFrameDepotCaches()
@@ -287,6 +290,18 @@ namespace RapidTransitMod
             m_FrameConfiguredDepotByLine.Clear();
             m_FramePendingRequestRouteSetupByLine.Clear();
             m_FrameReusableConfiguredSourceByDepotLine.Clear();
+        }
+
+        private void MaintainDepotCaches()
+        {
+            m_LineRuntimeSnapshotCleanupCountdown -= UPDATE_INTERVAL_FRAMES;
+            if (m_LineRuntimeSnapshotCleanupCountdown <= 0)
+            {
+                CleanupLineRuntimeSnapshots();
+                m_LineRuntimeSnapshotCleanupCountdown = LINE_RUNTIME_SNAPSHOT_CLEANUP_INTERVAL_FRAMES;
+            }
+
+            TickDepotFrameCacheLogging();
         }
 
         private void TickDepotFrameCacheLogging()
@@ -308,11 +323,9 @@ namespace RapidTransitMod
                 return;
             }
 
-            m_FrameCacheLogCountdown -= 16;
+            m_FrameCacheLogCountdown -= UPDATE_INTERVAL_FRAMES;
             if (m_FrameCacheLogCountdown > 0)
                 return;
-
-            CleanupLineRuntimeSnapshots();
 
             int configuredDepotLookups = m_ConfiguredDepotFrameCacheHits + m_ConfiguredDepotFrameCacheMisses;
             int routeSetupLookups = m_RouteSetupFrameCacheHits + m_RouteSetupFrameCacheMisses;

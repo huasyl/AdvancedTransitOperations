@@ -2,6 +2,8 @@
   "Options.GROUP[RapidTransitMod.RapidTransitMod.Mod.ScheduleAdvanced]": "调度高级选项",
   "Options.OPTION[RapidTransitMod.RapidTransitMod.Mod.AtoGameOptions.AllowOneMinuteLimits]": "允许 1 分钟调度下限",
   "Options.OPTION_DESCRIPTION[RapidTransitMod.RapidTransitMod.Mod.AtoGameOptions.AllowOneMinuteLimits]": "将始发等候上限、最长停站、同始发站发车间隔和详细停站的编辑下限降至 1 分钟。",
+  "Options.OPTION[RapidTransitMod.RapidTransitMod.Mod.AtoGameOptions.EnableVerboseLogging]": "详细日志",
+  "Options.OPTION_DESCRIPTION[RapidTransitMod.RapidTransitMod.Mod.AtoGameOptions.EnableVerboseLogging]": "记录班次分配、车辆运行等详细信息。开启后从当前起生效。请仅在排查问题时开启。",
   "Options.TAB[RapidTransitMod.RapidTransitMod.Mod.FirstPerson]": "第一人称",
   "Options.GROUP[RapidTransitMod.RapidTransitMod.Mod.FirstPersonInfo]": "第一人称信息",
   "Options.OPTION[RapidTransitMod.RapidTransitMod.Mod.AtoGameOptions.ShowFirstPersonInfo]": "显示第一人称信息",

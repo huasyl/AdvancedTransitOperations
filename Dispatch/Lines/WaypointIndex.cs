@@ -87,10 +87,12 @@ namespace RapidTransitMod.Dispatch.Lines
             return computedWaypointIndex;
         }
 
+#if RT_DEBUG_TOOLS
         public int ComputeForOriginArrivingRepair(Entity vehicle, DynamicBuffer<RouteWaypoint> ways)
         {
             return Compute(vehicle, ways);
         }
+#endif
 
         public bool TryLookup(
             Entity line,

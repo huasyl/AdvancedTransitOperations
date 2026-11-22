@@ -234,9 +234,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                 m_Runtime.m_WorkbenchBridge.Ui().Fault("OnGameLoaded.NotifyWorkbenchSnapshotChanged", ex);
             }
 
-#if RT_VERBOSE_LOGS
-            report.LogDetails(message => m_Runtime.log.Info(message));
-#endif
+            if (MigrationReport.DetailsEnabled)
+                report.LogDetails(message => m_Runtime.log.Info(message));
             if (report.Count > 0)
             {
                 m_Runtime.log.Info("[LineKeyMigration] summary: " + report.Summary());

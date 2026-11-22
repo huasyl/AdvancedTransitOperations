@@ -258,9 +258,8 @@ namespace RapidTransitMod.Dispatch.Workbench
             {
                 if (migrationReport.Count > 0)
                 {
-#if RT_VERBOSE_LOGS
-                    migrationReport.LogDetails(message => Mod.log.Info(message));
-#endif
+                    if (MigrationReport.DetailsEnabled)
+                        migrationReport.LogDetails(message => Mod.log.Info(message));
                     Mod.log.Info("[WorkbenchLineMigration] summary: " + migrationReport.Summary());
                 }
                 return migratedLegacyFeatureSettings || normalizedLegacy || HasMigrated(migrationReport);
@@ -290,9 +289,8 @@ namespace RapidTransitMod.Dispatch.Workbench
             }
             if (migrationReport.Count > 0)
             {
-#if RT_VERBOSE_LOGS
-                migrationReport.LogDetails(message => Mod.log.Info(message));
-#endif
+                if (MigrationReport.DetailsEnabled)
+                    migrationReport.LogDetails(message => Mod.log.Info(message));
                 Mod.log.Info("[WorkbenchLineMigration] summary: " + migrationReport.Summary());
             }
 

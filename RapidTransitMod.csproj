@@ -19,7 +19,7 @@
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)'=='Debug'">
-    <DefineConstants>$(DefineConstants);RT_DEBUG_TOOLS;RT_VERBOSE_LOGS</DefineConstants>
+    <DefineConstants>$(DefineConstants);RT_DEBUG_TOOLS</DefineConstants>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)'=='Release'">

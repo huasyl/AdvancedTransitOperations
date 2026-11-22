@@ -72,7 +72,7 @@ namespace RapidTransitMod.Workbenches
             return "{\"debugTools\":"
                 + (BuildFlavor.DebugTools ? "true" : "false")
                 + ",\"verboseLogs\":"
-                + (BuildFlavor.VerboseLogs ? "true" : "false")
+                + (RtLog.VerboseEnabled ? "true" : "false")
                 + "}";
         }
 

@@ -62,6 +62,7 @@ namespace RapidTransitMod.Dispatch.Lines
             return false;
         }
 
+#if RT_DEBUG_TOOLS
         public bool TryOriginArrivalRepair(
             Entity vehicle,
             out int nextWaypointIndex,
@@ -73,6 +74,7 @@ namespace RapidTransitMod.Dispatch.Lines
             return nextWaypointIndex == 0
                 && segmentPosition >= ModRuntimeHostSystem.ORIGIN_FORCE_IDLE_SEGMENT_PROGRESS;
         }
+#endif
 
         private bool TryPath(Entity vehicle, CurrentRoute currentRoute, out int nextWaypointIndex, out float segmentPosition)
         {

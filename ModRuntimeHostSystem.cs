@@ -340,10 +340,12 @@ namespace RapidTransitMod
 
         // ── 帧级保护 ──
 
+#if RT_DEBUG_TOOLS
         internal bool IsRuntimeReadyForOriginArrivingRepair()
         {
             return m_SystemReady;
         }
+#endif
 
         internal bool TryGetRuntimeVehicleState(Entity vehicle, out VehicleState state)
         {

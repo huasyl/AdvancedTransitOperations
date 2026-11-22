@@ -1,3 +1,4 @@
+#if RT_DEBUG_TOOLS
 using System.Collections.Generic;
 using Game;
 using Game.Common;
@@ -491,3 +492,4 @@ namespace RapidTransitMod
         }
     }
 }
+#endif

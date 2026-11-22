@@ -83,7 +83,9 @@ namespace RapidTransitMod
             updateSystem.UpdateBefore<RtManagedVehicleRequestSystem, TransportVehicleDispatchSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateBefore<RetireDispatchPreTrainAiQuarantineSystem, TransportTrainAISystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateBefore<RetireDispatchPostTrainAiRearmSystem, TransportVehicleDispatchSystem>(SystemUpdatePhase.GameSimulation);
+#if RT_DEBUG_TOOLS
             updateSystem.UpdateAfter<OriginArrivingStallRepairSystem, TrainNavigationSystem>(SystemUpdatePhase.GameSimulation);
+#endif
             updateSystem.UpdateAfter<DepotSourceLockSystem, RtManagedVehicleRequestSystem>(SystemUpdatePhase.GameSimulation);
 #if RT_DEBUG_TOOLS
             updateSystem.UpdateAfter<DevSightRaycastCollectorSystem, ToolRaycastSystem>(SystemUpdatePhase.Raycast);

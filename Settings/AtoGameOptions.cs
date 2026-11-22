@@ -49,6 +49,9 @@ namespace RapidTransitMod.Settings
             }
         }
 
+        [SettingsUISection("General", "ScheduleAdvanced")]
+        public bool EnableVerboseLogging { get; set; }
+
         [SettingsUISection("BroadcastAudio", "BroadcastHint")]
         [SettingsUIMultilineText]
         public string BroadcastAudioHint => string.Empty;
@@ -98,6 +101,7 @@ namespace RapidTransitMod.Settings
         {
             AutoOpenSelectionPanel = true;
             AllowOneMinuteLimits = false;
+            EnableVerboseLogging = false;
             ShowFirstPersonInfo = true;
             FirstPersonPosition = FirstPersonPlace.Center;
         }

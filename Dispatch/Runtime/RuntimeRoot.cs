@@ -585,12 +585,14 @@ namespace RapidTransitMod.Dispatch.Runtime
                 runtime.m_LineServiceState);
 
             LifecyclePort.Bind(new LifecyclePort(
-                new ManagedRequestPort(runtime),
+#if RT_DEBUG_TOOLS
                 new OriginRepairPort(
                     runtime.IsRuntimeReadyForOriginArrivingRepair,
                     runtime.TryGetRuntimeVehicleState,
                     runtime.m_WaypointIndex.ComputeForOriginArrivingRepair,
-                    runtime.m_RouteProgress.TryOriginArrivalRepair)));
+                    runtime.m_RouteProgress.TryOriginArrivalRepair),
+#endif
+                new ManagedRequestPort(runtime)));
 
             RuntimePorts.Build(runtime);
             PassengerFlow.Port passengerFlowPort = new PassengerFlow.Port(runtime);

@@ -1,3 +1,4 @@
+#if RT_DEBUG_TOOLS
 using Game.Routes;
 using Unity.Entities;
 
@@ -48,3 +49,4 @@ namespace RapidTransitMod
         }
     }
 }
+#endif

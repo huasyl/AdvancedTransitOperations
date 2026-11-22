@@ -2,6 +2,8 @@
   "Options.GROUP[RapidTransitMod.RapidTransitMod.Mod.ScheduleAdvanced]": "高度なダイヤ設定",
   "Options.OPTION[RapidTransitMod.RapidTransitMod.Mod.AtoGameOptions.AllowOneMinuteLimits]": "ダイヤ設定の下限を1分にする",
   "Options.OPTION_DESCRIPTION[RapidTransitMod.RapidTransitMod.Mod.AtoGameOptions.AllowOneMinuteLimits]": "始発待機上限、最大停車時間、同じ始発駅の発車間隔と詳細停車時間の編集下限を1分にします。",
+  "Options.OPTION[RapidTransitMod.RapidTransitMod.Mod.AtoGameOptions.EnableVerboseLogging]": "詳細ログ",
+  "Options.OPTION_DESCRIPTION[RapidTransitMod.RapidTransitMod.Mod.AtoGameOptions.EnableVerboseLogging]": "便の割り当てや車両の運行などの詳細を記録します。有効にするとすぐに記録を開始します。問題の原因を調べるときだけ有効にしてください。",
   "Options.TAB[RapidTransitMod.RapidTransitMod.Mod.FirstPerson]": "一人称視点",
   "Options.GROUP[RapidTransitMod.RapidTransitMod.Mod.FirstPersonInfo]": "一人称視点の情報",
   "Options.OPTION[RapidTransitMod.RapidTransitMod.Mod.AtoGameOptions.ShowFirstPersonInfo]": "一人称視点の情報を表示",

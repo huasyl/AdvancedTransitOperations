@@ -2,6 +2,8 @@
   "Options.GROUP[RapidTransitMod.RapidTransitMod.Mod.ScheduleAdvanced]": "Advanced scheduling",
   "Options.OPTION[RapidTransitMod.RapidTransitMod.Mod.AtoGameOptions.AllowOneMinuteLimits]": "Allow a 1-minute scheduling minimum",
   "Options.OPTION_DESCRIPTION[RapidTransitMod.RapidTransitMod.Mod.AtoGameOptions.AllowOneMinuteLimits]": "Lower the editing minimum for origin hold limit, maximum station dwell, same-origin departure gap and detailed dwell to 1 minute.",
+  "Options.OPTION[RapidTransitMod.RapidTransitMod.Mod.AtoGameOptions.EnableVerboseLogging]": "Verbose logging",
+  "Options.OPTION_DESCRIPTION[RapidTransitMod.RapidTransitMod.Mod.AtoGameOptions.EnableVerboseLogging]": "Log details about departure assignments, vehicle operation and more. Takes effect as soon as it is enabled. Enable only when troubleshooting an issue.",
   "Options.TAB[RapidTransitMod.RapidTransitMod.Mod.FirstPerson]": "First Person",
   "Options.GROUP[RapidTransitMod.RapidTransitMod.Mod.FirstPersonInfo]": "First-person info",
   "Options.OPTION[RapidTransitMod.RapidTransitMod.Mod.AtoGameOptions.ShowFirstPersonInfo]": "Show first-person info",
