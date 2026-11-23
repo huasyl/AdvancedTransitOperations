@@ -12,11 +12,13 @@ Advanced Transit Operations (ATO) is a public transit dispatch mod for Cities: S
 
 The current version supports Train, Subway, Tram, and Bus. Supported languages: English, Simplified Chinese, and Japanese.
 
-## What's New in v0.5.0
+## What's New in v0.5.2
 
-Recently, I’ve been thinking about how statistics can better inform player decisions and provide more meaningful gameplay feedback. What data is collected and how it is presented are both important. With this in mind, v0.5.0 brings major improvements to passenger statistics and their presentation. You can now choose the time period to analyze, with new data such as load factors, waiting passengers, and station passenger flows by time period, making it easier to adjust operations based on actual conditions. Signal Priority has also received new visual feedback, making its behavior much easier to see in action. Further improvements to feature access and usability are planned throughout the v0.5 series, so stay tuned.
+This version redesigns the Departure Control page. It now shows line ridership and all-day onboard load, so you can adjust trips by time period with actual passenger flow in view. Each trip in the trip list links directly to its run record, making it easier to check how it actually ran. Transport mode selection has moved to the sidebar, so switching no longer requires returning to the Overview page.
 
-This update also improves broadcast audio deletion, allowing imported audio files to be properly removed from disk, and introduces a 1-minute minimum scheduling interval for players who prefer more realistic operations.
+This update comes a month after the previous version, mainly because most of that time went into rewriting core modules such as save loading and dispatch. As features grew, the existing code became increasingly difficult to maintain and fix, and this rewrite is meant to keep the project maintainable in the long run. After the rewrite, the mod now takes control of vehicles immediately after loading a save, and previously reported issues such as duplicate departures and late vehicles unloading passengers and returning to the depot have also been fixed.
+
+This update also includes a number of UI refinements.
 
 ## Core Gameplay
 
@@ -83,11 +85,13 @@ Advanced Transit Operations（ATO）是面向《城市：天际线 2》公共交
 
 当前支持火车、地铁、有轨电车和公交。支持语言：英语、简体中文、日语。
 
-## v0.5.0 更新内容
+## v0.5.2 更新内容
 
-最近我一直在思考，如何让数据真正作用于玩家的决策，并形成更直观的游戏反馈。数据统计什么、又以什么方式呈现，都非常重要。基于这一思路，v0.5.0 对客流统计和展示进行了较大改进：现在可以自由选择统计时段，并新增载客率、等待人数、站点分时客流等数据，帮助玩家更有针对性地调整线路运营。同时，信号优先功能也加入了可视化展示，让其实际运行状态更加直观。v0.5 后续版本还计划继续改进许多功能的入口和操作方式，敬请期待。
+本版本重新设计了发车控制页。页面加入了线路客流与全天在车人数，便于对照实际客流，按时段直观地调整班次。班次列表中的每个班次均可直接跳转至对应的运行记录，方便查阅实际运行情况。交通方式选择移至侧栏，切换时无需返回总览页。
 
-本次更新还改进了广播音频的删除机制，解决了音频文件不会直接从磁盘删除的问题；同时，为注重真实模拟的玩家提供了最低 1 分钟的调度时间设置。
+本次更新与上一版本间隔一个月，主要原因是这段时间集中重写了读档接管、调度等底层模块。随着功能不断增加，原有代码的维护和问题修复愈发困难，此次重写意在保证项目能够长期稳定地维护。重写后，读档时模组会立即接管车辆，此前反馈的重复发车、晚点车辆被清客回库等问题也已一并修复。
+
+此外，本次更新还包含若干界面细节优化。
 
 ## 核心玩法
 
@@ -150,7 +154,7 @@ ATO 只向存档写入自身的配置和运行数据，不会永久修改原版�
   <!--Thumbnail-->
   <Thumbnail Value="Properties/Cover-C-v4.jpg" />
   <!--Screenshot, can be set multiple times-->
-  <Screenshot Value="Properties/Screenshots/Screenshot-v0.4.1-signal-priority.png" />
+  <Screenshot Value="Properties/Screenshots/Screenshot-v0.5.2-departure-control.png" />
   <Screenshot Value="Properties/Screenshots/Screenshot12.png" />
   <Screenshot Value="Properties/Screenshots/Screenshot13.png" />
   <Screenshot Value="Properties/Screenshots/Screenshot02.pub.jpg" />
@@ -166,7 +170,7 @@ ATO 只向存档写入自身的配置和运行数据，不会永久修改原版�
   <!--Link to the forum post where the mod can be discussed-->
   <ForumLink Value="https://forum.paradoxplaza.com/forum/threads/advanced-transit-operations.1932870/" />
   <!--Version of the mod-->
-  <ModVersion Value="0.5.1" />
+  <ModVersion Value="0.5.2" />
   <!--Recommended version of the base game to use the mod-->
   <GameVersion Value="1.6.*" />
   <!--Dependency for the mod, can be set multiple times-->
@@ -177,24 +181,28 @@ ATO 只向存档写入自身的配置和运行数据，不会永久修改原版�
   <ChangeLog>
 ## New Features
 
-- Added compatibility with First Person Camera Continued. Signal priority status and other information can now be displayed in first-person view, and broadcasts now play based on the vehicle you are riding.
+- Redesigned Departure Control page. Switch transport modes and lines directly from the sidebar. On a single line, you can plan trips against the line's ridership and all-day onboard load, and adjust trip counts by time period.
+- The trip list now shows how each trip actually ran, such as on time, early, late or missed. Click to jump to its record on the Timetable page.
+- Added a "Verbose logging" option to the General tab of the mod settings for troubleshooting.
 
 ## Improvements
 
-- Improved some UI features.
-- Improved mod stability.
+- After loading a save, the mod now takes control of vehicles on the first simulation frame. Previously there was a gap of about 2 in-game minutes with no dispatch control.
+- Improved some UI details. Next-day times are now marked with a "+1" superscript, and they are no longer cut off in records on the Timetable page. Long station names now wrap in the vehicle info panel. Added open and close animations to the workbench.
+- Added tooltips explaining some features.
+
+## Performance
+
+- Slightly improved performance.
 
 ## Bug Fixes
 
-- Fixed an issue where buses finishing boarding at the origin stop could occasionally be misjudged as departing abnormally, causing the same trip to be assigned to another vehicle.
-- Fixed an issue where different transport modes sharing the same station, such as trains and subways, could cause false headway conflicts when applying per-stop schedules.
-- Fixed an issue where saving immediately after loading a save could clear vehicle dispatch progress and actual operation data.
-- Fixed an issue where some feature toggles were reset after loading a save.
-- Fixed an issue where bus segment travel time history was not restored when loading a save again in the same game session.
-- Fixed an issue where per-stop schedules could be lost after loading a save in certain cases.
-- Fixed some compatibility issues with Realistic Trips.
-- Fixed an issue where, in cities with an extremely large number of trips, actual data could fail to be saved and the Run Chart could show actual data as incomplete.
-- Fixed an issue where batch setting trips in the Run Chart could get stuck on Preparing.
+- Fixed an issue where a late vehicle could be treated as waiting almost a full day for its trip, then unload passengers and return to the depot.
+- Fixed an issue where a vehicle could occasionally depart twice, with the following vehicle taking the same trip.
+- Fixed an issue where an idle vehicle already at the origin stop would not take a trip that was waiting for a vehicle leaving the depot.
+- Fixed an issue where vehicles leaving the depot could return to the depot immediately if they arrived at the origin stop slightly earlier than expected.
+- Fixed an issue where depot travel time estimates stayed too short, causing new vehicles to miss their trips. This was more likely when pausing right after loading a save.
+- Fixed an issue where, after a vehicle switched lines or left its line, the line could dispatch extra vehicles or assign its trips to vehicles on other lines.
   </ChangeLog>
   <!--External link, can be set multiple times. supported types are "discord", "github", "youtube", "twitch", "x", "paypal", "patreon", "buymeacoffee", "kofi", "crowdin", "gitlab", "gofundme"-->
   <ExternalLink Type="github" Url="https://github.com/huasyl/AdvancedTransitOperations" />
