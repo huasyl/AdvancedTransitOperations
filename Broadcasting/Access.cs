@@ -17,8 +17,7 @@ using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
 using UnityEngine.Audio;
-using LineRunningVehicleSnapshot = RapidTransitMod.TrackProjection.LineRunningVehicleSnapshot;
-using LineWaypointIndexLookup = RapidTransitMod.TrackModel.LineWaypointIndexLookup;
+using LineWaypointIndexLookup = RapidTransitMod.Dispatch.Lines.LineWaypointIndexLookup;
 
 namespace RapidTransitMod.Broadcasting
 {
@@ -44,7 +43,7 @@ namespace RapidTransitMod.Broadcasting
 
             internal abstract bool TryRelation(LineTrackChain chain, int waypointIndex, int cursorAtomIndex, out CursorAtomWindowRelation relation, out int startAtomIndex, out int endAtomIndexExclusive);
             internal abstract bool TryChain(Entity line, DynamicBuffer<RouteWaypoint> waypoints, out LineTrackChain chain);
-            internal abstract bool TrySnapshot(Entity vehicle, Entity line, DynamicBuffer<RouteWaypoint> waypoints, LineTrackChain chain, out VehicleTrackCursor cursor, out int currentControlEdgeIndex, out float ownLineAtomCoordinate, out int phaseEndAtomExclusive, out int traversalPhaseIndex, out int traversalPhaseStartAtomIndex, out int traversalPhaseEndAtomExclusive, out int nextTurnbackBoundaryAtomIndex);
+            internal abstract bool TrySnapshot(Entity vehicle, Entity line, DynamicBuffer<RouteWaypoint> waypoints, LineTrackChain chain, out VehicleTrackCursor cursor);
             internal abstract bool TryCursor(Entity vehicle, Entity line, DynamicBuffer<RouteWaypoint> waypoints, LineTrackChain chain, out VehicleTrackCursor cursor);
             internal abstract bool TryWindow(LineTrackChain chain, int waypointIndex, int referenceAtomIndex, out int startAtomIndex, out int endAtomIndexExclusive);
             internal abstract bool TryPosition(LineTrackChain chain, int atomIndex, out float3 position);
@@ -124,28 +123,14 @@ namespace RapidTransitMod.Broadcasting
             Entity line,
             DynamicBuffer<RouteWaypoint> waypoints,
             LineTrackChain chain,
-            out VehicleTrackCursor cursor,
-            out int currentControlEdgeIndex,
-            out float ownLineAtomCoordinate,
-            out int phaseEndAtomExclusive,
-            out int traversalPhaseIndex,
-            out int traversalPhaseStartAtomIndex,
-            out int traversalPhaseEndAtomExclusive,
-            out int nextTurnbackBoundaryAtomIndex)
+            out VehicleTrackCursor cursor)
         {
             return m_Host.TrySnapshot(
                 vehicle,
                 line,
                 waypoints,
                 chain,
-                out cursor,
-                out currentControlEdgeIndex,
-                out ownLineAtomCoordinate,
-                out phaseEndAtomExclusive,
-                out traversalPhaseIndex,
-                out traversalPhaseStartAtomIndex,
-                out traversalPhaseEndAtomExclusive,
-                out nextTurnbackBoundaryAtomIndex);
+                out cursor);
         }
 
         internal bool TryCursor(

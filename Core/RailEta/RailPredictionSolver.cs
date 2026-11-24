@@ -65,7 +65,7 @@ namespace RapidTransitMod.RailEta.BuiltIn
                     return Failure(request, RailEtaFailure.Cancelled, "cancelled");
                 uint frame = unchecked(world.OriginFrame + elapsed);
                 ResetLaneReservationsInPlace(tickStart, frame);
-                UpdateFrozenGates(tickStart, tickStart, frame);
+                UpdateFrozenGates(tickStart, frame);
                 if (!PrepareDepartures(tickStart, frame, targetController, out reason))
                     return Failure(request, RailEtaFailure.PathIncomplete, reason);
                 if ((frame & 15u) == 3u)
@@ -74,7 +74,7 @@ namespace RapidTransitMod.RailEta.BuiltIn
                     if (!RunNavigationJobBoundary(tickStart, scratch, targetController, frame, out reason))
                         return Failure(request, RailEtaFailure.PathIncomplete, reason);
                     UpdateTrafficSignalsInPlace(scratch, frame);
-                    UpdateFrozenGates(tickStart, scratch, frame);
+                    UpdateFrozenGates(scratch, frame);
                     VehicleState advancedTarget = scratch.FindVehicle(targetController);
                     if (advancedTarget == null || !advancedTarget.Active)
                         return Failure(request, RailEtaFailure.PathIncomplete, "target-vehicle-simulation-failed");
@@ -157,16 +157,6 @@ namespace RapidTransitMod.RailEta.BuiltIn
                 {
                     reason = "frozen-runtime-gates-missing";
                     return false;
-                }
-                foreach (KeyValuePair<Entity, RailControlledHoldSnapshot> pair in world.RuntimeFacts.ControlledHolds)
-                {
-                    RailControlledHoldSnapshot hold = pair.Value;
-                    if (hold == null || hold.Kind != RailControlledHoldKind.BypassYield) continue;
-                    if (hold.ReleaseVehicleId.Value == 0 || hold.ReleaseLaneId.Value == 0 || hold.ReleaseDirection == 0)
-                    {
-                        reason = "frozen-rt-atom-release-incomplete";
-                        return false;
-                    }
                 }
                 var vehicles = new VehicleState[world.Vehicles.Length];
                 for (int i = 0; i < world.Vehicles.Length; i++)
@@ -1404,7 +1394,7 @@ namespace RapidTransitMod.RailEta.BuiltIn
             return false;
         }
 
-        private static void UpdateFrozenGates(SimulationState previous, SimulationState current, uint frame)
+        private static void UpdateFrozenGates(SimulationState current, uint frame)
         {
             RailEtaRequestFrameFacts facts = current.World.RuntimeFacts;
             for (int i = 0; i < current.Vehicles.Length; i++)
@@ -1418,45 +1408,9 @@ namespace RapidTransitMod.RailEta.BuiltIn
                     continue;
                 }
                 if (hold.Kind == RailControlledHoldKind.OriginScheduled)
-                {
                     vehicle.HoldReleased = FrameReached(frame, hold.EarliestReleaseFrame);
-                    continue;
-                }
-                if (hold.Kind != RailControlledHoldKind.BypassYield) continue;
-                Entity releaseController = RailEtaEntityId.ToEntity(hold.ReleaseVehicleId.Value);
-                VehicleState release = current.FindVehicle(releaseController);
-                if (release == null || !release.Active)
-                {
-                    vehicle.HoldReleased = true;
-                    continue;
-                }
-                VehicleState priorRelease = previous.FindVehicle(releaseController);
-                bool wasOnLane = TryGetFrontPhysicalPosition(previous, priorRelease, hold.ReleaseLaneId, out float priorPosition);
-                bool isOnLane = TryGetFrontPhysicalPosition(current, release, hold.ReleaseLaneId, out float currentPosition);
-                if (isOnLane && PassedFraction(currentPosition, hold.ReleaseLaneFraction, hold.ReleaseDirection))
-                    vehicle.HoldReleased = true;
-                else if (wasOnLane && !isOnLane && !PassedFraction(priorPosition, hold.ReleaseLaneFraction, hold.ReleaseDirection))
-                    vehicle.HoldReleased = true;
             }
         }
-
-        private static bool TryGetFrontPhysicalPosition(SimulationState state, VehicleState vehicle,
-            RailLaneId releaseLane, out float position)
-        {
-            position = 0f;
-            if (vehicle == null || !vehicle.Active || vehicle.Units.Length == 0 || releaseLane.Value == 0) return false;
-            TrainBogieLane front = vehicle.Units[0].CurrentLane.m_Front;
-            LaneState lane = state.FindLane(front.m_Lane);
-            if (lane == null) return false;
-            Entity physical = lane.Frozen.PathPhysicalLane != Entity.Null ? lane.Frozen.PathPhysicalLane : lane.Entity;
-            if (RailEtaEntityId.Pack(physical) != releaseLane.Value) return false;
-            position = front.m_CurvePosition.y;
-            return true;
-        }
-
-        private static bool PassedFraction(float position, double releaseFraction, int direction) =>
-            direction < 0 ? position <= (float)releaseFraction : position >= (float)releaseFraction;
-
         private static bool PrepareDepartures(SimulationState state, uint frame, Entity targetController,
             out string reason)
         {
@@ -1751,12 +1705,6 @@ namespace RapidTransitMod.RailEta.BuiltIn
             for (int i = state.SignalRequests.Count - 1; i >= 0; i--)
                 if (state.IsSameController(state.SignalRequests[i].Petitioner, vehicle.Controller))
                     state.SignalRequests.RemoveAt(i);
-            RailEtaRequestFrameFacts facts = state.World.RuntimeFacts;
-            if (facts != null)
-                for (int i = 0; i < state.Vehicles.Length; i++)
-                    if (facts.ControlledHolds.TryGetValue(state.Vehicles[i].Controller, out RailControlledHoldSnapshot hold)
-                        && hold != null && hold.ReleaseVehicleId.Value == RailEtaEntityId.Pack(vehicle.Controller))
-                        state.Vehicles[i].HoldReleased = true;
             vehicle.Blocker = default;
             vehicle.NavigationLanes.Clear();
             vehicle.PathElements.Clear();

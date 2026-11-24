@@ -34,6 +34,7 @@ namespace RapidTransitMod.Dispatch.Lines
 
         private readonly ModRuntimeHostSystem m_Runtime;
         private readonly Dictionary<Entity, WaypointIndexFrameSnapshot> m_FrameSnapshots = new Dictionary<Entity, WaypointIndexFrameSnapshot>();
+        private readonly Dictionary<Entity, LineWaypointIndexLookup> m_Lookups = new Dictionary<Entity, LineWaypointIndexLookup>();
 
         private struct WaypointIndexFrameSnapshot
         {
@@ -99,7 +100,111 @@ namespace RapidTransitMod.Dispatch.Lines
             DynamicBuffer<RouteWaypoint> ways,
             out LineWaypointIndexLookup lookup)
         {
-            return m_Runtime.TrackModel.TryGetWaypointIndexLookup(line, ways, out lookup);
+            lookup = null;
+            if (line == Entity.Null || ways.Length == 0)
+                return false;
+
+            ulong signature = ComputeLineWaypointSignature(ways);
+            if (!m_Lookups.TryGetValue(line, out lookup)
+                || lookup == null
+                || lookup.Signature != signature)
+            {
+                lookup = new LineWaypointIndexLookup
+                {
+                    Signature = signature
+                };
+
+                EntityManager entityManager = m_Runtime.EntityManager;
+                Entity originStop = TryTransportStop(
+                    entityManager,
+                    ways[0].m_Waypoint,
+                    out Entity resolvedOriginStop)
+                    ? resolvedOriginStop
+                    : Entity.Null;
+                int lastStopWaypointIndex = -1;
+                for (int waypointIndex = 0; waypointIndex < ways.Length; waypointIndex++)
+                {
+                    Entity waypoint = ways[waypointIndex].m_Waypoint;
+                    if (waypoint == Entity.Null || !entityManager.Exists(waypoint))
+                        continue;
+
+                    lookup.WaypointIndexByWaypoint[waypoint] = waypointIndex;
+                    if (entityManager.HasComponent<Connected>(waypoint))
+                    {
+                        Entity stop = entityManager.GetComponentData<Connected>(waypoint).m_Connected;
+                        if (stop != Entity.Null)
+                        {
+                            lookup.WaypointIndexByStop[stop] = waypointIndex;
+                            if (TryTransportStop(entityManager, waypoint, out Entity transportStop)
+                                && waypointIndex > 0
+                                && (originStop == Entity.Null || transportStop != originStop))
+                            {
+                                lastStopWaypointIndex = waypointIndex;
+                            }
+                        }
+                    }
+                }
+
+                lookup.LastStopWaypointIndex = lastStopWaypointIndex;
+                m_Lookups[line] = lookup;
+            }
+
+            return true;
+        }
+
+        public bool TryLookup(Entity line, out LineWaypointIndexLookup lookup)
+        {
+            return m_Lookups.TryGetValue(line, out lookup);
+        }
+
+        internal void InvalidateLookup(Entity line)
+        {
+            if (line != Entity.Null)
+                m_Lookups.Remove(line);
+        }
+
+        internal void ClearLookups()
+        {
+            m_Lookups.Clear();
+        }
+
+        private static ulong ComputeLineWaypointSignature(DynamicBuffer<RouteWaypoint> wps)
+        {
+            ulong hash = 1469598103934665603UL;
+            hash = MixLineSignature(hash, wps.Length);
+            for (int i = 0; i < wps.Length; i++)
+                hash = MixLineSignature(hash, wps[i].m_Waypoint.Index);
+            return hash;
+        }
+
+        private static bool TryTransportStop(EntityManager entityManager, Entity waypoint, out Entity stop)
+        {
+            stop = Entity.Null;
+            if (waypoint == Entity.Null
+                || !entityManager.Exists(waypoint)
+                || !entityManager.HasComponent<Connected>(waypoint))
+            {
+                return false;
+            }
+
+            Entity connected = entityManager.GetComponentData<Connected>(waypoint).m_Connected;
+            if (connected == Entity.Null
+                || !entityManager.Exists(connected)
+                || !entityManager.HasComponent<Game.Routes.TransportStop>(connected))
+            {
+                return false;
+            }
+
+            stop = connected;
+            return true;
+        }
+
+        private static ulong MixLineSignature(ulong hash, int value)
+        {
+            unchecked
+            {
+                return (hash ^ (uint)value) * 1099511628211UL;
+            }
         }
 
         internal bool TryResolveProjectionTargetWaypoint(
@@ -753,5 +858,13 @@ namespace RapidTransitMod.Dispatch.Lines
         {
             m_FrameSnapshots.Clear();
         }
+    }
+
+    internal sealed class LineWaypointIndexLookup
+    {
+        public ulong Signature;
+        public int LastStopWaypointIndex = -1;
+        public readonly Dictionary<Entity, int> WaypointIndexByWaypoint = new Dictionary<Entity, int>();
+        public readonly Dictionary<Entity, int> WaypointIndexByStop = new Dictionary<Entity, int>();
     }
 }

@@ -11,10 +11,7 @@ namespace RapidTransitMod.Runtime
         ForcedMidStopBoardingGrace,
         TimedStop,
         RetireBoundary,
-        RetireHardAck,
-        RescueProbe,
-        RescueStall,
-        RescueRecheck
+        RetireHardAck
     }
 
     internal readonly struct DeadlineKey : IEquatable<DeadlineKey>

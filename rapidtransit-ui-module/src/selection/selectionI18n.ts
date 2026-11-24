@@ -25,7 +25,6 @@ const KEYS = {
   lineName: "RapidTransit.LineName",
   nextSlot: "RapidTransit.NextSlot",
   routeDuration: "RapidTransit.RouteDuration",
-  bypassStation: "RapidTransit.BypassStation",
   currentSlot: "RapidTransit.CurrentSlot",
   targetSlot: "RapidTransit.TargetSlot",
   currentStation: "RapidTransit.CurrentStation",
@@ -36,11 +35,9 @@ const KEYS = {
   minutesLate: "RapidTransit.MinutesLate",
   minutesEarly: "RapidTransit.MinutesEarly",
   nextPass: "RapidTransit.NextPass",
-  waitingForFastTrain: "RapidTransit.WaitingForFastTrain",
   nextStopStation: "RapidTransit.NextStopStation",
   actualArrival: "RapidTransit.ActualArrival",
   assigned: "RapidTransit.Assigned",
-  yielding: "RapidTransit.Yielding",
   waitingDispatch: "RapidTransit.WaitingDispatch",
   headingToOrigin: "RapidTransit.HeadingToOrigin",
   returning: "RapidTransit.Returning",
@@ -58,8 +55,6 @@ const KEYS = {
   alertNearingTerminus: "RapidTransit.AlertNearingTerminus",
   alertLaunchCooldown: "RapidTransit.AlertLaunchCooldown",
   alertTargetExpired: "RapidTransit.AlertTargetExpired",
-  alertYieldProtected: "RapidTransit.AlertYieldProtected",
-  alertYieldingFor: "RapidTransit.AlertYieldingFor",
   alertSpawnPending: "RapidTransit.AlertSpawnPending",
   alertYieldGuard: "RapidTransit.AlertYieldGuard",
   etaHotTitle: "RapidTransit.EtaHotTitle",
@@ -96,8 +91,7 @@ const PANEL_FALLBACKS: Record<string, string> = {
   onTime: "正点",
   minutesLate: "晚点 {minutes} 分",
   minutesEarly: "早点 {minutes} 分",
-  nextPass: "下一通过",
-  waitingForFastTrain: "等待快车"
+  nextPass: "下一通过"
 };
 
 function formatFallbackLabel(value: string) {

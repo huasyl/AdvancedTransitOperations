@@ -96,7 +96,6 @@ const TRIGGER_OPTIONS = [
   { id: "stop_and_open", labelKey: "broadcast.trigger.stopAndOpen" },
   { id: "leave_station", labelKey: "broadcast.trigger.leaveStation" },
   { id: "mid_route", labelKey: "broadcast.trigger.midRoute" },
-  { id: "bypass_waiting", labelKey: "broadcast.trigger.bypassWaiting" },
 ];
 
 const PLATFORM_TRIGGER_OPTIONS = [
@@ -104,8 +103,6 @@ const PLATFORM_TRIGGER_OPTIONS = [
   { id: "arrival_station", labelKey: "broadcast.trigger.arrivalStation" },
   { id: "departure_soon", labelKey: "broadcast.trigger.departureSoon" },
 ];
-
-const RELEASE_HIDDEN_VEHICLE_TRIGGER_IDS = ["bypass_waiting"];
 
 function resolvePlatformUiTriggerId(triggerId) {
   if (
@@ -199,7 +196,6 @@ export {
   BROADCAST_LANGUAGE_DISPLAY_ALIASES,
   TRIGGER_OPTIONS,
   PLATFORM_TRIGGER_OPTIONS,
-  RELEASE_HIDDEN_VEHICLE_TRIGGER_IDS,
   LINE_OPTIONS,
   EXTERNAL_ASSET_FILE_SYSTEM,
   DEFAULT_EXTERNAL_ASSET_PATH,

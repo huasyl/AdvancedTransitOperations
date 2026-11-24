@@ -320,7 +320,6 @@ namespace RapidTransitMod.Dispatch.Workbench
                 m_Run.RefreshApplied();
                 if (prepared.LineSettingsChanged)
                 {
-                    m_Run.Invalidate();
                 }
             }
             if (changedDepotLines.Length > 0)

@@ -172,8 +172,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             request ??= new DispatchWorkbenchRunTimeQueryRequestDto();
             string editor = request.editorSessionId ?? string.Empty;
             if (string.IsNullOrEmpty(editor)) return Failure(string.Empty, editor, "run-time-editor-session-required");
-            if (request.source != "sliceHistoricalEstimate"
-                && request.source != "theory"
+            if (request.source != "theory"
                 && request.source != "monitorAverage"
                 && request.source != "busHistorical") return Failure(string.Empty, editor, "run-time-source-invalid");
             if (request.source == "theory")
@@ -208,28 +207,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 return Failure(string.Empty, editor, "run-time-segment-limit");
             session.Plan = plan;
             session.StopWaypointIndices = stops;
-            session.Dwells = request.source == "sliceHistoricalEstimate"
-                ? new List<RunChartDwell>()
-                : BuildDwells(session);
-            if (request.source == "sliceHistoricalEstimate")
-            {
-                if (lifecycle != LifecycleKind.Rail)
-                    return Failure(session, "run-time-slice-historical-unsupported");
-                if (!BuildHistorical(session, out string detail))
-                    return Failure(session, "run-time-slice-historical-missing", detail);
-                Complete(session);
-#if RT_DEBUG_TOOLS
-                if (!session.Complete)
-                {
-                    Mod.log.Info("[RunChartMissing] line=" + (session.LineId ?? string.Empty)
-                        + ";source=" + (session.Source ?? string.Empty)
-                        + ";kind=" + (session.MissingKind ?? "none")
-                        + ";prefix=" + session.PrefixStopCount);
-                }
-#endif
-                m_Active[ActiveKey(session)] = session;
-                return Status(session);
-            }
+            session.Dwells = BuildDwells(session);
             if (request.source == "monitorAverage")
             {
                 if (lifecycle != LifecycleKind.Rail)
@@ -1292,71 +1270,6 @@ namespace RapidTransitMod.Dispatch.Workbench
                 Complete(session);
             else
                 CompleteIncomplete(session, detail);
-        }
-
-        private bool BuildHistorical(FullRunTimeSession session, out string detail)
-        {
-            detail = string.Empty;
-            List<RunChartSegment> segments = BuildIntervals(
-                session.Plan,
-                session.StopWaypointIndices,
-                true);
-            for (int i = 0; i < segments.Count; i++)
-            {
-                RunChartSegment segment = segments[i];
-                RouteWaypointRef from = session.Plan.Waypoints[segment.FromWaypointIndex];
-                RouteWaypointRef to = session.Plan.Waypoints[segment.ToWaypointIndex];
-                float frames;
-                bool found = m_Observation.TryTraversalFrames(
-                    session.Line,
-                    from.WaypointIndex,
-                    to.WaypointIndex,
-                    out frames,
-                    out _);
-                if (!found || frames <= 0f || float.IsNaN(frames) || float.IsInfinity(frames))
-                {
-                    session.MissingKind = "slice";
-                    segments.RemoveRange(i, segments.Count - i);
-                    session.Segments = segments;
-                    session.Complete = false;
-                    session.PrefixStopCount = segments.Count + 1;
-                    return true;
-                }
-                segment.Frames = (uint)Math.Max(1, Math.Round(frames));
-                segment.Minutes = ToMinutes(frames, session.FramesPerMinute) + 5;
-                segment.ExactMinutes = ToExactMinutes(frames, session.FramesPerMinute) + 5d;
-                segments[i] = segment;
-
-                if (i + 1 < session.StopWaypointIndices.Length)
-                {
-                    RunChartDwell dwell = BuildDwell(session, i + 1);
-                    session.Dwells.Add(dwell);
-                    bool validDwell = dwell != null
-                        && dwell.HasObservation
-                        && dwell.Frames > 0f
-                        && !float.IsNaN(dwell.Frames)
-                        && !float.IsInfinity(dwell.Frames);
-                    if (!validDwell)
-                    {
-                        session.MissingKind = "dwell";
-                        segments.RemoveRange(i + 1, segments.Count - i - 1);
-                        session.Segments = segments;
-                        session.Complete = false;
-                        session.PrefixStopCount = segments.Count + 1;
-                        return true;
-                    }
-                }
-            }
-            session.Segments = segments;
-            session.Complete = true;
-            session.MissingKind = "none";
-            session.PrefixStopCount = segments.Count + 1;
-            if (segments.Count == 0)
-            {
-                detail = "code=no-segments";
-                return false;
-            }
-            return true;
         }
 
         private bool BuildMonitorAverage(FullRunTimeSession session, out string detail)

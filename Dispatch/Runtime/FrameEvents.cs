@@ -26,7 +26,6 @@ namespace RapidTransitMod.Dispatch.Runtime
     {
         Lifecycle,
         Stop,
-        Bypass,
         Dispatch,
         DeparturePending
     }
@@ -151,64 +150,6 @@ namespace RapidTransitMod.Dispatch.Runtime
         }
     }
 
-    internal enum BypassFactKind : byte
-    {
-        Held,
-        BypassHoldCadence,
-        Released,
-        Cleared,
-        Expired,
-        Rescued
-    }
-
-    internal readonly struct BypassFact
-    {
-        public readonly BypassFactKind Kind;
-        public readonly Entity Vehicle;
-        public readonly Entity Line;
-        public readonly Entity Blocker;
-        public readonly int WaypointIndex;
-        public readonly bool ShouldHold;
-        public readonly bool CanClearAfterExit;
-        public readonly string Reason;
-
-        public BypassFact(
-            BypassFactKind kind,
-            Entity vehicle,
-            Entity line,
-            Entity blocker,
-            int waypointIndex,
-            bool shouldHold,
-            bool canClearAfterExit,
-            string reason = null)
-        {
-            Kind = kind;
-            Vehicle = vehicle;
-            Line = line;
-            Blocker = blocker;
-            WaypointIndex = waypointIndex;
-            ShouldHold = shouldHold;
-            CanClearAfterExit = canClearAfterExit;
-            Reason = reason;
-        }
-    }
-
-    internal readonly struct BypassEvent
-    {
-        public readonly BypassFact Fact;
-        public readonly Entity Vehicle;
-        public readonly uint Frame;
-        public readonly ulong Sequence;
-
-        public BypassEvent(BypassFact fact, uint frame, ulong sequence)
-        {
-            Fact = fact;
-            Vehicle = fact.Vehicle;
-            Frame = frame;
-            Sequence = sequence;
-        }
-    }
-
     internal readonly struct FrameEventRef
     {
         public readonly FrameEventKind Kind;
@@ -228,7 +169,6 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly List<LifecycleEvent> m_LifecycleEvents = new List<LifecycleEvent>();
         private readonly List<DispatchEvent> m_DispatchEvents = new List<DispatchEvent>();
         private readonly List<StopEvent> m_StopEvents = new List<StopEvent>();
-        private readonly List<BypassEvent> m_BypassEvents = new List<BypassEvent>();
         private readonly List<DeparturePendingEvent> m_DeparturePendingEvents = new List<DeparturePendingEvent>();
         private readonly List<FrameEventRef> m_Merged = new List<FrameEventRef>();
         private static readonly Comparison<FrameEventRef> s_CompareBySequence = CompareBySequence;
@@ -239,7 +179,6 @@ namespace RapidTransitMod.Dispatch.Runtime
         public IReadOnlyList<LifecycleEvent> LifecycleEvents => m_LifecycleEvents;
         public IReadOnlyList<DispatchEvent> DispatchEvents => m_DispatchEvents;
         public IReadOnlyList<StopEvent> StopEvents => m_StopEvents;
-        public IReadOnlyList<BypassEvent> BypassEvents => m_BypassEvents;
         public IReadOnlyList<DeparturePendingEvent> DeparturePendingEvents => m_DeparturePendingEvents;
 
         public void SetFactCounter(Action factCounter) => m_FactCounter = factCounter;
@@ -249,7 +188,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_LifecycleEvents.Clear();
             m_DispatchEvents.Clear();
             m_StopEvents.Clear();
-            m_BypassEvents.Clear();
             m_DeparturePendingEvents.Clear();
             m_Merged.Clear();
             m_NextSequence = 0;
@@ -310,12 +248,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             CountFact();
         }
 
-        public void AppendBypass(BypassFact fact, uint frame)
-        {
-            m_BypassEvents.Add(new BypassEvent(fact, frame, NextSequence()));
-            CountFact();
-        }
-
         public void AppendDeparturePending(Entity vehicle, uint frame, bool active)
         {
             m_DeparturePendingEvents.Add(new DeparturePendingEvent(vehicle, frame, NextSequence(), active));
@@ -330,7 +262,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Merged.Clear();
             for (int i = 0; i < m_LifecycleEvents.Count; i++) m_Merged.Add(new FrameEventRef(FrameEventKind.Lifecycle, m_LifecycleEvents[i].Sequence, i));
             for (int i = 0; i < m_StopEvents.Count; i++) m_Merged.Add(new FrameEventRef(FrameEventKind.Stop, m_StopEvents[i].Sequence, i));
-            for (int i = 0; i < m_BypassEvents.Count; i++) m_Merged.Add(new FrameEventRef(FrameEventKind.Bypass, m_BypassEvents[i].Sequence, i));
             for (int i = 0; i < m_DispatchEvents.Count; i++) m_Merged.Add(new FrameEventRef(FrameEventKind.Dispatch, m_DispatchEvents[i].Sequence, i));
             for (int i = 0; i < m_DeparturePendingEvents.Count; i++) m_Merged.Add(new FrameEventRef(FrameEventKind.DeparturePending, m_DeparturePendingEvents[i].Sequence, i));
             m_Merged.Sort(s_CompareBySequence);

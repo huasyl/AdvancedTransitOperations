@@ -14,7 +14,6 @@ namespace RapidTransitMod.Dispatch.Observation
         public readonly Dictionary<string, Trip> Trips =
             new Dictionary<string, Trip>(StringComparer.Ordinal);
         public readonly List<StopEvent> Stops = new List<StopEvent>();
-        public readonly List<BypassEvent> Bypass = new List<BypassEvent>();
         public readonly List<CorridorDto> Corridors =
             new List<CorridorDto>();
     }
@@ -135,37 +134,6 @@ namespace RapidTransitMod.Dispatch.Observation
         public string DepartureTime = string.Empty;
         public uint ArrivalFrame;
         public uint DepartureFrame;
-        public uint UpdatedFrame;
-    }
-
-    internal sealed class BypassEvent
-    {
-        public string EventId = string.Empty;
-        public string State = "holding";
-        public string LocalTripId = string.Empty;
-        public string LocalRowId = string.Empty;
-        public string LocalServiceDate = string.Empty;
-        public int LocalServiceDayIndex = -1;
-        public int LocalOccurrenceIndex = 1;
-        public string PriorityTripId = string.Empty;
-        public string PriorityRowId = string.Empty;
-        public string PriorityServiceDate = string.Empty;
-        public int PriorityServiceDayIndex = -1;
-        public int PriorityOccurrenceIndex = 1;
-        public Entity LocalLine = Entity.Null;
-        public Entity PriorityLine = Entity.Null;
-        public Entity LocalVehicle = Entity.Null;
-        public Entity PriorityVehicle = Entity.Null;
-        public int LocalTargetMin = -1;
-        public int PriorityTargetMin = -1;
-        public Entity HoldStation = Entity.Null;
-        public int WaypointIndex = -1;
-        public uint HoldStartFrame;
-        public uint HoldReleaseFrame;
-        public string DecisionReason = string.Empty;
-        public string ReleaseReason = string.Empty;
-        public string SceneKey = string.Empty;
-        public int ProtectedIntervalIndex = -1;
         public uint UpdatedFrame;
     }
 

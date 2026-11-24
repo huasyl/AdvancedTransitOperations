@@ -2,7 +2,6 @@ using System;
 using Game.Common;
 using Game.Routes;
 using Game.Vehicles;
-using RapidTransitMod.Bypass;
 using RapidTransitMod.Dispatch.Observation;
 using RapidTransitMod.Planner;
 using Unity.Entities;
@@ -32,14 +31,6 @@ namespace RapidTransitMod.Dispatch.Runtime
 
     internal static class RuntimePorts
     {
-        private static bool CanBypass(ModRuntimeHostSystem runtime, Entity line)
-        {
-            return runtime != null
-                && line != Entity.Null
-                && TransportModeProfile.GetProfile(
-                    TransportModeResolver.Resolve(runtime.EntityManager, line)).CanBypass;
-        }
-
         public static TrackModelContext.IBuffers Buffers(ModRuntimeHostSystem runtime)
         {
             return new TrackBuffers(runtime);
@@ -94,19 +85,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             }
         }
 
-        internal static void SetRailDemand(
-            ModRuntimeHostSystem runtime,
-            Entity vehicle,
-            RuntimeDemandMask demand,
-            bool active)
-        {
-            if (TryResolveVehicleLifecycle(runtime, vehicle, out LifecycleKind lifecycle)
-                && lifecycle == LifecycleKind.Rail)
-            {
-                runtime.m_RailEventSource.SetDemand(vehicle, demand, active);
-            }
-        }
-
         public static void Build(ModRuntimeHostSystem runtime)
         {
             runtime.m_FirstPersonQuery = new FirstPerson.FirstPersonQuery(new FirstPerson.FirstPersonAccess
@@ -134,12 +112,10 @@ namespace RapidTransitMod.Dispatch.Runtime
             return new SelectPort
             {
                 EntityManager = runtime.EntityManager,
-                Log = runtime.log,
                 Time = runtime.m_TimeSystem,
                 Sim = runtime.m_SimulationSystem,
                 ClockSnapshot = () => runtime.m_SimClock.Snapshot,
                 Names = runtime.m_NameSystem,
-                City = runtime.m_CitySystem,
                 Barrier = runtime.m_EndFrameBarrier,
                 Vehicles = runtime.m_VehicleView,
                 Lines = runtime.m_LineView,
@@ -164,13 +140,6 @@ namespace RapidTransitMod.Dispatch.Runtime
 
                     return runtimeLine?.Name ?? string.Empty;
                 },
-                ResolveBypassBuilding = runtime.m_Resolve.PassingStation,
-                EnsureBypassBuffer = runtime.m_BypassStore.Ensure,
-                InvalidateBypassModel = () =>
-                {
-                    runtime.m_Bypass.ClearAll();
-                    runtime.m_TrackModel.InvalidateAll();
-                },
                 ReadLap = runtime.m_LapCache.Read,
                 ReadLineDuration = line =>
                 {
@@ -180,15 +149,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                     if (TransportModeResolver.Resolve(runtime.EntityManager, line) == TransitMode.Bus)
                         return runtime.m_LineTimes.Duration(line) * 60f;
 
-                    var routeWaypoints = runtime.GetBufferLookup<RouteWaypoint>(true);
-                    if (routeWaypoints.TryGetBuffer(line, out var waypoints)
-                        && waypoints.Length > 0
-                        && runtime.m_Observation.LapTiming(line, waypoints, out float runFrames, out float stopFrames, out _, out _))
-                    {
-                        float totalFrames = runFrames + stopFrames;
-                        if (totalFrames > 0f)
-                            return totalFrames;
-                    }
+                    if (runtime.m_LineTimes.TryMonitorLoopFrames(line, out float monitorFrames))
+                        return monitorFrames;
 
                     float durationFrames = runtime.m_LineTimes.Duration(line) * 60f;
                     if (durationFrames > 0f && durationFrames < float.MaxValue)
@@ -202,12 +164,10 @@ namespace RapidTransitMod.Dispatch.Runtime
                 ComputeWp = runtime.m_WaypointIndex.Compute,
                 Times = runtime.m_LineTimes,
                 TryProgress = runtime.m_RouteProgress.Try,
-                TryBlocker = (Entity vehicle, out Entity blocker) => runtime.m_Bypass.TryGetLatchedBlocker(vehicle, out blocker),
                 TrySessionArrival = runtime.m_StopRuntime.TryGetSessionArrivalFrame,
                 TryStopSession = runtime.m_StopRuntime.TryGetSession,
                 TryVehicleTimes = runtime.m_ObsRecorder.TryVehicleTimes,
                 TrySignalDisplay = runtime.m_TransitSignalRuntime.TryReadDisplay,
-                ClearBypass = (vehicle, reason) => runtime.m_Bypass.ClearVehicle(vehicle, reason),
                 Stations = (Entity vehicle, Entity line, out string current, out string nextPhysical, out string nextStop, out bool nextPhysicalIsPass) =>
                 {
                     runtime.m_StationContextQuery.TryPanelContext(
@@ -259,9 +219,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                     Log = message => runtime.log.Info(message),
                     Name = entity => runtime.m_NameSystem.GetRenderedLabelName(entity),
                     WaypointSignature = runtime.m_LineProfile.ComputeWaypointSignature,
-                    StationBuildingForWaypoint = runtime.m_SharedCorridor.GetStationBuildingForWaypoint,
-                    BypassBuildingForWaypoint = runtime.m_SharedCorridor.GetBypassBuildingForWaypoint,
-                    IsBypassStation = runtime.IsBypassStationSetting,
+                    StationBuildingForWaypoint = runtime.m_Resolve.GetStationBuildingForWaypoint,
                     AppliedLines = () => runtime.AppliedLines,
                     IsLocalLine = line => runtime.m_LineView.Local(line),
                     TryRouteProgress = runtime.m_RouteProgress.Try,
@@ -279,9 +237,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 () => runtime.m_SimulationSystem.frameIndex,
                 () => runtime.m_CachedWpIdx,
                 runtime.m_TrackModel,
-                Buffers(runtime),
                 runtime.m_RouteProgress,
-                runtime.m_VehicleView,
                 runtime.m_WaypointIndex,
                 runtime.m_RailEventSource,
                 runtime.m_RuntimeHotPathProbe,
@@ -295,113 +251,6 @@ namespace RapidTransitMod.Dispatch.Runtime
                         : -1);
         }
 
-        public static BypassAdmissionPort BuildBypassAdmission(ModRuntimeHostSystem runtime)
-        {
-            return new BypassAdmissionPort(
-                runtime.EntityManager,
-                runtime.log,
-                () => runtime.m_SimulationSystem.frameIndex,
-                () => runtime.m_SimClock.Snapshot,
-                () => runtime.AppliedLines,
-                runtime.m_TrackModel,
-                () => runtime.m_TrackProjection,
-                Buffers(runtime),
-                () => runtime.m_Features.BypassRun(),
-                line => CanBypass(runtime, line) && runtime.m_LineView.Managed(line, runtime.m_Features.Dispatch()),
-                line => CanBypass(runtime, line) && runtime.m_LineView.Local(line),
-                line => CanBypass(runtime, line) && runtime.m_LineView.Express(line),
-                runtime.m_Resolve,
-                ModRuntimeHostSystem.IsLineOrderedRuntimeLoggingEnabled,
-                runtime.m_WaypointIndex,
-                runtime.m_Observation,
-                (Entity vehicle, Entity line, int waypointIndex, uint nowFrame, out DwellSnapshot snapshot) =>
-                    runtime.m_StopRuntime.TryGetDwellSnapshot(vehicle, line, waypointIndex, nowFrame, out snapshot),
-                (vehicle, line, waypointIndex) => runtime.m_StopRuntime.HasActiveStopSession(vehicle, line, waypointIndex),
-                runtime.m_SharedCorridor,
-                runtime.m_RuntimeLog.Once,
-                runtime.m_VehicleView,
-                runtime.m_LineMileage,
-                runtime.m_LineTimes,
-                runtime.EntityName,
-                runtime.m_RuntimeHotPathProbe,
-                runtime.m_LineStructureInvalidator.IsLinePending);
-        }
-
-        public static BypassRuntimePort BuildBypassRuntime(ModRuntimeHostSystem runtime)
-        {
-            return new BypassRuntimePort(
-                runtime.EntityManager,
-                runtime.log,
-                () => runtime.m_SimulationSystem.frameIndex,
-                () => runtime.m_SimClock.Snapshot,
-                () => runtime.AppliedLines,
-                runtime.m_TrackModel,
-                () => runtime.m_TrackProjection,
-                Buffers(runtime),
-                () => runtime.m_Features.BypassRun(),
-                line => CanBypass(runtime, line) && runtime.m_LineView.Managed(line, runtime.m_Features.Dispatch()),
-                line => CanBypass(runtime, line) && runtime.m_LineView.Local(line),
-                line => CanBypass(runtime, line) && runtime.m_LineView.Express(line),
-                runtime.m_Resolve,
-                ModRuntimeHostSystem.IsLineOrderedRuntimeLoggingEnabled,
-                runtime.m_WaypointIndex,
-                runtime.m_Observation,
-                (Entity vehicle, Entity line, int waypointIndex, uint nowFrame, out DwellSnapshot snapshot) =>
-                    runtime.m_StopRuntime.TryGetDwellSnapshot(vehicle, line, waypointIndex, nowFrame, out snapshot),
-                (vehicle, line, waypointIndex) => runtime.m_StopRuntime.HasActiveStopSession(vehicle, line, waypointIndex),
-                runtime.m_SharedCorridor,
-                runtime.m_RuntimeLog.Once,
-                runtime.m_VehicleView,
-                runtime.m_LineMileage,
-                runtime.m_LineTimes,
-                runtime.EntityName,
-                runtime.m_RuntimeHotPathProbe,
-                runtime.m_LineStructureInvalidator.IsLinePending,
-                ModRuntimeHostSystem.IsBypassRuntimeLoggingEnabled,
-                (vehicle, blocker, station, waypointIndex, frame, reason) =>
-                {
-                    runtime.m_FrameEvents.AppendBypass(new BypassFact(
-                        BypassFactKind.Held,
-                        vehicle,
-                        runtime.m_Resolve.Line(vehicle),
-                        blocker,
-                        waypointIndex,
-                        true,
-                        false,
-                        reason), frame);
-                },
-                (vehicle, blocker, frame, reason) =>
-                {
-                    runtime.m_FrameEvents.AppendBypass(new BypassFact(
-                        BypassFactKind.Released,
-                        vehicle,
-                        runtime.m_Resolve.Line(vehicle),
-                        blocker,
-                        -1,
-                        false,
-                        true,
-                        reason), frame);
-                },
-                fact =>
-                {
-                    runtime.m_FrameEvents.AppendBypass(fact, runtime.m_SimulationSystem.frameIndex);
-                },
-                (vehicle, route, waypoints, waypointIndex) => { },
-                (vehicle, publicTransport) =>
-                {
-                    runtime.m_RailEventSource.RecordPublicTransportWrite(vehicle, publicTransport, runtime.m_SimulationSystem.frameIndex);
-                    runtime.EntityManager.SetComponentData(vehicle, publicTransport);
-                },
-                () => runtime.m_Features.BypassRun(),
-                runtime.m_RuntimeFramePlan.SetDeadline,
-                runtime.m_RuntimeFramePlan.ClearDeadline,
-                runtime.m_RuntimeFramePlan.ClearDeadlines,
-                (vehicle, active) => SetRailDemand(runtime, vehicle, RuntimeDemandMask.BypassActive, active),
-                () => runtime.m_RailEventSource.ClearDemands(RuntimeDemandMask.BypassActive),
-                (vehicle, active) => SetRailDemand(runtime, vehicle, RuntimeDemandMask.BypassWatch, active),
-                () => runtime.m_RailEventSource.ClearDemands(RuntimeDemandMask.BypassWatch));
-        }
-
         public static CapturePort BuildCapture(ModRuntimeHostSystem runtime)
         {
             return new CapturePort
@@ -409,18 +258,14 @@ namespace RapidTransitMod.Dispatch.Runtime
                 Exists = entity => runtime.EntityManager.Exists(entity),
                 HasOdo = entity => runtime.EntityManager.HasComponent<Odometer>(entity),
                 Odo = entity => runtime.EntityManager.GetComponentData<Odometer>(entity).m_Distance,
-                HasMoving = entity => runtime.EntityManager.HasComponent<Game.Objects.Moving>(entity),
-                Speed = entity => math.length(runtime.EntityManager.GetComponentData<Game.Objects.Moving>(entity).m_Velocity),
                 Range = runtime.VehicleMaintenanceRange,
                 Frame = () => runtime.m_SimulationSystem.frameIndex,
                 ToFramesCeil = gameMinutes => runtime.m_SimClock.Snapshot.ToFramesCeil(gameMinutes),
                 ToMinutes = runtime.m_SimClock.ToMinutes,
                 LineId = runtime.LineStableId,
-                Name = runtime.EntityName,
                 LineOf = entity => runtime.m_VehicleView.TryGetLine(entity, out Entity line) ? line : Entity.Null,
                 SlotOf = entity => runtime.m_VehicleView.TryGetSlot(entity, out int slot) ? slot : -1,
                 CachedWp = entity => runtime.m_CachedWpIdx.TryGetValue(entity, out int waypointIndex) ? waypointIndex : -1,
-                Express = line => runtime.m_LineView.Express(line),
                 Waypoints = line => runtime.EntityManager.GetBuffer<RouteWaypoint>(line, true),
                 HasWaypoints = line => runtime.EntityManager.HasBuffer<RouteWaypoint>(line),
                 Stop = runtime.m_Resolve.Stop,
@@ -429,36 +274,9 @@ namespace RapidTransitMod.Dispatch.Runtime
                 EnsureSak = runtime.m_Resolve.EnsureSak,
                 StationOf = runtime.m_Resolve.StationOf,
                 ResolveStation = runtime.m_Resolve.PassingStation,
-                RouteProgress = runtime.m_RouteProgress.Try,
                 FlushLap = runtime.m_LapCache.Flush,
-                FlushSlice = (line, sliceIndex, observation) => runtime.m_ObsBuffers.Flush(line, sliceIndex, observation),
                 FlushStationDwell = (observationKey, observation) => runtime.m_ObsBuffers.Flush(observationKey, observation),
-                HotPathProbe = runtime.m_RuntimeHotPathProbe,
-                SetDeadline = runtime.m_RuntimeFramePlan.SetDeadline,
-                ClearDeadline = runtime.m_RuntimeFramePlan.ClearDeadline,
                 Log = message => runtime.log.Info(message)
-            };
-        }
-
-        public static SliceAdmissionPort BuildSliceAdmission(ModRuntimeHostSystem runtime)
-        {
-            return new SliceAdmissionPort
-            {
-                StableKey = line => runtime.m_LineView.TryFrame(line, out LineFrame frame)
-                    && LineKey.IsStableGuidKey(frame.StoreKey)
-                        ? (true, frame.StoreKey)
-                        : (false, LineKey.Empty),
-                ServiceDate = () => runtime.m_SimClock.NowDate,
-                DepartureMinutes = line => runtime.m_LineView.Times(line),
-                FormatMinute = minute => ModRuntimeHostSystem.SlotStr(minute),
-                ProfileSignature = line => runtime.m_ObsBuffers.TrySliceSignature(line, out ulong signature)
-                    ? (true, signature)
-                    : (false, 0UL),
-                TryFlushDailyQuota = runtime.m_ObsBuffers.TryFlushDailyQuota,
-                TryFlushColdStart = runtime.m_ObsBuffers.TryFlushColdStart,
-                RemoveColdStart = runtime.m_ObsBuffers.RemoveColdStart,
-                Log = message => runtime.log.Info(message),
-                IsLinePending = runtime.m_LineStructureInvalidator.IsLinePending
             };
         }
 
@@ -477,7 +295,6 @@ namespace RapidTransitMod.Dispatch.Runtime
                 StationName = runtime.m_Resolve.StationName,
                 StopName = RuntimeRoot.StopService(runtime).Name,
                 StopId = runtime.m_Resolve.StopId,
-                OriginId = Stops.OriginId,
                 Origin = line =>
                 {
                     runtime.m_Resolve.Origin(line, out string id, out string name);
@@ -486,7 +303,6 @@ namespace RapidTransitMod.Dispatch.Runtime
                 Stop = runtime.m_Resolve.Stop,
                 HasWaypoints = line => line != Entity.Null && runtime.EntityManager.HasBuffer<RouteWaypoint>(line),
                 Waypoints = line => runtime.EntityManager.GetBuffer<RouteWaypoint>(line, true),
-                TargetMinute = entity => runtime.m_Observation.TargetMinute(entity),
                 LineOf = runtime.m_Resolve.Line,
                 Parse = RapidTransitMod.Dispatch.Workbench.Time.Parse,
                 Slot = RapidTransitMod.Dispatch.Workbench.Time.Slot,

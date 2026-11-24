@@ -42,16 +42,12 @@ function getOverviewModeLabel(mode, t) {
   return t(MODE_LABEL_KEYS[mode] || MODE_LABEL_KEYS.Unknown);
 }
 
-function buildOverviewSystems(featureSettings, t, mode) {
+function buildOverviewSystems(featureSettings, t) {
   const systems = [
     { key: "dispatchEnabled", title: t("nativeWorkbench.overview.system.dispatch"), enabled: featureSettings?.dispatchEnabled !== false },
     { key: "broadcastEnabled", title: t("nativeWorkbench.overview.system.broadcast"), enabled: featureSettings?.broadcastEnabled !== false },
     { key: "depotLockEnabled", title: t("nativeWorkbench.overview.system.depotLock"), enabled: featureSettings?.depotLockEnabled !== false }
   ];
-
-  if (mode !== "Tram" && mode !== "Bus") {
-    systems.splice(1, 0, { key: "bypassEnabled", title: t("nativeWorkbench.overview.system.bypass"), enabled: featureSettings?.bypassEnabled !== false });
-  }
 
   return systems;
 }
@@ -88,8 +84,7 @@ function buildStationsForLine(line, lineIndex, allStations, t) {
         name: station?.name || station?.stationName || station?.id || t("nativeWorkbench.overview.fallback.stationName", { index: stationIndex + 1 }),
         x: Number.isFinite(Number(station?.x)) ? Number(station.x) : fallback.x,
         y: Number.isFinite(Number(station?.y)) ? Number(station.y) : fallback.y,
-        transferLineCodes: asArray(station?.transferLineCodes),
-        hasBypass: station?.hasBypass === true
+        transferLineCodes: asArray(station?.transferLineCodes)
       };
     });
   }
@@ -103,8 +98,7 @@ function buildStationsForLine(line, lineIndex, allStations, t) {
       name: stationIndex === 0 ? (line?.originStationName || stationId) : terminalId,
       x: fallback.x,
       y: fallback.y,
-      transferLineCodes: [],
-      hasBypass: false
+      transferLineCodes: []
     };
   });
 }
@@ -180,7 +174,7 @@ export function buildOverviewViewModel(snapshot, metadataSnapshot, t) {
         speedKmh: Number(vehicle?.speedKmh || 0)
       }))
     },
-    systems: buildOverviewSystems(snapshot?.featureSettings, t, activeMode),
+    systems: buildOverviewSystems(snapshot?.featureSettings, t),
     warnings: []
   };
 }

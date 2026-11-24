@@ -52,7 +52,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             bool rail = context.Lifecycle == LifecycleKind.Rail;
             m_Runtime.m_Observation.ClearVehicle(vehicle, rail);
             if (rail)
-                ClearRailVehicle(vehicle, mode, reason);
+                ClearRailVehicle(vehicle, reason);
             else
                 m_Runtime.m_RoadEventSource.RemoveVehicle(vehicle);
             m_Runtime.m_RouteProgress.Remove(vehicle);
@@ -62,22 +62,12 @@ namespace RapidTransitMod.Dispatch.Runtime
             return context;
         }
 
-        private void ClearRailVehicle(Entity vehicle, ExitMode mode, string reason)
+        private void ClearRailVehicle(Entity vehicle, string reason)
         {
             m_Runtime.TrackProjection.ClearVehicle(vehicle);
             m_Runtime.TrackProjection.ClearVehicleProgressSuspect(vehicle, reason);
             m_Runtime.m_WaypointIndex.Remove(vehicle);
             m_Runtime.m_BoardingFirstFrameGuardState.Remove(vehicle);
-            m_Runtime.Bypass.ClearVehicle(vehicle, reason);
-            if (mode == ExitMode.Dead)
-            {
-                List<Entity> affected = m_Runtime.Bypass.ForgetBlocker(vehicle);
-                if (affected != null)
-                {
-                    for (int i = 0; i < affected.Count; i++)
-                        m_Runtime.m_RuntimeFramePlan.AddStage(affected[i], RuntimeStageMask.Bypass);
-                }
-            }
             m_Runtime.m_RailEventSource.RemoveVehicle(vehicle);
             m_Runtime.m_RailEtaService?.CancelTargetRequests(vehicle, reason);
         }

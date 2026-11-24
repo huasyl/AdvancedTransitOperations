@@ -428,9 +428,7 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
         controller.ensureTimetableLineLayout(line.id);
       }
       sources.forEach((source) => {
-        if (source === "sliceHistoricalEstimate") {
-          controller.requestRuntime(line.id, source);
-        } else if (source === "actualToday" || source === "actualYesterday") {
+        if (source === "actualToday" || source === "actualYesterday") {
           controller.loadActualTrips(
             line.id,
             source,
@@ -441,7 +439,7 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
         }
       });
     });
-  }, [activeTransportMode, chartEndMinute, chartRangeValid, chartSelectionKey, chartStartMinute, controller.ensureTimetableLineLayout, controller.loadActualTrips, controller.requestRuntime, controller.selectedSection, isActive]);
+  }, [activeTransportMode, chartEndMinute, chartRangeValid, chartSelectionKey, chartStartMinute, controller.ensureTimetableLineLayout, controller.loadActualTrips, controller.selectedSection, isActive]);
 
   function refreshActualChart() {
     if (!isActive || activeTransportMode === "bus" || !chartRangeValid) {
@@ -491,7 +489,7 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
         const coveragePoints = coverageStops(coverage);
         const coverageKey = `${coverage.directionPhase}:${coverage.fromSectionIndex}:${coverage.toSectionIndex}`;
         return sources
-          .filter((source) => ["sliceHistoricalEstimate", "actualToday", "actualYesterday", "plannedApplied"].includes(source))
+          .filter((source) => ["actualToday", "actualYesterday", "plannedApplied"].includes(source))
           .flatMap((sourceName) => {
             if (sourceName === "actualToday" || sourceName === "actualYesterday") {
               return Object.values(controller.actualTrips[line.id]?.[sourceName]?.details || {})
@@ -505,10 +503,7 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
                     points
                   })));
             }
-            const source = sourceName === "plannedApplied"
-              ? line.plannedTrains
-              : line.sliceTrains;
-            return source
+            return line.plannedTrains
               .filter((train) => trainOverlapsRange(train, chartStartMinute, chartEndMinute))
               .flatMap((train) => {
                 const points = projectTimedPoints(train.stops || [], coveragePoints);
@@ -517,7 +512,7 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
                   trainId: `${train.id}:${coverageKey}:segment-${segmentIndex}`,
                   source: sourceName,
                   color: line.color,
-                  partial: sourceName === "sliceHistoricalEstimate",
+                  partial: false,
                   points: segmentPoints
                 }));
               });
@@ -545,19 +540,6 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
     visibleLines.forEach((line) => {
       const sources = visibleLineCount === 1 ? singleChartModes : lineSources(lineStates[line.id], false);
       sources.forEach((source) => {
-        if (source === "sliceHistoricalEstimate") {
-          const runtime = controller.runtimes[line.id]?.sliceHistoricalEstimate;
-          if (runtime?.state === "Failed") {
-            addStatus("timetable.chart.status.runtimeUnavailable");
-          } else if (runtime?.state === "Completed" && runtime.complete === false) {
-            if (runtime.missingKind === "dwell") {
-              addStatus("timetable.chart.status.dwellMissing");
-            } else if (runtime.missingKind === "slice") {
-              addStatus("timetable.chart.status.sliceMissing");
-            }
-          }
-          return;
-        }
         if (source !== "actualToday" && source !== "actualYesterday") {
           return;
         }
@@ -577,7 +559,7 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
       });
     });
     return statuses;
-  }, [chartRangeValid, controller.actualTrips, controller.runtimes, lineStates, singleChartModes, t, visibleLineCount, visibleLines]);
+  }, [chartRangeValid, controller.actualTrips, lineStates, singleChartModes, t, visibleLineCount, visibleLines]);
 
   useEffect(() => {
     const timing = controller.layoutTimingRef.current;
@@ -949,7 +931,7 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
                     </div>
                     {activeTransportMode !== "bus" && <ChartSourceDropdown
                       value={selectedSources[0] || ""}
-                      options={["sliceHistoricalEstimate", "actualToday", "actualYesterday", "plannedApplied"].map((mode) => ({ value: mode, label: t(`timetable.data.${mode}`) }))}
+                      options={["actualToday", "actualYesterday", "plannedApplied"].map((mode) => ({ value: mode, label: t(`timetable.data.${mode}`) }))}
                       onSelect={(mode) => selectLineSource(line.id, mode)}
                       portalHostRef={portalHostRef}
                       emptyLabel={t("timetable.interval.choose")}

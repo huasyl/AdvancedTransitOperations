@@ -15,7 +15,6 @@ namespace RapidTransitMod
         Running,
         BoardingEnd,
         StopTimeout,
-        BypassExpress,
         AbnormalDeparture
     }
 
@@ -163,12 +162,6 @@ namespace RapidTransitMod
                 case VehicleLabelType.StopTimeout:
                     key = "StopTimeout";
                     fallback = "停站超时";
-                    return;
-                case VehicleLabelType.BypassExpress:
-                    key = "BypassExpress";
-                    fallback = "待避快车";
-                    prefix = "#" + spec.VehicleNumber + " ";
-                    suffix = string.Empty;
                     return;
                 default:
                     key = "AbnormalDeparture";

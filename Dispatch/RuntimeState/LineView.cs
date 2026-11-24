@@ -100,7 +100,6 @@ namespace RapidTransitMod
         private readonly AppliedTimetableStore m_AppliedStore;
         private readonly Func<IReadOnlyDictionary<string, AppliedLine>> m_AppliedLines;
         private readonly LineConfig m_Cfg;
-        private readonly Action m_DirtyTrack;
         private readonly Func<int, string> m_SlotText;
         private readonly Action<string> m_Log;
         private readonly Func<Entity, LineKey> m_StableStoreKey;
@@ -138,7 +137,6 @@ namespace RapidTransitMod
             AppliedTimetableStore appliedStore,
             Func<IReadOnlyDictionary<string, AppliedLine>> appliedLines,
             LineConfig cfg,
-            Action dirtyTrack,
             Func<int, string> slotText,
             Action<string> log,
             Func<Entity, LineKey> stableStoreKey,
@@ -155,7 +153,6 @@ namespace RapidTransitMod
             m_AppliedStore = appliedStore ?? throw new ArgumentNullException(nameof(appliedStore));
             m_AppliedLines = appliedLines ?? throw new ArgumentNullException(nameof(appliedLines));
             m_Cfg = cfg ?? throw new ArgumentNullException(nameof(cfg));
-            m_DirtyTrack = dirtyTrack ?? throw new ArgumentNullException(nameof(dirtyTrack));
             m_SlotText = slotText ?? throw new ArgumentNullException(nameof(slotText));
             m_Log = log ?? throw new ArgumentNullException(nameof(log));
             m_StableStoreKey = stableStoreKey ?? throw new ArgumentNullException(nameof(stableStoreKey));
@@ -467,11 +464,6 @@ namespace RapidTransitMod
             if (m_SupportCache.Remove(line))
                 cleared++;
             return cleared;
-        }
-
-        public void Dirty()
-        {
-            m_DirtyTrack();
         }
 
         private bool IsSupported(Entity line)

@@ -156,14 +156,7 @@ namespace RapidTransitMod.Broadcasting
                     line,
                     waypoints,
                     chain,
-                    out VehicleTrackCursor cursor,
-                    out _,
-                    out _,
-                    out _,
-                    out int traversalPhaseIndex,
-                    out _,
-                    out _,
-                    out _))
+                    out VehicleTrackCursor cursor))
             {
                 return false;
             }
@@ -172,8 +165,21 @@ namespace RapidTransitMod.Broadcasting
                 stationContext,
                 chain,
                 cursor,
-                traversalPhaseIndex);
+                ResolveTraversalPhase(chain, cursor.AtomCursorIndex));
             return true;
+        }
+
+        private static int ResolveTraversalPhase(LineTrackChain chain, int atomIndex)
+        {
+            int cursor = math.clamp(atomIndex, 0, chain.TrackAtoms.Count - 1);
+            for (int boundaryIndex = 0; boundaryIndex < chain.TurnbackBoundaries.Count; boundaryIndex++)
+            {
+                int boundaryAtomIndex = math.clamp(chain.TurnbackBoundaries[boundaryIndex].AtomIndex, 0, chain.TrackAtoms.Count);
+                if (cursor < boundaryAtomIndex)
+                    return boundaryIndex;
+            }
+
+            return chain.TurnbackBoundaries.Count;
         }
     }
 
@@ -478,7 +484,6 @@ namespace RapidTransitMod.Broadcasting
         private readonly Diagnostics m_Diagnostics;
         private readonly Dictionary<Entity, string> m_LastStopAndOpenStopByVehicle = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_LastLeaveStopByVehicle = new Dictionary<Entity, string>();
-        private readonly Dictionary<Entity, string> m_LastBypassStopByVehicle = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_LastApproachStopByVehicle = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_LastMidRouteStopByVehicle = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, ProgressState> m_ProgressStateByVehicle =
@@ -511,7 +516,6 @@ namespace RapidTransitMod.Broadcasting
         {
             m_LastStopAndOpenStopByVehicle.Remove(vehicle);
             m_LastLeaveStopByVehicle.Remove(vehicle);
-            m_LastBypassStopByVehicle.Remove(vehicle);
             m_LastApproachStopByVehicle.Remove(vehicle);
             m_LastMidRouteStopByVehicle.Remove(vehicle);
             m_ProgressStateByVehicle.Remove(vehicle);
@@ -521,7 +525,6 @@ namespace RapidTransitMod.Broadcasting
         {
             m_LastStopAndOpenStopByVehicle.Clear();
             m_LastLeaveStopByVehicle.Clear();
-            m_LastBypassStopByVehicle.Clear();
             m_LastApproachStopByVehicle.Clear();
             m_LastMidRouteStopByVehicle.Clear();
             m_ProgressStateByVehicle.Clear();
@@ -578,16 +581,6 @@ namespace RapidTransitMod.Broadcasting
             {
                 m_Diagnostics.Anchor("arm", vehicle, line, waypoints, stationContext, state, false);
             }
-        }
-
-
-        internal void BypassWaiting(
-            Entity vehicle,
-            Entity line,
-            DynamicBuffer<RouteWaypoint> waypoints,
-            int currentWaypointIndex)
-        {
-            EmitBroadcastWaypointTrigger(vehicle, line, waypoints, currentWaypointIndex, "bypass_waiting");
         }
 
 
@@ -999,9 +992,6 @@ namespace RapidTransitMod.Broadcasting
                 case "leave_station":
                     return m_LastLeaveStopByVehicle.TryGetValue(vehicle, out string leaveStop)
                         && string.Equals(leaveStop, currentStationId, StringComparison.Ordinal);
-                case "bypass_waiting":
-                    return m_LastBypassStopByVehicle.TryGetValue(vehicle, out string bypassStop)
-                        && string.Equals(bypassStop, currentStationId, StringComparison.Ordinal);
                 case "approach_station":
                     return m_LastApproachStopByVehicle.TryGetValue(vehicle, out string approachStop)
                         && string.Equals(approachStop, currentStationId, StringComparison.Ordinal);
@@ -1028,9 +1018,6 @@ namespace RapidTransitMod.Broadcasting
                     break;
                 case "leave_station":
                     m_LastLeaveStopByVehicle[vehicle] = currentStationId;
-                    break;
-                case "bypass_waiting":
-                    m_LastBypassStopByVehicle[vehicle] = currentStationId;
                     break;
                 case "approach_station":
                     m_LastApproachStopByVehicle[vehicle] = currentStationId;

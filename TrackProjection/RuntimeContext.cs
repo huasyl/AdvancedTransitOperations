@@ -18,9 +18,7 @@ namespace RapidTransitMod.TrackProjection
         bool IsLinePending(Entity line);
         bool ProjectionDiagnosticsEnabled { get; }
 
-        BufferLookup<T> GetBufferLookup<T>(bool isReadOnly) where T : unmanaged, IBufferElementData;
         void RecordProjectionCacheAccess(ProjectionRequestSource source, bool cacheHit, bool available, VehicleTrackCursorSource cursorSource, bool exactOnly);
-        void RecordProjectionLineSnapshotAccess(ProjectionRequestSource source, bool cacheHit);
         void RecordProjectionOutcome(ProjectionOutcome outcome);
         void RecordProjectionExactFailure(ProjectionOutcome outcome);
         bool TryReadProjectionCurrentLane(Entity vehicle, out TrainCurrentLane currentLane);
@@ -29,7 +27,6 @@ namespace RapidTransitMod.TrackProjection
         bool TryReadProjectionNavigation(Entity vehicle, out DynamicBuffer<TrainNavigationLane> navigation);
         bool TryReadProjectionPath(Entity vehicle, out PathOwner pathOwner, out DynamicBuffer<PathElement> pathElements);
         bool TryRouteProgress(Entity vehicle, out int nextWaypointIndex, out float segmentPosition);
-        bool TryGetVehicleRuntimeState(Entity vehicle, out VehicleState state);
         bool IsVehicleBoarding(Entity vehicle);
         bool IsVehicleArriving(Entity vehicle);
         bool HasProjectionStopSession(Entity vehicle);

@@ -43,19 +43,16 @@ namespace RapidTransitMod.Dispatch.Runtime
             internal uint LastCandidateFrame, CandidateRevision;
             internal bool PendingApplied;
             internal LineStructurePlan PendingPlan;
-            internal int PendingReleasedBypass;
         }
         private readonly struct RailCleanupSummary
         {
             internal readonly int InvalidatedOpenSamples, TimedPlanNone, TimedPlanReprojected, TimedPlanCleared;
-            internal readonly SliceLineClearResult Slices;
             internal readonly MonitorAverageRemapResult MonitorAverage;
             internal readonly LineTimesChangeResult LineTimes;
             internal readonly LineMileageChangeResult LineMileage;
-            internal readonly int ClearedProjection, ClearedLap, LineContextCleared, VehicleContextCleared, ReleasedBypass, TargetVehicles;
+            internal readonly int ClearedProjection, ClearedLap, LineContextCleared, VehicleContextCleared, TargetVehicles;
             internal RailCleanupSummary(
                 int invalidatedOpenSamples,
-                SliceLineClearResult slices,
                 MonitorAverageRemapResult monitorAverage,
                 LineTimesChangeResult lineTimes,
                 LineMileageChangeResult lineMileage,
@@ -66,14 +63,13 @@ namespace RapidTransitMod.Dispatch.Runtime
                 int clearedLap,
                 int lineContextCleared,
                 int vehicleContextCleared,
-                int releasedBypass,
                 int targetVehicles)
             {
-                InvalidatedOpenSamples = invalidatedOpenSamples; Slices = slices; MonitorAverage = monitorAverage;
+                InvalidatedOpenSamples = invalidatedOpenSamples; MonitorAverage = monitorAverage;
                 LineTimes = lineTimes; LineMileage = lineMileage; TimedPlanNone = timedPlanNone;
                 TimedPlanReprojected = timedPlanReprojected; TimedPlanCleared = timedPlanCleared;
                 ClearedProjection = clearedProjection; ClearedLap = clearedLap; LineContextCleared = lineContextCleared;
-                VehicleContextCleared = vehicleContextCleared; ReleasedBypass = releasedBypass; TargetVehicles = targetVehicles;
+                VehicleContextCleared = vehicleContextCleared; TargetVehicles = targetVehicles;
             }
         }
         private readonly struct PendingRoadInvalidation
@@ -394,18 +390,12 @@ namespace RapidTransitMod.Dispatch.Runtime
             if (state == null || state.PendingApplied || !m_ObservationRestored)
                 return;
             m_Runtime.m_SignalLineCache.Invalidate(state.Line);
-            int invalidatedSamples = m_Runtime.m_Observation.SuspendLine(
-                state.Line,
-                out int endedSlices);
-            int releasedBypass = m_Runtime.m_Bypass.ReleaseLineForPending(state.Line);
-            state.PendingReleasedBypass = releasedBypass;
+            int invalidatedSamples = m_Runtime.m_Observation.InvalidateLineOpenIntervals(state.Line);
             state.PendingApplied = true;
             m_Runtime.log.Info("[LineStructurePending] line=" + state.Line.Index
                 + " lineId=" + (state.LineId ?? string.Empty)
                 + " reason=" + (reason ?? "pending")
                 + " invalidatedSamples=" + invalidatedSamples
-                + " endedSliceSessions=" + endedSlices
-                + " releasedBypass=" + releasedBypass
                 + " OpenIntervalMaxFrames=0"
                 + " historicalAveragesCleared=0"
                 + " dwellCleared=0"
@@ -652,18 +642,16 @@ namespace RapidTransitMod.Dispatch.Runtime
                 ResetStalePlan(state, frame);
                 return;
             }
-            RailCleanupSummary summary = ApplyRailCleanup(plan, frame, state.PendingReleasedBypass);
+            RailCleanupSummary summary = ApplyRailCleanup(plan, frame);
             FinishRailPlan(state, plan);
             NotifyRailCleanup(plan);
             LogRailCleanup(plan, summary);
         }
         private RailCleanupSummary ApplyRailCleanup(
             LineStructurePlan plan,
-            uint frame,
-            int releasedBypass)
+            uint frame)
         {
             int invalidatedOpenSamples = m_Runtime.m_Observation.InvalidateLineOpenIntervals(plan.Line);
-            SliceLineClearResult slices = m_Runtime.m_Observation.InvalidateSliceLine(plan.Line);
             MonitorAverageRemapResult monitorAverage;
             if (plan.Kind == LineStructurePlanKind.Precise)
             {
@@ -703,10 +691,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             bool releaseMonitorLine = plan.NewLayout == null;
             if (releaseMonitorLine)
                 m_Runtime.m_Observation.ReleaseLineMonitor(plan.Line, frame);
-            bool canBypass = TransportModeProfile.GetProfile(
-                plan.NewChainFact.Mode != TransitMode.Unknown
-                    ? plan.NewChainFact.Mode
-                    : plan.OldChainFact.Mode).CanBypass;
             int[] newWaypointIndices = CopyWaypointIndices(plan.NewLayout);
             for (int i = 0; i < plan.VehicleCount; i++)
             {
@@ -775,18 +759,13 @@ namespace RapidTransitMod.Dispatch.Runtime
                 if (m_Runtime.m_StationContextQuery.RemoveVehicle(vehicle))
                     vehicleContextCleared++;
                 m_Runtime.m_RuntimeFramePlan.AddStage(vehicle, RuntimeStageMask.Stop);
-                if (plan.Kind != LineStructurePlanKind.LineDeleted && canBypass)
-                    m_Runtime.m_RuntimeFramePlan.AddStage(vehicle, RuntimeStageMask.Bypass);
             }
-            int lineContextCleared = 0;
-            if (m_Runtime.m_TrackProjection.ClearLineRunningVehicleSnapshots(plan.Line))
-                lineContextCleared++;
-            lineContextCleared += m_Runtime.m_LineView.InvalidateLine(plan.Line);
+            int lineContextCleared = m_Runtime.m_LineView.InvalidateLine(plan.Line);
             if (m_Runtime.m_StationContextQuery.RemoveLine(plan.Line))
                 lineContextCleared++;
             m_Runtime.m_LapCache.RemoveLine(plan.Line);
             m_Runtime.m_DispatchCache.RemoveLine(plan.Line);
-            m_Runtime.m_TrackModel.InvalidateWaypointIndexLookup(plan.Line);
+            m_Runtime.m_WaypointIndex.InvalidateLookup(plan.Line);
             if (plan.Kind == LineStructurePlanKind.LineDeleted)
             {
                 m_Runtime.m_LineServiceState.Forget(plan.Line);
@@ -798,11 +777,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                 m_Runtime.m_LineProfile.ResetRailStructure(plan.Line, waypoints);
             else
                 m_Runtime.m_LineProfile.RemoveStability(plan.Line);
-            m_Runtime.m_Bypass.ClearLine(plan.Line);
-            m_Runtime.m_TrackModel.MarkSharedIndexDirty();
             return new RailCleanupSummary(
                 invalidatedOpenSamples,
-                slices,
                 monitorAverage,
                 lineTimes,
                 lineMileage,
@@ -813,7 +789,6 @@ namespace RapidTransitMod.Dispatch.Runtime
                 clearedLap,
                 lineContextCleared,
                 vehicleContextCleared,
-                releasedBypass,
                 targetVehicles);
         }
         private static int[] CopyWaypointIndices(LineStopLayout layout)
@@ -829,7 +804,6 @@ namespace RapidTransitMod.Dispatch.Runtime
         {
             state.PendingPlan = null;
             state.PendingApplied = false;
-            state.PendingReleasedBypass = 0;
             if (plan.Kind == LineStructurePlanKind.LineDeleted)
             {
                 m_ActiveRailLines.Remove(state.Line);
@@ -878,15 +852,10 @@ namespace RapidTransitMod.Dispatch.Runtime
                 + " affectedOld=" + plan.AffectedOldIntervalCount
                 + " affectedNew=" + plan.AffectedNewIntervalCount
                 + " retained=" + plan.RetainedIntervalCount
-                + " endedSliceSessions=" + summary.Slices.EndedSessions
-                + " sliceAdmissions=" + summary.Slices.RemovedAdmissions
-                + " removedMemorySlices=" + summary.Slices.RemovedMemoryObservations
-                + " removedPersistedSlices=" + summary.Slices.RemovedPersistedObservations
                 + " zeroedMonitorIntervals=" + summary.MonitorAverage.ZeroedIntervals
                 + " retainedMonitorIntervals=" + summary.MonitorAverage.RetainedIntervals
                 + " affectedPairs=" + affectedPairs
                 + " invalidatedOpenSamples=" + summary.InvalidatedOpenSamples
-                + " releasedBypass=" + summary.ReleasedBypass
                 + " lineTimes=" + summary.LineTimes.Kind.ToString().ToLowerInvariant()
                 + " lineTimesApplied=" + summary.LineTimes.Applied
                 + " lineMileage=" + (summary.LineMileage.SharedRevisionAdvanced

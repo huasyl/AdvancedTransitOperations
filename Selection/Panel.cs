@@ -30,7 +30,6 @@ namespace RapidTransitMod
         }
 
         private EntityManager EntityManager => m_Port.EntityManager;
-        private TimedLogger log => m_Port.Log;
 
         public string CurrentGameTimeLabel()
         {
@@ -157,8 +156,6 @@ namespace RapidTransitMod
             public bool ShowSchedule;
             public string CurrentSlotText;
             public string TargetSlotText;
-            public bool ShowWaitingForFastTrain;
-            public int WaitingForFastTrainVehicleId;
             public bool ShowRetireAction;
             public bool ShowForceDepartAction;
             public bool ShowLineSpawnAction;
@@ -166,8 +163,6 @@ namespace RapidTransitMod
             public bool ShowDumpPlannerInputAction;
             public bool ShowDumpObservationAction;
             public bool ShowDumpStationAnchorObservationAction;
-            public bool ShowBypassStationToggle;
-            public bool BypassStationChecked;
             public bool ShowSignalPriority;
             public string SignalPriorityStatus;
             public string NextSignalMovement;
@@ -212,97 +207,6 @@ namespace RapidTransitMod
             return resolvedVehicle != Entity.Null && m_Port.Vehicles.Contains(resolvedVehicle);
         }
 
-        public bool CanConfigureBypassStation(Entity entity)
-        {
-            return m_Port.ResolveBypassBuilding(entity) != Entity.Null;
-        }
-
-        public bool IsBypassStation(Entity entity)
-        {
-            Entity building = m_Port.ResolveBypassBuilding(entity);
-            if (building == Entity.Null)
-                return false;
-
-            m_Port.EnsureBypassBuffer();
-            Entity city = m_Port.City.City;
-            if (city == Entity.Null || !EntityManager.HasBuffer<BypassStationSettingElement>(city))
-                return false;
-
-            DynamicBuffer<BypassStationSettingElement> buf = EntityManager.GetBuffer<BypassStationSettingElement>(city, true);
-            for (int i = 0; i < buf.Length; i++)
-            {
-                if (buf[i].m_BuildingEntity == building)
-                    return buf[i].m_IsBypassStation != 0;
-            }
-
-            return false;
-        }
-
-        public bool SetBypass(Entity entity, bool enabled)
-        {
-            Entity building = m_Port.ResolveBypassBuilding(entity);
-            if (building == Entity.Null)
-                return false;
-
-            m_Port.EnsureBypassBuffer();
-            Entity city = m_Port.City.City;
-            if (city == Entity.Null || !EntityManager.HasBuffer<BypassStationSettingElement>(city))
-                return false;
-
-            DynamicBuffer<BypassStationSettingElement> buf = EntityManager.GetBuffer<BypassStationSettingElement>(city);
-            for (int i = 0; i < buf.Length; i++)
-            {
-                if (buf[i].m_BuildingEntity != building)
-                    continue;
-
-                bool previousEnabled = false;
-                if (RtLog.CacheInvalidationDiagnosticsEnabled)
-                    previousEnabled = buf[i].m_IsBypassStation != 0;
-                buf[i] = new BypassStationSettingElement
-                {
-                    m_BuildingEntity = building,
-                    m_IsBypassStation = enabled ? (byte)1 : (byte)0
-                };
-                if (RtLog.CacheInvalidationDiagnosticsEnabled)
-                {
-                    log.Info("[BypassStationToggle] building=" + building.Index
-                        + " entity=" + entity.Index
-                        + " old=" + (previousEnabled ? 1 : 0)
-                        + " new=" + (enabled ? 1 : 0)
-                        + " mode=update"
-                        + " bufferIndex=" + i
-                        + " invalidateBypassModel=1");
-                }
-                m_Port.InvalidateBypassModel?.Invoke();
-                Invalidate();
-                return true;
-            }
-
-            buf.Add(new BypassStationSettingElement
-            {
-                m_BuildingEntity = building,
-                m_IsBypassStation = enabled ? (byte)1 : (byte)0
-            });
-            if (RtLog.CacheInvalidationDiagnosticsEnabled)
-            {
-                log.Info("[BypassStationToggle] building=" + building.Index
-                    + " entity=" + entity.Index
-                    + " old=-1"
-                    + " new=" + (enabled ? 1 : 0)
-                    + " mode=add"
-                    + " bufferIndex=" + (buf.Length - 1)
-                    + " invalidateBypassModel=1");
-            }
-            m_Port.InvalidateBypassModel?.Invoke();
-            Invalidate();
-            return true;
-        }
-
-        private static string FormatEntity(Entity entity)
-        {
-            return entity == Entity.Null ? "null" : entity.Index.ToString();
-        }
-
         public ulong PanelDataVersion => m_PanelDataVersion;
 
         public void UpdateVersionBucket()
@@ -329,7 +233,6 @@ namespace RapidTransitMod
                     m_Port.Sim,
                     m_Port.ClockSnapshot,
                     m_Port.Vehicles,
-                    m_Port.TryBlocker,
                     m_Port.TrySessionArrival,
                     m_Port.TryStopSession,
                     m_Port.TryVehicleTimes,
@@ -349,8 +252,6 @@ namespace RapidTransitMod
                     m_Port.ReadLineDuration,
                     m_Port.ReadLap,
                     m_Port.ReadDispatch,
-                    CanConfigureBypassStation,
-                    IsBypassStation,
                     GetVehiclePanelStateCode,
                     BuildVehicleTraversalProgressValue,
                     EstimateVehicleEtaText,
@@ -638,9 +539,6 @@ namespace RapidTransitMod
 
         private string BuildVehicleAlertSummary(Entity vehicle, Entity line)
         {
-            if (m_Port.TryBlocker(vehicle, out Entity blockerVehicle) && blockerVehicle != Entity.Null)
-                return "yielding-for:" + blockerVehicle.Index;
-
 #if !RT_DEBUG_TOOLS
             return "None";
 #else
@@ -669,12 +567,6 @@ namespace RapidTransitMod
 
         private string GetVehiclePanelStateCode(Entity vehicle, VehicleState vehicleState)
         {
-            if (m_Port.TryBlocker(vehicle, out _)
-                && (vehicleState == VehicleState.Holding || vehicleState == VehicleState.Running))
-            {
-                return "Yielding";
-            }
-
             if (vehicleState == VehicleState.Holding
                 && (!m_Port.Vehicles.TryGetTarget(vehicle, out int holdingTarget) || holdingTarget < 0))
             {

@@ -48,16 +48,12 @@ function snapshotForMode(snapshot, cachedSnapshot, mode) {
   return cachedMode === mode ? cachedSnapshot : null;
 }
 
-function buildOverviewSystems(featureSettings, t, mode) {
+function buildOverviewSystems(featureSettings, t) {
   const systems = [
     { key: "dispatchEnabled", title: t("nativeWorkbench.overview.system.dispatch"), enabled: featureSettings?.dispatchEnabled !== false },
     { key: "broadcastEnabled", title: t("nativeWorkbench.overview.system.broadcast"), enabled: featureSettings?.broadcastEnabled !== false },
     { key: "depotLockEnabled", title: t("nativeWorkbench.overview.system.depotLock"), enabled: featureSettings?.depotLockEnabled !== false }
   ];
-
-  if (mode !== "Tram" && mode !== "Bus") {
-    systems.splice(1, 0, { key: "bypassEnabled", title: t("nativeWorkbench.overview.system.bypass"), enabled: featureSettings?.bypassEnabled !== false });
-  }
 
   return systems;
 }
@@ -77,7 +73,7 @@ function buildEmptyOverviewViewModel(featureSettings, t, activeMode) {
       stations: [],
       vehicles: []
     },
-    systems: buildOverviewSystems(featureSettings, t, activeMode),
+    systems: buildOverviewSystems(featureSettings, t),
     warnings: []
   };
 }

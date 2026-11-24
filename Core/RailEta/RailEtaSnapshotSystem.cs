@@ -17,7 +17,6 @@ using Game.Tools;
 using Game.Vehicles;
 using RapidTransitMod.RailEta.Contracts;
 using RapidTransitMod.RailEtaHost;
-using RapidTransitMod.Bypass;
 using RapidTransitMod.Core;
 using RapidTransitMod.Dispatch.Scheduling;
 using Unity.Collections;
@@ -1503,8 +1502,7 @@ namespace RapidTransitMod.RailEta.BuiltIn
                 ClockEpoch = clockSnapshot.ClockEpoch
             };
             if (mode == RailEtaMode.Theory) return result;
-            if (port.LineDwellMinutes == null || port.TryReadOriginScheduledHold == null
-                || port.TryReadHold == null || port.TryReadTrackChain == null) return null;
+            if (port.LineDwellMinutes == null || port.TryReadOriginScheduledHold == null || port.TryReadTrackChain == null) return null;
             List<Entity> controllers = selectedControllers;
             if (controllers == null)
             {
@@ -1512,7 +1510,6 @@ namespace RapidTransitMod.RailEta.BuiltIn
                 using (NativeArray<Entity> values = m_TrainQuery.ToEntityArray(Allocator.Temp))
                     for (int i = 0; i < values.Length; i++) controllers.Add(values[i]);
             }
-            HashSet<Entity> selected = mode == RailEtaMode.PathOccupants ? new HashSet<Entity>(controllers) : null;
             EntityManager entityManager = EntityManager;
             for (int i = 0; i < controllers.Count; i++)
             {
@@ -1547,38 +1544,7 @@ namespace RapidTransitMod.RailEta.BuiltIn
                             EarliestReleaseFrame = earliestReleaseFrame,
                             ReasonCode = "request-frame-origin-scheduled"
                         };
-                        continue;
                     }
-                    if (!port.TryReadHold(vehicle, frame, out RailEtaRuntimeHoldFact hold)) continue;
-                    if (selected != null && !selected.Contains(hold.ReleaseVehicle)) continue;
-                    if (!result.TrackChains.TryGetValue(hold.ReleaseLine, out RailEtaFrozenTrackChain expressChain))
-                    {
-                        if (!port.TryReadTrackChain(hold.ReleaseLine, out RailEtaRuntimeTrackChainFact liveExpress) || liveExpress?.Atoms == null || liveExpress.Signature != hold.ExpectedChainSignature) return null;
-                        var atoms = new RailEtaFrozenTrackAtom[liveExpress.Atoms.Length];
-                        for (int atomIndex = 0; atomIndex < atoms.Length; atomIndex++)
-                        {
-                            RailEtaRuntimeTrackAtomFact atom = liveExpress.Atoms[atomIndex];
-                            atoms[atomIndex] = new RailEtaFrozenTrackAtom { Ordinal = atomIndex, PhysicalLane = atom.PhysicalLane, PreviousTarget = atom.PreviousTarget,
-                                NextTarget = atom.NextTarget, Start = atom.Start, End = atom.End, SourceFlags = atom.SourceFlags,
-                                AtomClass = atom.AtomClass, Direction = atom.Direction };
-                        }
-                        expressChain = new RailEtaFrozenTrackChain { Line = hold.ReleaseLine, Signature = liveExpress.Signature, Atoms = atoms };
-                        result.TrackChains.Add(hold.ReleaseLine, expressChain);
-                    }
-                    if (expressChain.Signature != hold.ExpectedChainSignature || expressChain.Atoms.Length == 0
-                        || hold.IntervalStartAtomIndex < 0 || hold.IntervalEndAtomIndexExclusive > expressChain.Atoms.Length
-                        || hold.IntervalStartAtomIndex >= hold.IntervalEndAtomIndexExclusive) return null;
-                    int intervalLength = hold.IntervalEndAtomIndexExclusive - hold.IntervalStartAtomIndex;
-                    float coordinate = Unity.Mathematics.math.clamp(hold.ReleaseCoordinate, 0f, intervalLength - 0.0001f);
-                    int relativeAtomIndex = Unity.Mathematics.math.min((int)Unity.Mathematics.math.floor(coordinate), intervalLength - 1);
-                    int releaseAtomIndex = hold.IntervalStartAtomIndex + relativeAtomIndex;
-                    RailEtaFrozenTrackAtom releaseAtom = expressChain.Atoms[releaseAtomIndex];
-                    if (releaseAtom.PhysicalLane == Entity.Null) return null;
-                    float atomFraction = coordinate - relativeAtomIndex;
-                    result.ControlledHolds[vehicle] = new RailControlledHoldSnapshot { Kind = RailControlledHoldKind.BypassYield,
-                        ReleaseVehicleId = new RailVehicleId(RailEtaEntityId.Pack(hold.ReleaseVehicle)), ReleaseLaneId = new RailLaneId(RailEtaEntityId.Pack(releaseAtom.PhysicalLane)),
-                        ReleaseLaneFraction = Unity.Mathematics.math.lerp(releaseAtom.Start, releaseAtom.End, atomFraction), ReleaseDirection = releaseAtom.Direction,
-                        TrackModelSignature = expressChain.Signature, ReasonCode = "request-frame-bypass-episode" };
             }
             return result;
         }

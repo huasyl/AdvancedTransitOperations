@@ -343,8 +343,6 @@ namespace RapidTransitMod.Dispatch.Lines
             }
 
             cumulative = math.max(1f, cumulative);
-            float[] bypassWaypointDistances = BypassMeters(waypoints, anchors);
-            float[] bypassStopNodeDistances = BypassStops(corridorNodes);
             Approach(
                 waypoints,
                 buildingDistances,
@@ -358,49 +356,12 @@ namespace RapidTransitMod.Dispatch.Lines
                 SharedRevision = m_SharedRevision,
                 TotalDistanceMeters = cumulative,
                 WaypointDistances = anchors,
-                BypassWaypointDistances = bypassWaypointDistances,
-                BypassStopNodeDistances = bypassStopNodeDistances,
                 PreviousDistinctStationWaypointIndices = previousDistinctStationWaypointIndices,
                 PreviousDistinctStationMeters = previousDistinctStationMeters,
                 CurrentStationMeters = currentStationMeters,
                 CorridorNodes = corridorNodes,
                 BuildingDistances = buildingDistances
             };
-        }
-
-        public float[] BypassMeters(DynamicBuffer<RouteWaypoint> waypoints, float[] waypointDistances)
-        {
-            if (waypoints.Length == 0 || waypointDistances == null || waypointDistances.Length != waypoints.Length)
-                return Array.Empty<float>();
-
-            List<float> distances = new List<float>(waypoints.Length);
-            for (int i = 0; i < waypoints.Length; i++)
-            {
-                if (m_Port.BypassBuildingForWaypoint(waypoints, i) == Entity.Null)
-                    continue;
-
-                distances.Add(waypointDistances[i]);
-            }
-
-            return distances.Count > 0 ? distances.ToArray() : Array.Empty<float>();
-        }
-
-        public float[] BypassStops(List<CorridorNode> corridorNodes)
-        {
-            if (corridorNodes == null || corridorNodes.Count == 0)
-                return Array.Empty<float>();
-
-            List<float> distances = new List<float>(corridorNodes.Count);
-            for (int i = 0; i < corridorNodes.Count; i++)
-            {
-                CorridorNode node = corridorNodes[i];
-                if (!node.IsStopNode || node.Building == Entity.Null || !m_Port.IsBypassStation(node.Building))
-                    continue;
-
-                distances.Add(node.DistanceMeters);
-            }
-
-            return distances.Count > 0 ? distances.ToArray() : Array.Empty<float>();
         }
 
         public void Approach(
@@ -773,8 +734,6 @@ namespace RapidTransitMod.Dispatch.Lines
         public uint SharedRevision;
         public float TotalDistanceMeters;
         public float[] WaypointDistances = Array.Empty<float>();
-        public float[] BypassWaypointDistances = Array.Empty<float>();
-        public float[] BypassStopNodeDistances = Array.Empty<float>();
         public int[] PreviousDistinctStationWaypointIndices = Array.Empty<int>();
         public float[] PreviousDistinctStationMeters = Array.Empty<float>();
         public float[] CurrentStationMeters = Array.Empty<float>();

@@ -44,7 +44,6 @@ function normalizeFeatureSettings(value) {
 
   return {
     dispatchEnabled: value.dispatchEnabled !== false,
-    bypassEnabled: value.bypassEnabled !== false,
     broadcastEnabled: value.broadcastEnabled !== false,
     depotLockEnabled: value.depotLockEnabled !== false
   };

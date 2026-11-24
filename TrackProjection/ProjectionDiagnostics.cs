@@ -10,7 +10,6 @@ namespace RapidTransitMod.TrackProjection
     internal enum ProjectionRequestSource : byte
     {
         Unknown = 0,
-        Bypass = 1,
         Announcement = 2,
         Observation = 3,
         Waypoint = 4,

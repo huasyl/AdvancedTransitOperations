@@ -7,7 +7,6 @@ function normalizeFeatureSettings(systems, sourceFeatureSettings = null) {
   if (sourceFeatureSettings && typeof sourceFeatureSettings === "object") {
     return {
       dispatchEnabled: sourceFeatureSettings.dispatchEnabled !== false,
-      bypassEnabled: sourceFeatureSettings.bypassEnabled !== false,
       broadcastEnabled: sourceFeatureSettings.broadcastEnabled !== false,
       depotLockEnabled: sourceFeatureSettings.depotLockEnabled !== false
     };
@@ -16,7 +15,6 @@ function normalizeFeatureSettings(systems, sourceFeatureSettings = null) {
   const source = Array.isArray(systems) ? systems : [];
   return {
     dispatchEnabled: source.find((system) => system?.key === "dispatchEnabled")?.enabled !== false,
-    bypassEnabled: source.find((system) => system?.key === "bypassEnabled")?.enabled !== false,
     broadcastEnabled: source.find((system) => system?.key === "broadcastEnabled")?.enabled !== false,
     depotLockEnabled: source.find((system) => system?.key === "depotLockEnabled")?.enabled !== false
   };

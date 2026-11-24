@@ -1640,6 +1640,20 @@ namespace RapidTransitMod.Dispatch.Lines
             return math.max(0f, stopDuration * 60f);
         }
 
+        internal bool TryMonitorLoopFrames(Entity line, out float frames)
+        {
+            frames = 0f;
+            if (IsBus(line)
+                || !TryEtaProfile(line, out LineTimeProfileHeader profile)
+                || profile.m_EtaSource != (byte)EtaSource.Monitor)
+            {
+                return false;
+            }
+
+            frames = m_EtaLeft[profile.m_Offset];
+            return frames > 0f;
+        }
+
         public float Duration(Entity line)
         {
             EntityManager entityManager = m_Port.EntityManager;

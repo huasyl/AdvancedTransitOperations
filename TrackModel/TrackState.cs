@@ -7,7 +7,6 @@ namespace RapidTransitMod.TrackModel
     {
         private readonly TrackModelStore m_Store = new TrackModelStore();
         private readonly Dictionary<Entity, LineTrackChainFrameSnapshot> m_LineTrackChainFrameSnapshots = new Dictionary<Entity, LineTrackChainFrameSnapshot>();
-        private readonly Dictionary<Entity, LineWaypointIndexLookup> m_LineWaypointIndexLookups = new Dictionary<Entity, LineWaypointIndexLookup>();
 
         internal bool TryChain(Entity line, out LineTrackChain chain) => m_Store.Get(line, out chain);
         internal void PutChain(Entity line, LineTrackChain chain) => m_Store.Put(line, chain);
@@ -24,7 +23,6 @@ namespace RapidTransitMod.TrackModel
         internal bool RemoveLine(Entity line, out LineTrackChain chain)
         {
             m_LineTrackChainFrameSnapshots.Remove(line);
-            m_LineWaypointIndexLookups.Remove(line);
             return m_Store.Remove(line, out chain);
         }
 
@@ -32,7 +30,6 @@ namespace RapidTransitMod.TrackModel
         {
             m_Store.Clear();
             m_LineTrackChainFrameSnapshots.Clear();
-            m_LineWaypointIndexLookups.Clear();
         }
 
         internal bool TryFrameSnapshot(Entity line, out LineTrackChainFrameSnapshot snapshot)
@@ -43,23 +40,6 @@ namespace RapidTransitMod.TrackModel
             if (line != Entity.Null)
                 m_LineTrackChainFrameSnapshots[line] = snapshot;
         }
-
-        internal bool TryWaypointLookup(Entity line, out LineWaypointIndexLookup lookup)
-            => m_LineWaypointIndexLookups.TryGetValue(line, out lookup);
-
-        internal void PutWaypointLookup(Entity line, LineWaypointIndexLookup lookup)
-        {
-            if (line != Entity.Null && lookup != null)
-                m_LineWaypointIndexLookups[line] = lookup;
-        }
-
-        internal void RemoveWaypointLookup(Entity line)
-        {
-            if (line != Entity.Null)
-                m_LineWaypointIndexLookups.Remove(line);
-        }
-
-        internal void ClearWaypointLookups() => m_LineWaypointIndexLookups.Clear();
 
         private sealed class TrackModelStore
         {
@@ -104,14 +84,6 @@ namespace RapidTransitMod.TrackModel
                     m_DirtyLines.Add(line);
             }
         }
-    }
-
-    internal sealed class LineWaypointIndexLookup
-    {
-        public ulong Signature;
-        public int LastStopWaypointIndex = -1;
-        public readonly Dictionary<Entity, int> WaypointIndexByWaypoint = new Dictionary<Entity, int>();
-        public readonly Dictionary<Entity, int> WaypointIndexByStop = new Dictionary<Entity, int>();
     }
 
     internal readonly struct LineTrackChainFrameSnapshot

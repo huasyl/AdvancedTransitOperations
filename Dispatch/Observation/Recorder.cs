@@ -1063,137 +1063,6 @@ namespace RapidTransitMod.Dispatch.Observation
                 out result);
         }
 
-        internal void Hold(
-            Entity vehicle,
-            Entity blocker,
-            Entity holdStation,
-            int waypointIndex,
-            uint nowFrame,
-            string reasonCode)
-        {
-            if (vehicle == Entity.Null || m_Store.Session == null)
-                return;
-
-            Trip localTrip = ResolveTrip(
-                vehicle,
-                TryGetObservedVehicleTargetMin(vehicle),
-                m_Port.LineOf(vehicle));
-            Trip priorityTrip = ResolveTrip(
-                blocker,
-                TryGetObservedVehicleTargetMin(blocker),
-                m_Port.LineOf(blocker));
-
-            if (m_Store.ActiveBypass.TryGetValue(vehicle, out BypassEvent activeEvent)
-                && activeEvent.PriorityVehicle == blocker
-                && activeEvent.State == "holding")
-            {
-                if (activeEvent.HoldStation == Entity.Null && holdStation != Entity.Null)
-                    activeEvent.HoldStation = holdStation;
-                if (activeEvent.WaypointIndex < 0 && waypointIndex >= 0)
-                    activeEvent.WaypointIndex = waypointIndex;
-                if (priorityTrip != null)
-                {
-                    activeEvent.PriorityTripId = priorityTrip.Id;
-                    activeEvent.PriorityRowId = priorityTrip.RowId;
-                    activeEvent.PriorityServiceDate = priorityTrip.ServiceDate;
-                    activeEvent.PriorityServiceDayIndex = priorityTrip.ServiceDayIndex;
-                    activeEvent.PriorityOccurrenceIndex = priorityTrip.OccurrenceIndex;
-                }
-                activeEvent.UpdatedFrame = nowFrame;
-                m_Store.Session.UpdatedFrame = nowFrame;
-                return;
-            }
-            if (activeEvent != null && activeEvent.State == "holding")
-            {
-                activeEvent.State = "released";
-                activeEvent.HoldReleaseFrame = nowFrame;
-                activeEvent.ReleaseReason = "superseded-by-new-bypass-hold";
-                activeEvent.UpdatedFrame = nowFrame;
-            }
-
-            Entity localLine = m_Port.LineOf(vehicle);
-            Entity priorityLine = m_Port.LineOf(blocker);
-            BypassEvent bypassEvent = new BypassEvent
-            {
-                EventId = "bypass|" + vehicle.Index + "|" + nowFrame,
-                State = "holding",
-                LocalTripId = localTrip?.Id ?? string.Empty,
-                LocalRowId = localTrip?.RowId ?? string.Empty,
-                LocalServiceDate = localTrip?.ServiceDate ?? string.Empty,
-                LocalServiceDayIndex = localTrip?.ServiceDayIndex ?? -1,
-                LocalOccurrenceIndex = localTrip?.OccurrenceIndex ?? 1,
-                PriorityTripId = priorityTrip?.Id ?? string.Empty,
-                PriorityRowId = priorityTrip?.RowId ?? string.Empty,
-                PriorityServiceDate = priorityTrip?.ServiceDate ?? string.Empty,
-                PriorityServiceDayIndex = priorityTrip?.ServiceDayIndex ?? -1,
-                PriorityOccurrenceIndex = priorityTrip?.OccurrenceIndex ?? 1,
-                LocalLine = localLine,
-                PriorityLine = priorityLine,
-                LocalVehicle = vehicle,
-                PriorityVehicle = blocker,
-                LocalTargetMin = TryGetObservedVehicleTargetMin(vehicle),
-                PriorityTargetMin = TryGetObservedVehicleTargetMin(blocker),
-                HoldStation = holdStation,
-                WaypointIndex = waypointIndex,
-                HoldStartFrame = nowFrame,
-                DecisionReason = reasonCode ?? "bypass-hold",
-                UpdatedFrame = nowFrame
-            };
-            m_Store.ActiveBypass[vehicle] = bypassEvent;
-            m_Store.Session.Bypass.Add(bypassEvent);
-            Dispatch.Observation.Trips.Trim(m_Store.Session.Bypass, 128);
-            m_Store.Session.UpdatedFrame = nowFrame;
-
-            if (m_Store.ByVehicle.TryGetValue(vehicle, out List<Trip> trips))
-            {
-                foreach (Trip trip in trips)
-                {
-                    trip.State = "holding";
-                    trip.UpdatedFrame = nowFrame;
-                }
-            }
-        }
-
-        internal void Release(Entity vehicle, Entity blocker, uint nowFrame, string releaseReason)
-        {
-            if (vehicle == Entity.Null || m_Store.Session == null)
-                return;
-
-            if (!m_Store.ActiveBypass.TryGetValue(vehicle, out BypassEvent bypassEvent))
-                return;
-
-            bypassEvent.State = "released";
-            bypassEvent.PriorityVehicle = blocker;
-            bypassEvent.PriorityLine = m_Port.LineOf(blocker);
-            bypassEvent.PriorityTargetMin = TryGetObservedVehicleTargetMin(blocker);
-            Trip priorityTrip = ResolveTrip(
-                blocker,
-                bypassEvent.PriorityTargetMin,
-                bypassEvent.PriorityLine);
-            if (priorityTrip != null)
-            {
-                bypassEvent.PriorityTripId = priorityTrip.Id;
-                bypassEvent.PriorityRowId = priorityTrip.RowId;
-                bypassEvent.PriorityServiceDate = priorityTrip.ServiceDate;
-                bypassEvent.PriorityServiceDayIndex = priorityTrip.ServiceDayIndex;
-                bypassEvent.PriorityOccurrenceIndex = priorityTrip.OccurrenceIndex;
-            }
-            bypassEvent.HoldReleaseFrame = nowFrame;
-            bypassEvent.ReleaseReason = releaseReason ?? string.Empty;
-            bypassEvent.UpdatedFrame = nowFrame;
-            m_Store.ActiveBypass.Remove(vehicle);
-            m_Store.Session.UpdatedFrame = nowFrame;
-
-            if (m_Store.ByVehicle.TryGetValue(vehicle, out List<Trip> trips))
-            {
-                foreach (Trip trip in trips)
-                {
-                    trip.State = trip.LaunchFrame > 0 ? "departed" : "bound";
-                    trip.UpdatedFrame = nowFrame;
-                }
-            }
-        }
-
         private SnapshotDto BuildSnapshot()
         {
             BaselineDto[] baselineRows = BuildBaselineRows();
@@ -1205,7 +1074,6 @@ namespace RapidTransitMod.Dispatch.Observation
                     .Select(BuildMonitorTripDto)
                     .ToArray();
                 StopDto[] emptyStops = Array.Empty<StopDto>();
-                BypassDto[] emptyBypassEvents = Array.Empty<BypassDto>();
                 CorridorDto[] emptyCorridors = Array.Empty<CorridorDto>();
                 return new SnapshotDto
                 {
@@ -1215,15 +1083,13 @@ namespace RapidTransitMod.Dispatch.Observation
                     generatedAtFrame = m_Port.Frame(),
                     appliedTrips = formalTrips,
                     stopEvents = emptyStops,
-                    bypassEvents = emptyBypassEvents,
                     corridorPassages = emptyCorridors,
                     baselineRows = baselineRows,
                     plannerContracts = plannerContracts,
                     attainmentReport = BuildReport(
                         baselineRows,
                         plannerContracts,
-                        formalTrips,
-                        emptyBypassEvents)
+                        formalTrips)
                 };
             }
 
@@ -1234,7 +1100,6 @@ namespace RapidTransitMod.Dispatch.Observation
                 .Select(BuildTripDto)
                 .ToArray();
             StopDto[] stopEvents = session.Stops.Select(BuildStopDto).ToArray();
-            BypassDto[] bypassEvents = session.Bypass.Select(BuildBypassDto).ToArray();
             CorridorDto[] corridorPassages = session.Corridors.ToArray();
 
             return new SnapshotDto
@@ -1247,15 +1112,13 @@ namespace RapidTransitMod.Dispatch.Observation
                 lastUpdatedFrame = session.UpdatedFrame,
                 appliedTrips = appliedTrips,
                 stopEvents = stopEvents,
-                bypassEvents = bypassEvents,
                 corridorPassages = corridorPassages,
                 baselineRows = baselineRows,
                 plannerContracts = plannerContracts,
                 attainmentReport = BuildReport(
                     baselineRows,
                     plannerContracts,
-                    appliedTrips,
-                    bypassEvents)
+                    appliedTrips)
             };
         }
 
@@ -1378,43 +1241,6 @@ namespace RapidTransitMod.Dispatch.Observation
             };
         }
 
-        private BypassDto BuildBypassDto(BypassEvent bypassEvent)
-        {
-            return new BypassDto
-            {
-                eventId = bypassEvent.EventId,
-                state = bypassEvent.State,
-                localTripObservationId = bypassEvent.LocalTripId,
-                localRowId = bypassEvent.LocalRowId,
-                localServiceDate = bypassEvent.LocalServiceDate,
-                localServiceDayIndex = bypassEvent.LocalServiceDayIndex,
-                localOccurrenceIndex = bypassEvent.LocalOccurrenceIndex,
-                priorityTripObservationId = bypassEvent.PriorityTripId,
-                priorityRowId = bypassEvent.PriorityRowId,
-                priorityServiceDate = bypassEvent.PriorityServiceDate,
-                priorityServiceDayIndex = bypassEvent.PriorityServiceDayIndex,
-                priorityOccurrenceIndex = bypassEvent.PriorityOccurrenceIndex,
-                localLineId = bypassEvent.LocalLine != Entity.Null ? m_Port.LineId(bypassEvent.LocalLine) : string.Empty,
-                priorityLineId = bypassEvent.PriorityLine != Entity.Null ? m_Port.LineId(bypassEvent.PriorityLine) : string.Empty,
-                localVehicleIndex = bypassEvent.LocalVehicle != Entity.Null ? bypassEvent.LocalVehicle.Index : -1,
-                priorityVehicleIndex = bypassEvent.PriorityVehicle != Entity.Null ? bypassEvent.PriorityVehicle.Index : -1,
-                localTargetMinute = bypassEvent.LocalTargetMin,
-                priorityTargetMinute = bypassEvent.PriorityTargetMin,
-                holdStationId = m_Port.OriginId(bypassEvent.HoldStation),
-                holdPlannerStationId = StationId(bypassEvent.LocalLine, bypassEvent.WaypointIndex),
-                holdStationName = m_Port.StationName(bypassEvent.HoldStation),
-                waypointIndex = bypassEvent.WaypointIndex,
-                holdStartFrame = bypassEvent.HoldStartFrame,
-                holdReleaseFrame = bypassEvent.HoldReleaseFrame,
-                actualHoldMinutes = HoldMinutes(bypassEvent),
-                decisionReason = bypassEvent.DecisionReason,
-                releaseReason = bypassEvent.ReleaseReason,
-                sceneKey = bypassEvent.SceneKey,
-                protectedIntervalIndex = bypassEvent.ProtectedIntervalIndex,
-                lastUpdatedFrame = bypassEvent.UpdatedFrame
-            };
-        }
-
         private BaselineDto[] BuildBaselineRows()
         {
             m_Port.LoadApplied();
@@ -1465,13 +1291,11 @@ namespace RapidTransitMod.Dispatch.Observation
         private ReportDto BuildReport(
             BaselineDto[] baselineRows,
             ContractDto[] plannerContracts,
-            TripDto[] appliedTrips,
-            BypassDto[] bypassEvents)
+            TripDto[] appliedTrips)
         {
             baselineRows ??= Array.Empty<BaselineDto>();
             plannerContracts ??= Array.Empty<ContractDto>();
             appliedTrips ??= Array.Empty<TripDto>();
-            bypassEvents ??= Array.Empty<BypassDto>();
 
             Dictionary<string, TripDto> latestTripsByRowId = appliedTrips
                 .Where(trip => !string.IsNullOrEmpty(trip?.rowId))
@@ -1604,37 +1428,9 @@ namespace RapidTransitMod.Dispatch.Observation
                     switch (actionType)
                     {
                         case "predictedHold":
-                        {
-                            BypassDto[] matchedBypassEvents = bypassEvents
-                                .Where(item =>
-                                    tripRowIds.Contains(item.localRowId)
-                                    && (stationIds.Length == 0 || stationIds.Contains(item.holdPlannerStationId)))
-                                .GroupBy(item => item.localTripObservationId ?? string.Empty, StringComparer.Ordinal)
-                                .Select(group => group
-                                    .OrderByDescending(item => item.localOccurrenceIndex)
-                                    .ThenByDescending(item => item.lastUpdatedFrame)
-                                    .First())
-                                .ToArray();
-                            actualMinutes = matchedBypassEvents.Length > 0
-                                ? matchedBypassEvents.Max(item => item.actualHoldMinutes)
-                                : 0f;
-                            if (matchedBypassEvents.Length == 0)
-                            {
-                                status = "unobserved";
-                                reason = "no-bypass-event-latest-occurrence";
-                            }
-                            else if (actualMinutes + 0.25f < expectedMinutes)
-                            {
-                                status = "shortfall";
-                                reason = "hold-shortfall-latest-occurrence";
-                            }
-                            else
-                            {
-                                status = "satisfied";
-                                reason = "hold-observed-latest-occurrence";
-                            }
+                            status = "unobserved";
+                            reason = "no-bypass-event-latest-occurrence";
                             break;
-                        }
 
                         case "retime":
                         case "expressOffset":
@@ -1716,20 +1512,9 @@ namespace RapidTransitMod.Dispatch.Observation
                         }
 
                         case "bypassSet":
-                        {
-                            bool anyBypassObserved = stationIds.Length > 0
-                                && bypassEvents
-                                    .Where(item => stationIds.Contains(item.holdPlannerStationId))
-                                    .GroupBy(item => item.localTripObservationId ?? string.Empty, StringComparer.Ordinal)
-                                    .Any(group => group
-                                        .OrderByDescending(item => item.localOccurrenceIndex)
-                                        .ThenByDescending(item => item.lastUpdatedFrame)
-                                        .FirstOrDefault() != null);
-                            status = anyBypassObserved ? "observed" : "unobserved";
-                            reason = anyBypassObserved ? "bypass-station-used" : "bypass-station-unused";
-                            actualMinutes = 0f;
+                            status = "unobserved";
+                            reason = "bypass-station-unused";
                             break;
-                        }
 
                         default:
                         {
@@ -1870,49 +1655,6 @@ namespace RapidTransitMod.Dispatch.Observation
         private static float Round2(float value) =>
             (float)Math.Round(value, 2, MidpointRounding.AwayFromZero);
 
-        private Trip ResolveTrip(Entity vehicle, int preferredTargetMinute, Entity preferredLine)
-        {
-            if (vehicle == Entity.Null
-                || !m_Store.ByVehicle.TryGetValue(vehicle, out List<Trip> trips)
-                || trips == null
-                || trips.Count == 0)
-            {
-                return null;
-            }
-
-            Trip exact = trips
-                .Where(trip =>
-                    trip != null
-                    && trip.TargetMin == preferredTargetMinute
-                    && (preferredLine == Entity.Null || trip.Line == preferredLine))
-                .OrderByDescending(trip => trip.OccurrenceIndex)
-                .ThenByDescending(trip => trip.UpdatedFrame)
-                .FirstOrDefault();
-            if (exact != null)
-                return exact;
-
-            Trip sameLine = trips
-                .Where(trip => trip != null && (preferredLine == Entity.Null || trip.Line == preferredLine))
-                .OrderByDescending(trip => trip.OccurrenceIndex)
-                .ThenByDescending(trip => trip.UpdatedFrame)
-                .FirstOrDefault();
-            if (sameLine != null)
-                return sameLine;
-
-            return trips
-                .Where(trip => trip != null)
-                .OrderByDescending(trip => trip.OccurrenceIndex)
-                .ThenByDescending(trip => trip.UpdatedFrame)
-                .FirstOrDefault();
-        }
-
-        private int TryGetObservedVehicleTargetMin(Entity vehicle)
-        {
-            if (vehicle == Entity.Null)
-                return -1;
-            return m_Port.TargetMinute(vehicle);
-        }
-
         private static string SlotKey(Entity line, int targetMinute)
         {
             return Dispatch.Observation.Trips.SlotKey(line, targetMinute);
@@ -1957,20 +1699,6 @@ namespace RapidTransitMod.Dispatch.Observation
             if (stopEvent == null || stopEvent.ArrivalFrame == 0 || stopEvent.DepartureFrame == 0 || stopEvent.DepartureFrame <= stopEvent.ArrivalFrame)
                 return 0f;
             return (float)Math.Round(m_Port.ClockSnapshot().ToMinutes(stopEvent.DepartureFrame - stopEvent.ArrivalFrame), 1);
-        }
-
-        private float HoldMinutes(BypassEvent bypassEvent)
-        {
-            if (bypassEvent == null || bypassEvent.HoldStartFrame == 0)
-                return 0f;
-
-            uint endFrame = bypassEvent.HoldReleaseFrame > 0
-                ? bypassEvent.HoldReleaseFrame
-                : m_Port.Frame();
-            if (endFrame <= bypassEvent.HoldStartFrame)
-                return 0f;
-
-            return (float)Math.Round(m_Port.ClockSnapshot().ToMinutes(endFrame - bypassEvent.HoldStartFrame), 1);
         }
 
         private static int NormalizeMinuteDelta(int delta)

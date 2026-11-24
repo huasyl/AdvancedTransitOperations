@@ -86,8 +86,6 @@ namespace RapidTransitMod
         [DataMember]
         public bool dispatchEnabled;
         [DataMember]
-        public bool bypassEnabled;
-        [DataMember]
         public bool broadcastEnabled;
         [DataMember]
         public bool depotLockEnabled;

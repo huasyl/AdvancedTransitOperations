@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using Game.Common;
 using Game.Net;
 using Game.Pathfind;
-using RapidTransitMod.Bypass;
 using Unity.Entities;
 using Unity.Mathematics;
 namespace RapidTransitMod.TrackModel
@@ -28,23 +27,6 @@ namespace RapidTransitMod.TrackModel
         Forward = 1,
         Reverse = 2,
     }
-    internal enum SharedTraversalRelation : byte
-    {
-        Unknown = 0,
-        SameDirection = 1,
-        OppositeDirection = 2,
-    }
-    internal enum RelativeToTrunkState : byte
-    {
-        Unknown = 0,
-        OffTrunk = 1,
-        OnTrunkAlongCanonical = 2,
-        OnTrunkAgainstCanonical = 3,
-        ApproachingTrunkAlongCanonical = 4,
-        ApproachingTrunkAgainstCanonical = 5,
-        DepartingFromTrunk = 6,
-        FutureReturnOnly = 7,
-    }
     internal enum TrackAtomClass : byte
     {
         Unknown = 0,
@@ -56,7 +38,6 @@ namespace RapidTransitMod.TrackModel
     {
         Unknown = 0,
         Stop = 1,
-        Bypass = 2,
         Branch = 3,
         Merge = 4,
         SharedEntry = 5,
@@ -193,19 +174,16 @@ namespace RapidTransitMod.TrackModel
         public readonly int EndControlPointIndex;
         public readonly int StartAtomIndex;
         public readonly int EndAtomIndexExclusive;
-        public readonly float BaseFrames;
         public ControlEdge(
             int startControlPointIndex,
             int endControlPointIndex,
             int startAtomIndex,
-            int endAtomIndexExclusive,
-            float baseFrames)
+            int endAtomIndexExclusive)
         {
             StartControlPointIndex = startControlPointIndex;
             EndControlPointIndex = endControlPointIndex;
             StartAtomIndex = startAtomIndex;
             EndAtomIndexExclusive = endAtomIndexExclusive;
-            BaseFrames = baseFrames;
         }
     }
     internal enum TraversalEventKind : byte
@@ -227,7 +205,6 @@ namespace RapidTransitMod.TrackModel
         public readonly int PassIndex;
         public readonly int StartAtomIndex;
         public readonly int EndAtomIndexExclusive;
-        public readonly float StopFrames;
         public readonly string StationId;
         public TraversalEvent(
             int eventIndex,
@@ -237,7 +214,6 @@ namespace RapidTransitMod.TrackModel
             int passIndex,
             int startAtomIndex,
             int endAtomIndexExclusive,
-            float stopFrames,
             string stationId = "")
         {
             EventIndex = eventIndex;
@@ -247,7 +223,6 @@ namespace RapidTransitMod.TrackModel
             PassIndex = passIndex;
             StartAtomIndex = startAtomIndex;
             EndAtomIndexExclusive = endAtomIndexExclusive;
-            StopFrames = stopFrames;
             StationId = stationId ?? string.Empty;
         }
     }
@@ -259,15 +234,13 @@ namespace RapidTransitMod.TrackModel
         public readonly int StartEventIndex;
         public readonly int EndEventIndex;
         public readonly Entity[] PhysicalLaneKeys;
-        public readonly float RunFrames;
         public TraversalRunSlice(
             int sliceIndex,
             int startAtomIndex,
             int endAtomIndexExclusive,
             int startEventIndex,
             int endEventIndex,
-            Entity[] physicalLaneKeys,
-            float runFrames)
+            Entity[] physicalLaneKeys)
         {
             SliceIndex = sliceIndex;
             StartAtomIndex = startAtomIndex;
@@ -275,7 +248,6 @@ namespace RapidTransitMod.TrackModel
             StartEventIndex = startEventIndex;
             EndEventIndex = endEventIndex;
             PhysicalLaneKeys = physicalLaneKeys ?? Array.Empty<Entity>();
-            RunFrames = runFrames;
         }
     }
     internal sealed class LineTraversalProfile
@@ -283,7 +255,6 @@ namespace RapidTransitMod.TrackModel
         public readonly List<TraversalEvent> Events = new List<TraversalEvent>();
         public readonly List<TraversalRunSlice> RunSlices = new List<TraversalRunSlice>();
         public int[] AtomToRunSliceIndex = Array.Empty<int>();
-        public float[][] SegmentSliceCutPointProgresses = Array.Empty<float[]>();
     }
     internal readonly struct TurnbackBoundary
     {
@@ -345,18 +316,6 @@ namespace RapidTransitMod.TrackModel
             BoundaryEventIndex = boundaryEventIndex;
         }
     }
-    internal readonly struct TraversalTimingEstimate
-    {
-        public readonly float RunFrames;
-        public readonly float StopFrames;
-        public readonly float TotalFrames;
-        public TraversalTimingEstimate(float runFrames, float stopFrames)
-        {
-            RunFrames = runFrames;
-            StopFrames = stopFrames;
-            TotalFrames = runFrames + stopFrames;
-        }
-    }
     internal readonly struct TrackExtensionRange
     {
         public readonly int StartAtomIndex;
@@ -391,24 +350,10 @@ namespace RapidTransitMod.TrackModel
         public List<EndpointMarker> EndpointMarkers = new List<EndpointMarker>();
         public List<ControlEdge> ControlEdges = new List<ControlEdge>();
         public LineTraversalProfile TraversalProfile = new LineTraversalProfile();
-        public List<SharedTrackRun> SharedRuns = new List<SharedTrackRun>();
-        public Dictionary<Entity, List<SharedTrackRun>> SharedRunsByOtherLine = new Dictionary<Entity, List<SharedTrackRun>>();
-        public List<ControlEdgeSharedSpan> ControlEdgeSharedSpans = new List<ControlEdgeSharedSpan>();
-        public List<BypassProtectedInterval> BypassProtectedIntervals = new List<BypassProtectedInterval>();
-        public List<ProtectedSharedInterval> ProtectedSharedIntervals = new List<ProtectedSharedInterval>();
-        public List<ProtectedIntervalSummary> ProtectedIntervalSummaries = new List<ProtectedIntervalSummary>();
         public List<TurnbackBoundary> TurnbackBoundaries = new List<TurnbackBoundary>();
         public List<RunChartTurnbackRegion> RunChartTurnbackRegions = new List<RunChartTurnbackRegion>();
-        public LocalBypassWaypointSceneBinding[] LocalBypassWaypointScenes = Array.Empty<LocalBypassWaypointSceneBinding>();
         public TrackWaypointInputBaseline[] WaypointInputs = Array.Empty<TrackWaypointInputBaseline>();
         public TrackSegmentInputBaseline[] SegmentInputs = Array.Empty<TrackSegmentInputBaseline>();
-        public uint LocalBypassWaypointScenesVersion;
-        public uint SharedRunsVersion;
-        public uint BypassPipelineReadyVersion;
-        public bool ControlEdgeSharedSpansReady;
-        public bool BypassProtectedIntervalsReady;
-        public bool ProtectedSharedIntervalsReady;
-        public bool ProtectedIntervalSummariesReady;
         public string TurnbackBuildMode = string.Empty;
         public string TurnbackBuildNote = string.Empty;
         public int TurnbackBuildSegmentPairIndex = -1;
@@ -423,504 +368,6 @@ namespace RapidTransitMod.TrackModel
             LineEntity = lineEntity;
             Chain = chain;
             AtomIndices = atomIndices;
-        }
-    }
-    internal readonly struct SharedTrackRun
-    {
-        public readonly int StartAtomIndex;
-        public readonly int EndAtomIndexExclusive;
-        public readonly bool HasMirroredContext;
-        public readonly int SharedLineCount;
-        public SharedTrackRun(int startAtomIndex, int endAtomIndexExclusive, bool hasMirroredContext, int sharedLineCount)
-        {
-            StartAtomIndex = startAtomIndex;
-            EndAtomIndexExclusive = endAtomIndexExclusive;
-            HasMirroredContext = hasMirroredContext;
-            SharedLineCount = sharedLineCount;
-        }
-    }
-    internal readonly struct ControlEdgeSharedSpan
-    {
-        public readonly int ControlEdgeIndex;
-        public readonly int StartAtomIndex;
-        public readonly int EndAtomIndexExclusive;
-        public readonly bool HasMirroredContext;
-        public readonly int SharedLineCount;
-        public ControlEdgeSharedSpan(int controlEdgeIndex, int startAtomIndex, int endAtomIndexExclusive, bool hasMirroredContext, int sharedLineCount)
-        {
-            ControlEdgeIndex = controlEdgeIndex;
-            StartAtomIndex = startAtomIndex;
-            EndAtomIndexExclusive = endAtomIndexExclusive;
-            HasMirroredContext = hasMirroredContext;
-            SharedLineCount = sharedLineCount;
-        }
-    }
-    internal readonly struct BypassProtectedInterval
-    {
-        public readonly int StartControlPointIndex;
-        public readonly int EndControlPointIndex;
-        public readonly int StartControlEdgeIndex;
-        public readonly int EndControlEdgeIndexInclusive;
-        public readonly int StartAtomIndex;
-        public readonly int EndAtomIndexExclusive;
-        public readonly float BaseFrames;
-        public BypassProtectedInterval(int startControlPointIndex, int endControlPointIndex, int startControlEdgeIndex, int endControlEdgeIndexInclusive, int startAtomIndex, int endAtomIndexExclusive, float baseFrames)
-        {
-            StartControlPointIndex = startControlPointIndex;
-            EndControlPointIndex = endControlPointIndex;
-            StartControlEdgeIndex = startControlEdgeIndex;
-            EndControlEdgeIndexInclusive = endControlEdgeIndexInclusive;
-            StartAtomIndex = startAtomIndex;
-            EndAtomIndexExclusive = endAtomIndexExclusive;
-            BaseFrames = baseFrames;
-        }
-    }
-    internal readonly struct ProtectedSharedInterval
-    {
-        public readonly int ProtectedIntervalIndex;
-        public readonly int ControlEdgeIndex;
-        public readonly int StartAtomIndex;
-        public readonly int EndAtomIndexExclusive;
-        public readonly bool HasMirroredContext;
-        public readonly int SharedLineCount;
-        public readonly float EntryOffsetFrames;
-        public readonly float ClearOffsetFrames;
-        public ProtectedSharedInterval(int protectedIntervalIndex, int controlEdgeIndex, int startAtomIndex, int endAtomIndexExclusive, bool hasMirroredContext, int sharedLineCount, float entryOffsetFrames, float clearOffsetFrames)
-        {
-            ProtectedIntervalIndex = protectedIntervalIndex;
-            ControlEdgeIndex = controlEdgeIndex;
-            StartAtomIndex = startAtomIndex;
-            EndAtomIndexExclusive = endAtomIndexExclusive;
-            HasMirroredContext = hasMirroredContext;
-            SharedLineCount = sharedLineCount;
-            EntryOffsetFrames = entryOffsetFrames;
-            ClearOffsetFrames = clearOffsetFrames;
-        }
-    }
-    internal readonly struct ProtectedIntervalSummary
-    {
-        public readonly int ProtectedIntervalIndex;
-        public readonly int SharedSegmentCount;
-        public readonly int MaxSharedLineCount;
-        public readonly bool HasMirroredContext;
-        public readonly float MinEntryOffsetFrames;
-        public readonly float MaxClearOffsetFrames;
-        public ProtectedIntervalSummary(int protectedIntervalIndex, int sharedSegmentCount, int maxSharedLineCount, bool hasMirroredContext, float minEntryOffsetFrames, float maxClearOffsetFrames)
-        {
-            ProtectedIntervalIndex = protectedIntervalIndex;
-            SharedSegmentCount = sharedSegmentCount;
-            MaxSharedLineCount = maxSharedLineCount;
-            HasMirroredContext = hasMirroredContext;
-            MinEntryOffsetFrames = minEntryOffsetFrames;
-            MaxClearOffsetFrames = maxClearOffsetFrames;
-        }
-    }
-    internal readonly struct TrunkSkeleton
-    {
-        public readonly int LocalSharedStartAtomIndex;
-        public readonly int LocalSharedEndAtomIndexExclusive;
-        public readonly int ExpressSharedStartAtomIndex;
-        public readonly int ExpressSharedEndAtomIndexExclusive;
-        public readonly int LocalAnchorStartAtomIndex;
-        public readonly int LocalAnchorEndAtomIndexExclusive;
-        public readonly int ExpressAnchorStartAtomIndex;
-        public readonly int ExpressAnchorEndAtomIndexExclusive;
-        public readonly int LocalSharedSliceCount;
-        public readonly int ExpressSharedSliceCount;
-        public readonly int LocalBridgedGapAtoms;
-        public readonly int ExpressBridgedGapAtoms;
-        public readonly int PhysicalOverlap;
-        public readonly int OrderedRun;
-        public readonly SharedTraversalRelation TraversalRelation;
-        public readonly bool HasCanonicalDirection;
-        public readonly bool LocalAlongCanonical;
-        public readonly bool ExpressAlongCanonical;
-        public TrunkSkeleton(
-            int localSharedStartAtomIndex,
-            int localSharedEndAtomIndexExclusive,
-            int expressSharedStartAtomIndex,
-            int expressSharedEndAtomIndexExclusive,
-            int localAnchorStartAtomIndex,
-            int localAnchorEndAtomIndexExclusive,
-            int expressAnchorStartAtomIndex,
-            int expressAnchorEndAtomIndexExclusive,
-            int localSharedSliceCount,
-            int expressSharedSliceCount,
-            int localBridgedGapAtoms,
-            int expressBridgedGapAtoms,
-            int physicalOverlap,
-            int orderedRun,
-            SharedTraversalRelation traversalRelation,
-            bool hasCanonicalDirection,
-            bool localAlongCanonical,
-            bool expressAlongCanonical)
-        {
-            LocalSharedStartAtomIndex = localSharedStartAtomIndex;
-            LocalSharedEndAtomIndexExclusive = localSharedEndAtomIndexExclusive;
-            ExpressSharedStartAtomIndex = expressSharedStartAtomIndex;
-            ExpressSharedEndAtomIndexExclusive = expressSharedEndAtomIndexExclusive;
-            LocalAnchorStartAtomIndex = localAnchorStartAtomIndex;
-            LocalAnchorEndAtomIndexExclusive = localAnchorEndAtomIndexExclusive;
-            ExpressAnchorStartAtomIndex = expressAnchorStartAtomIndex;
-            ExpressAnchorEndAtomIndexExclusive = expressAnchorEndAtomIndexExclusive;
-            LocalSharedSliceCount = localSharedSliceCount;
-            ExpressSharedSliceCount = expressSharedSliceCount;
-            LocalBridgedGapAtoms = localBridgedGapAtoms;
-            ExpressBridgedGapAtoms = expressBridgedGapAtoms;
-            PhysicalOverlap = physicalOverlap;
-            OrderedRun = orderedRun;
-            TraversalRelation = traversalRelation;
-            HasCanonicalDirection = hasCanonicalDirection;
-            LocalAlongCanonical = localAlongCanonical;
-            ExpressAlongCanonical = expressAlongCanonical;
-        }
-    }
-    internal readonly struct SharedRunBand
-    {
-        public readonly int StartAtomIndex;
-        public readonly int EndAtomIndexExclusive;
-        public readonly int SharedSliceCount;
-        public readonly int BridgedGapAtoms;
-        public readonly bool HasMirroredContext;
-        public readonly int MaxSharedLineCount;
-        public SharedRunBand(
-            int startAtomIndex,
-            int endAtomIndexExclusive,
-            int sharedSliceCount,
-            int bridgedGapAtoms,
-            bool hasMirroredContext,
-            int maxSharedLineCount)
-        {
-            StartAtomIndex = startAtomIndex;
-            EndAtomIndexExclusive = endAtomIndexExclusive;
-            SharedSliceCount = sharedSliceCount;
-            BridgedGapAtoms = bridgedGapAtoms;
-            HasMirroredContext = hasMirroredContext;
-            MaxSharedLineCount = maxSharedLineCount;
-        }
-    }
-    internal readonly struct AtomWindowSlice
-    {
-        public readonly int StartAtomIndex;
-        public readonly int EndAtomIndexExclusive;
-        public readonly int SharedSliceCount;
-        public readonly int BridgedGapAtoms;
-        public readonly bool HasMirroredContext;
-        public readonly int MaxSharedLineCount;
-        public AtomWindowSlice(
-            int startAtomIndex,
-            int endAtomIndexExclusive,
-            int sharedSliceCount,
-            int bridgedGapAtoms,
-            bool hasMirroredContext,
-            int maxSharedLineCount)
-        {
-            StartAtomIndex = startAtomIndex;
-            EndAtomIndexExclusive = endAtomIndexExclusive;
-            SharedSliceCount = sharedSliceCount;
-            BridgedGapAtoms = bridgedGapAtoms;
-            HasMirroredContext = hasMirroredContext;
-            MaxSharedLineCount = maxSharedLineCount;
-        }
-    }
-    internal readonly struct DirectedSharedPairSegment
-    {
-        public readonly int LocalStartAtomIndex;
-        public readonly int LocalEndAtomIndexExclusive;
-        public readonly int ExpressStartAtomIndex;
-        public readonly int ExpressEndAtomIndexExclusive;
-        public readonly int LocalSharedSliceCount;
-        public readonly int ExpressSharedSliceCount;
-        public readonly int LocalBridgedGapAtoms;
-        public readonly int ExpressBridgedGapAtoms;
-        public readonly int PhysicalOverlap;
-        public readonly int OrderedRun;
-        public readonly bool HasMirroredContext;
-        public readonly int MaxSharedLineCount;
-        public readonly SharedTraversalRelation TraversalRelation;
-        public readonly bool HasCanonicalDirection;
-        public readonly bool LocalAlongCanonical;
-        public readonly bool ExpressAlongCanonical;
-        public DirectedSharedPairSegment(
-            int localStartAtomIndex,
-            int localEndAtomIndexExclusive,
-            int expressStartAtomIndex,
-            int expressEndAtomIndexExclusive,
-            int localSharedSliceCount,
-            int expressSharedSliceCount,
-            int localBridgedGapAtoms,
-            int expressBridgedGapAtoms,
-            int physicalOverlap,
-            int orderedRun,
-            bool hasMirroredContext,
-            int maxSharedLineCount,
-            SharedTraversalRelation traversalRelation,
-            bool hasCanonicalDirection,
-            bool localAlongCanonical,
-            bool expressAlongCanonical)
-        {
-            LocalStartAtomIndex = localStartAtomIndex;
-            LocalEndAtomIndexExclusive = localEndAtomIndexExclusive;
-            ExpressStartAtomIndex = expressStartAtomIndex;
-            ExpressEndAtomIndexExclusive = expressEndAtomIndexExclusive;
-            LocalSharedSliceCount = localSharedSliceCount;
-            ExpressSharedSliceCount = expressSharedSliceCount;
-            LocalBridgedGapAtoms = localBridgedGapAtoms;
-            ExpressBridgedGapAtoms = expressBridgedGapAtoms;
-            PhysicalOverlap = physicalOverlap;
-            OrderedRun = orderedRun;
-            HasMirroredContext = hasMirroredContext;
-            MaxSharedLineCount = maxSharedLineCount;
-            TraversalRelation = traversalRelation;
-            HasCanonicalDirection = hasCanonicalDirection;
-            LocalAlongCanonical = localAlongCanonical;
-            ExpressAlongCanonical = expressAlongCanonical;
-        }
-    }
-    internal readonly struct TrunkPhaseAlignment : IEquatable<TrunkPhaseAlignment>
-    {
-        public readonly bool Available;
-        public readonly int LocalTraversalPhaseIndex;
-        public readonly int LocalPhaseStartAtomIndex;
-        public readonly int LocalPhaseEndAtomExclusive;
-        public readonly int ExpressTraversalPhaseIndex;
-        public readonly int ExpressPhaseStartAtomIndex;
-        public readonly int ExpressPhaseEndAtomExclusive;
-        public TrunkPhaseAlignment(
-            bool available,
-            int localTraversalPhaseIndex,
-            int localPhaseStartAtomIndex,
-            int localPhaseEndAtomExclusive,
-            int expressTraversalPhaseIndex,
-            int expressPhaseStartAtomIndex,
-            int expressPhaseEndAtomExclusive)
-        {
-            Available = available;
-            LocalTraversalPhaseIndex = localTraversalPhaseIndex;
-            LocalPhaseStartAtomIndex = localPhaseStartAtomIndex;
-            LocalPhaseEndAtomExclusive = localPhaseEndAtomExclusive;
-            ExpressTraversalPhaseIndex = expressTraversalPhaseIndex;
-            ExpressPhaseStartAtomIndex = expressPhaseStartAtomIndex;
-            ExpressPhaseEndAtomExclusive = expressPhaseEndAtomExclusive;
-        }
-        public bool Equals(TrunkPhaseAlignment other)
-        {
-            return Available == other.Available
-                && LocalTraversalPhaseIndex == other.LocalTraversalPhaseIndex
-                && LocalPhaseStartAtomIndex == other.LocalPhaseStartAtomIndex
-                && LocalPhaseEndAtomExclusive == other.LocalPhaseEndAtomExclusive
-                && ExpressTraversalPhaseIndex == other.ExpressTraversalPhaseIndex
-                && ExpressPhaseStartAtomIndex == other.ExpressPhaseStartAtomIndex
-                && ExpressPhaseEndAtomExclusive == other.ExpressPhaseEndAtomExclusive;
-        }
-        public override bool Equals(object obj)
-        {
-            return obj is TrunkPhaseAlignment other && Equals(other);
-        }
-        public override int GetHashCode()
-        {
-            unchecked
-            {
-                int hash = Available.GetHashCode();
-                hash = (hash * 397) ^ LocalTraversalPhaseIndex;
-                hash = (hash * 397) ^ LocalPhaseStartAtomIndex;
-                hash = (hash * 397) ^ LocalPhaseEndAtomExclusive;
-                hash = (hash * 397) ^ ExpressTraversalPhaseIndex;
-                hash = (hash * 397) ^ ExpressPhaseStartAtomIndex;
-                hash = (hash * 397) ^ ExpressPhaseEndAtomExclusive;
-                return hash;
-            }
-        }
-    }
-    internal readonly struct GlobalSharedTrunkSegment : IEquatable<GlobalSharedTrunkSegment>
-    {
-        public readonly int LocalCorridorStartAtomIndex;
-        public readonly int LocalCorridorEndAtomIndexExclusive;
-        public readonly int ExpressCorridorStartAtomIndex;
-        public readonly int ExpressCorridorEndAtomIndexExclusive;
-        public readonly int LocalAnchorStartAtomIndex;
-        public readonly int LocalAnchorEndAtomIndexExclusive;
-        public readonly int ExpressAnchorStartAtomIndex;
-        public readonly int ExpressAnchorEndAtomIndexExclusive;
-        public readonly int LocalSharedSliceCount;
-        public readonly int ExpressSharedSliceCount;
-        public readonly int LocalBridgedGapAtoms;
-        public readonly int ExpressBridgedGapAtoms;
-        public readonly int PhysicalOverlap;
-        public readonly int OrderedRun;
-        public readonly bool HasMirroredContext;
-        public readonly int MaxSharedLineCount;
-        public readonly SharedTraversalRelation TraversalRelation;
-        public readonly bool HasCanonicalDirection;
-        public readonly bool LocalAlongCanonical;
-        public readonly bool ExpressAlongCanonical;
-        public readonly TrunkPhaseAlignment PhaseAlignment;
-        public GlobalSharedTrunkSegment(
-            int localCorridorStartAtomIndex,
-            int localCorridorEndAtomIndexExclusive,
-            int expressCorridorStartAtomIndex,
-            int expressCorridorEndAtomIndexExclusive,
-            int localAnchorStartAtomIndex,
-            int localAnchorEndAtomIndexExclusive,
-            int expressAnchorStartAtomIndex,
-            int expressAnchorEndAtomIndexExclusive,
-            int localSharedSliceCount,
-            int expressSharedSliceCount,
-            int localBridgedGapAtoms,
-            int expressBridgedGapAtoms,
-            int physicalOverlap,
-            int orderedRun,
-            bool hasMirroredContext,
-            int maxSharedLineCount,
-            SharedTraversalRelation traversalRelation,
-            bool hasCanonicalDirection,
-            bool localAlongCanonical,
-            bool expressAlongCanonical,
-            TrunkPhaseAlignment phaseAlignment)
-        {
-            LocalCorridorStartAtomIndex = localCorridorStartAtomIndex;
-            LocalCorridorEndAtomIndexExclusive = localCorridorEndAtomIndexExclusive;
-            ExpressCorridorStartAtomIndex = expressCorridorStartAtomIndex;
-            ExpressCorridorEndAtomIndexExclusive = expressCorridorEndAtomIndexExclusive;
-            LocalAnchorStartAtomIndex = localAnchorStartAtomIndex;
-            LocalAnchorEndAtomIndexExclusive = localAnchorEndAtomIndexExclusive;
-            ExpressAnchorStartAtomIndex = expressAnchorStartAtomIndex;
-            ExpressAnchorEndAtomIndexExclusive = expressAnchorEndAtomIndexExclusive;
-            LocalSharedSliceCount = localSharedSliceCount;
-            ExpressSharedSliceCount = expressSharedSliceCount;
-            LocalBridgedGapAtoms = localBridgedGapAtoms;
-            ExpressBridgedGapAtoms = expressBridgedGapAtoms;
-            PhysicalOverlap = physicalOverlap;
-            OrderedRun = orderedRun;
-            HasMirroredContext = hasMirroredContext;
-            MaxSharedLineCount = maxSharedLineCount;
-            TraversalRelation = traversalRelation;
-            HasCanonicalDirection = hasCanonicalDirection;
-            LocalAlongCanonical = localAlongCanonical;
-            ExpressAlongCanonical = expressAlongCanonical;
-            PhaseAlignment = phaseAlignment;
-        }
-        public bool Equals(GlobalSharedTrunkSegment other)
-        {
-            return LocalCorridorStartAtomIndex == other.LocalCorridorStartAtomIndex
-                && LocalCorridorEndAtomIndexExclusive == other.LocalCorridorEndAtomIndexExclusive
-                && ExpressCorridorStartAtomIndex == other.ExpressCorridorStartAtomIndex
-                && ExpressCorridorEndAtomIndexExclusive == other.ExpressCorridorEndAtomIndexExclusive
-                && LocalAnchorStartAtomIndex == other.LocalAnchorStartAtomIndex
-                && LocalAnchorEndAtomIndexExclusive == other.LocalAnchorEndAtomIndexExclusive
-                && ExpressAnchorStartAtomIndex == other.ExpressAnchorStartAtomIndex
-                && ExpressAnchorEndAtomIndexExclusive == other.ExpressAnchorEndAtomIndexExclusive
-                && LocalSharedSliceCount == other.LocalSharedSliceCount
-                && ExpressSharedSliceCount == other.ExpressSharedSliceCount
-                && LocalBridgedGapAtoms == other.LocalBridgedGapAtoms
-                && ExpressBridgedGapAtoms == other.ExpressBridgedGapAtoms
-                && PhysicalOverlap == other.PhysicalOverlap
-                && OrderedRun == other.OrderedRun
-                && HasMirroredContext == other.HasMirroredContext
-                && MaxSharedLineCount == other.MaxSharedLineCount
-                && TraversalRelation == other.TraversalRelation
-                && HasCanonicalDirection == other.HasCanonicalDirection
-                && LocalAlongCanonical == other.LocalAlongCanonical
-                && ExpressAlongCanonical == other.ExpressAlongCanonical
-                && PhaseAlignment.Equals(other.PhaseAlignment);
-        }
-        public override bool Equals(object obj)
-        {
-            return obj is GlobalSharedTrunkSegment other && Equals(other);
-        }
-        public override int GetHashCode()
-        {
-            unchecked
-            {
-                int hash = LocalCorridorStartAtomIndex;
-                hash = (hash * 397) ^ LocalCorridorEndAtomIndexExclusive;
-                hash = (hash * 397) ^ ExpressCorridorStartAtomIndex;
-                hash = (hash * 397) ^ ExpressCorridorEndAtomIndexExclusive;
-                hash = (hash * 397) ^ LocalAnchorStartAtomIndex;
-                hash = (hash * 397) ^ LocalAnchorEndAtomIndexExclusive;
-                hash = (hash * 397) ^ ExpressAnchorStartAtomIndex;
-                hash = (hash * 397) ^ ExpressAnchorEndAtomIndexExclusive;
-                hash = (hash * 397) ^ LocalSharedSliceCount;
-                hash = (hash * 397) ^ ExpressSharedSliceCount;
-                hash = (hash * 397) ^ LocalBridgedGapAtoms;
-                hash = (hash * 397) ^ ExpressBridgedGapAtoms;
-                hash = (hash * 397) ^ PhysicalOverlap;
-                hash = (hash * 397) ^ OrderedRun;
-                hash = (hash * 397) ^ HasMirroredContext.GetHashCode();
-                hash = (hash * 397) ^ MaxSharedLineCount;
-                hash = (hash * 397) ^ (int)TraversalRelation;
-                hash = (hash * 397) ^ HasCanonicalDirection.GetHashCode();
-                hash = (hash * 397) ^ LocalAlongCanonical.GetHashCode();
-                hash = (hash * 397) ^ ExpressAlongCanonical.GetHashCode();
-                hash = (hash * 397) ^ PhaseAlignment.GetHashCode();
-                return hash;
-            }
-        }
-    }
-    internal readonly struct SharedTrackOccurrence
-    {
-        public readonly Entity LineEntity;
-        public readonly int AtomIndex;
-        public readonly int WaypointSegmentIndex;
-        public SharedTrackOccurrence(Entity lineEntity, int atomIndex, int waypointSegmentIndex)
-        {
-            LineEntity = lineEntity;
-            AtomIndex = atomIndex;
-            WaypointSegmentIndex = waypointSegmentIndex;
-        }
-    }
-    internal readonly struct ProtectedIntervalMatch
-    {
-        public readonly bool Found;
-        public readonly bool Ambiguous;
-        public readonly int ProtectedIntervalIndex;
-        public readonly int OverlapCount;
-        public ProtectedIntervalMatch(bool found, bool ambiguous, int protectedIntervalIndex, int overlapCount)
-        {
-            Found = found;
-            Ambiguous = ambiguous;
-            ProtectedIntervalIndex = protectedIntervalIndex;
-            OverlapCount = overlapCount;
-        }
-    }
-    internal readonly struct SharedPhysicalOccurrence
-    {
-        public readonly Entity LineEntity;
-        public readonly int AtomIndex;
-        public readonly int WaypointSegmentIndex;
-        public readonly Entity PreviousTarget;
-        public readonly Entity NextTarget;
-        public SharedPhysicalOccurrence(Entity lineEntity, int atomIndex, int waypointSegmentIndex, Entity previousTarget, Entity nextTarget)
-        {
-            LineEntity = lineEntity;
-            AtomIndex = atomIndex;
-            WaypointSegmentIndex = waypointSegmentIndex;
-            PreviousTarget = previousTarget;
-            NextTarget = nextTarget;
-        }
-    }
-    internal readonly struct PhysicalSharedWindowMatch
-    {
-        public readonly bool Found;
-        public readonly bool Ambiguous;
-        public readonly BypassProtectedInterval LocalSharedWindow;
-        public readonly BypassProtectedInterval ExpressSharedWindow;
-        public readonly int OverlapCount;
-        public readonly int OrderedRun;
-        public PhysicalSharedWindowMatch(
-            bool found,
-            bool ambiguous,
-            BypassProtectedInterval localSharedWindow,
-            BypassProtectedInterval expressSharedWindow,
-            int overlapCount,
-            int orderedRun)
-        {
-            Found = found;
-            Ambiguous = ambiguous;
-            LocalSharedWindow = localSharedWindow;
-            ExpressSharedWindow = expressSharedWindow;
-            OverlapCount = overlapCount;
-            OrderedRun = orderedRun;
         }
     }
     internal readonly struct TrackModelSequenceItem

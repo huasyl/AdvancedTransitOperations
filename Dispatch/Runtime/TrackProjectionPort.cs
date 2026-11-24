@@ -21,9 +21,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly Func<uint> m_Frame;
         private readonly Func<NativeHashMap<Entity, int>> m_CachedWaypointIndex;
         private readonly TrackModelService m_TrackModel;
-        private readonly TrackModelContext.IBuffers m_Buffers;
         private readonly RouteProgress m_RouteProgress;
-        private readonly VehicleView m_VehicleView;
         private readonly WaypointIndex m_WaypointIndex;
         private readonly RailEventSource m_RailSource;
         private readonly RuntimeHotPathProbe m_HotPathProbe;
@@ -37,9 +35,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             Func<uint> frame,
             Func<NativeHashMap<Entity, int>> cachedWaypointIndex,
             TrackModelService trackModel,
-            TrackModelContext.IBuffers buffers,
             RouteProgress routeProgress,
-            VehicleView vehicleView,
             WaypointIndex waypointIndex,
             RailEventSource railSource,
             RuntimeHotPathProbe hotPathProbe,
@@ -52,9 +48,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Frame = frame;
             m_CachedWaypointIndex = cachedWaypointIndex;
             m_TrackModel = trackModel;
-            m_Buffers = buffers;
             m_RouteProgress = routeProgress;
-            m_VehicleView = vehicleView;
             m_WaypointIndex = waypointIndex;
             m_RailSource = railSource;
             m_HotPathProbe = hotPathProbe;
@@ -74,11 +68,6 @@ namespace RapidTransitMod.Dispatch.Runtime
         void ITrackProjectionRuntimeContext.RecordProjectionCacheAccess(ProjectionRequestSource source, bool cacheHit, bool available, VehicleTrackCursorSource cursorSource, bool exactOnly)
         {
             m_HotPathProbe.RecordProjectionCacheAccess(source, cacheHit, available, cursorSource, exactOnly);
-        }
-
-        void ITrackProjectionRuntimeContext.RecordProjectionLineSnapshotAccess(ProjectionRequestSource source, bool cacheHit)
-        {
-            m_HotPathProbe.RecordProjectionLineSnapshotAccess(source, cacheHit);
         }
 
         void ITrackProjectionRuntimeContext.RecordProjectionOutcome(ProjectionOutcome outcome)
@@ -155,19 +144,9 @@ namespace RapidTransitMod.Dispatch.Runtime
             return m_RailSource.TryReadProjectionPath(vehicle, out pathOwner, out pathElements);
         }
 
-        BufferLookup<T> ITrackProjectionRuntimeContext.GetBufferLookup<T>(bool isReadOnly)
-        {
-            return m_Buffers.Get<T>(isReadOnly);
-        }
-
         bool ITrackProjectionRuntimeContext.TryRouteProgress(Entity vehicle, out int nextWaypointIndex, out float segmentPosition)
         {
             return m_RouteProgress.Try(vehicle, out nextWaypointIndex, out segmentPosition);
-        }
-
-        bool ITrackProjectionRuntimeContext.TryGetVehicleRuntimeState(Entity vehicle, out VehicleState state)
-        {
-            return m_VehicleView.TryGetState(vehicle, out state);
         }
 
         bool ITrackProjectionRuntimeContext.IsVehicleBoarding(Entity vehicle)

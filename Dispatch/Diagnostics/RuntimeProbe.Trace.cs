@@ -738,19 +738,6 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                                 value.Fact));
                         break;
                     }
-                    case FrameEventKind.Bypass:
-                    {
-                        BypassEvent value = m_Runtime.m_FrameEvents.BypassEvents[reference.Index];
-                        if (targets.Contains(value.Vehicle))
-                            events.Add(FrameEventNode(
-                                FrameEventKind.Bypass,
-                                value.Vehicle,
-                                value.Frame,
-                                value.Sequence,
-                                value.Fact.Kind.ToString(),
-                                value.Fact));
-                        break;
-                    }
                     case FrameEventKind.Dispatch:
                     {
                         DispatchEvent value = m_Runtime.m_FrameEvents.DispatchEvents[reference.Index];

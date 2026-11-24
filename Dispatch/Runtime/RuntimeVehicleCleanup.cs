@@ -73,8 +73,6 @@ namespace RapidTransitMod
                 m_Runtime.m_WaypointIndex.Clear();
             if (m_DeadVehicles.Count > 0)
                 m_Runtime.m_RouteProgress.Clear();
-            if (removedRail)
-                m_Runtime.TrackProjection.ClearLineRunningVehicleSnapshots();
             if (m_DeadVehicles.Count > 0 && RtLog.CacheInvalidationDiagnosticsEnabled)
             {
                 log.Info("[VehicleCleanupSummary] deadVehicles=" + m_DeadVehicles.Count

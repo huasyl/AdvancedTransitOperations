@@ -13,8 +13,7 @@ const EMPTY_SNAPSHOT = {
 const MONITOR_DETAIL_BATCH = 32;
 
 function isEditorRuntimeSource(source) {
-  return source === "sliceHistoricalEstimate"
-    || source === "theory"
+  return source === "theory"
     || source === "monitorAverage"
     || source === "busHistorical";
 }
@@ -128,7 +127,6 @@ function buildTrain(row, layout, runtime, stationNames, previousRow = null) {
   const allKeys = includeClosing ? [...stopKeys, stopKeys[0]] : stopKeys;
   const displayKeys = allKeys;
   let previousDeparture = slotMinute;
-  let runtimeGap = false;
   const stops = displayKeys.map((stopKey, index) => {
     const storedStop = stored[index];
     const layoutStop = index === stopKeys.length ? layoutStops[0] : layoutStops[index];
@@ -152,22 +150,16 @@ function buildTrain(row, layout, runtime, stationNames, previousRow = null) {
       };
     }
     const segmentMinutes = segments[index - 1]?.segmentMinutes;
-    const missingSlice = runtime?.source === "sliceHistoricalEstimate"
-      && index > 0
-      && (runtimeGap || !Number.isFinite(segmentMinutes));
-    if (missingSlice) {
-      runtimeGap = true;
-    }
     const arrival = index === 0
       ? null
-      : !missingSlice && previousDeparture != null && Number.isFinite(segmentMinutes)
+      : previousDeparture != null && Number.isFinite(segmentMinutes)
         ? previousDeparture + segmentMinutes
-        : missingSlice ? null : storedStop?.arrive ?? null;
+        : storedStop?.arrive ?? null;
     const departure = index === displayKeys.length - 1
       ? null
       : index === 0
         ? slotMinute
-        : missingSlice ? null : storedStop?.depart ?? null;
+        : storedStop?.depart ?? null;
     previousDeparture = departure;
     return {
       stationId: stopKey,
@@ -250,71 +242,6 @@ function buildBatchTimedStops(row, layout, runtime, intervalMinutes, minimum) {
     });
   }
   return { error: "", timedStops };
-}
-
-function buildSliceTrain(row, layout, runtime, stationNames) {
-  const layoutStops = asArray(layout?.stops).filter((stop) => stop?.stopKey);
-  const segments = asArray(runtime?.segments);
-  const dwells = asArray(runtime?.dwells);
-  const slotMinute = timeToMinutes(row?.time);
-  if (layoutStops.length === 0 || runtime?.state !== "Completed") {
-    return { id: row?.id || `row-${slotMinute}`, stops: [] };
-  }
-
-  const includeClosing = hasClosingSegment(runtime, layoutStops.length);
-  const maxEventCount = includeClosing ? layoutStops.length + 1 : layoutStops.length;
-  const prefixStopCount = Number.isInteger(runtime?.prefixStopCount)
-    ? Math.max(1, Math.min(maxEventCount, runtime.prefixStopCount))
-    : maxEventCount;
-  const stops = [];
-  let departure = slotMinute;
-  stops.push({
-    stationId: layoutStops[0].stopKey,
-    stationName: layoutStops[0].name || stationNames.get(layoutStops[0].stopKey) || layoutStops[0].stopKey,
-    stopKey: layoutStops[0].stopKey,
-    waypointIndex: layoutStops[0].waypointIndex,
-    occurrence: 0,
-    order: 0,
-    arrivalMinute: null,
-    departureMinute: departure
-  });
-  for (let index = 1; index < prefixStopCount; index++) {
-    const segment = segments[index - 1];
-    if (!Number.isFinite(segment?.segmentMinutes)) {
-      break;
-    }
-    const terminal = index === layoutStops.length;
-    const stop = terminal ? layoutStops[0] : layoutStops[index];
-    const arrival = departure + segment.segmentMinutes;
-    const next = {
-      stationId: stop.stopKey,
-      stationName: stop.name || stationNames.get(stop.stopKey) || stop.stopKey,
-      stopKey: stop.stopKey,
-      waypointIndex: stop.waypointIndex,
-      occurrence: index,
-      order: index,
-      arrivalMinute: arrival,
-      departureMinute: null
-    };
-    stops.push(next);
-    if (terminal || (index === layoutStops.length - 1 && !includeClosing)) {
-      break;
-    }
-    const dwell = dwells.find((item) => item?.stopKey === stop.stopKey
-      && item?.waypointIndex === stop.waypointIndex);
-    if (!dwell?.hasObservation || !Number.isFinite(dwell.averageMinutes)) {
-      break;
-    }
-    departure = arrival + dwell.averageMinutes;
-    next.departureMinute = departure;
-  }
-
-  return {
-    id: row?.id || `row-${slotMinute}`,
-    name: row?.id || minutesToTime(slotMinute),
-    slotMinute,
-    stops
-  };
 }
 
 function continuousTimedStops(value) {
@@ -602,11 +529,6 @@ function buildLines(snapshot, section, directory, runtimes, runtimeSources, layo
           stationNames,
           appliedRow(snapshot, line.id, row?.id)
         )),
-        sliceTrains: rows.map((row) => buildSliceTrain(
-          row,
-          layout,
-          runtimes[line.id]?.sliceHistoricalEstimate,
-          stationNames)),
         plannedTrains: buildAppliedRows(snapshot, line.id)
           .map((row) => buildTrain(row, layout, null, stationNames))
       };

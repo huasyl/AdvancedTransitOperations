@@ -102,8 +102,6 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             {
                 case "ping":
                     return Ping();
-                case "mod.slices":
-                    return ReadSlices(request);
                 case "mod.read":
                     return ReadObject(request);
                 case "mod.systems":
@@ -140,26 +138,6 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 ["debugTools"] = BuildFlavor.DebugTools,
                 ["frame"] = m_Runtime.m_SimulationSystem.frameIndex,
                 ["runtimeReady"] = m_Runtime.m_SystemReady
-            };
-        }
-
-        private JObject ReadSlices(JObject request)
-        {
-            ReadPage(request, out int offset, out int limit);
-            SliceStore slices = m_Runtime.m_Slices;
-            return new JObject
-            {
-                ["observations"] = ObservationPage(slices.Observations, offset, limit),
-                ["sessions"] = SessionPage(slices.Sessions, offset, limit),
-                ["lastSampleFrames"] = EntityFramePage(slices.LastSampleFrames, offset, limit),
-                ["lastPositionSampleFrames"] = EntityFramePage(slices.LastPositionSampleFrames, offset, limit),
-                ["nextSampleFrames"] = EntityFramePage(slices.NextSampleFrames, offset, limit),
-                ["plans"] = PlanPage(slices.Plans, offset, limit),
-                ["lineEligibility"] = EligibilityPage(slices.LineEligibility, offset, limit),
-                ["nextEntryProbeFrames"] = EntityFramePage(slices.NextEntryProbeFrames, offset, limit),
-                ["lapDebug"] = LapDebugPage(slices.LapDebug, offset, limit),
-                ["actualSamples"] = ListPage(slices.RecentActualSamples, offset, limit, ActualNode),
-                ["positionSamples"] = ListPage(slices.RecentPositionSamples, offset, limit, PositionNode)
             };
         }
 
@@ -301,233 +279,6 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 ["offset"] = start,
                 ["limit"] = limit,
                 ["items"] = items
-            };
-        }
-
-        private static JObject ObservationPage(
-            Dictionary<ulong, TraversalSliceObservation> values,
-            int offset,
-            int limit)
-        {
-            JArray items = new JArray();
-            int index = 0;
-            foreach (KeyValuePair<ulong, TraversalSliceObservation> pair in values)
-            {
-                if (index >= offset && items.Count < limit)
-                {
-                    TraversalSliceObservation value = pair.Value;
-                    items.Add(new JObject
-                    {
-                        ["key"] = pair.Key.ToString(),
-                        ["lineIndex"] = unchecked((int)(uint)(pair.Key >> 32)),
-                        ["sliceIndex"] = unchecked((int)(uint)pair.Key),
-                        ["averageFrames"] = value.AverageFrames,
-                        ["fastBaselineFrames"] = value.FastBaselineFrames,
-                        ["sampleCount"] = value.SampleCount,
-                        ["lastObservedFrame"] = value.LastObservedFrame
-                    });
-                }
-                index++;
-            }
-
-            return Page(values.Count, offset, limit, items);
-        }
-
-        private static JObject EntityFramePage(
-            Dictionary<Entity, uint> values,
-            int offset,
-            int limit)
-        {
-            JArray items = new JArray();
-            int index = 0;
-            foreach (KeyValuePair<Entity, uint> pair in values)
-            {
-                if (index >= offset && items.Count < limit)
-                {
-                    items.Add(new JObject
-                    {
-                        ["entity"] = EntityNode(pair.Key),
-                        ["frame"] = pair.Value
-                    });
-                }
-                index++;
-            }
-
-            return Page(values.Count, offset, limit, items);
-        }
-
-        private static JObject PlanPage(
-            Dictionary<Entity, TraversalSliceSamplingPlanCache> values,
-            int offset,
-            int limit)
-        {
-            JArray items = new JArray();
-            int index = 0;
-            foreach (KeyValuePair<Entity, TraversalSliceSamplingPlanCache> pair in values)
-            {
-                if (index >= offset && items.Count < limit)
-                {
-                    TraversalSliceSamplingPlanCache value = pair.Value;
-                    TraversalSliceSamplingPlan plan = value.Plan;
-                    items.Add(new JObject
-                    {
-                        ["vehicle"] = EntityNode(pair.Key),
-                        ["line"] = EntityNode(value.Line),
-                        ["chainSignature"] = value.ChainSignature.ToString(),
-                        ["sliceIndex"] = value.SliceIndex,
-                        ["nextRefreshFrame"] = value.NextRefreshFrame,
-                        ["available"] = plan.Available,
-                        ["segmentIndex"] = plan.SegmentIndex,
-                        ["segmentPosition"] = plan.SegmentPosition,
-                        ["sampleIntervalFrames"] = plan.SampleIntervalFrames,
-                        ["isHighSampling"] = plan.IsHighSampling,
-                        ["isMediumSampling"] = plan.IsMediumSampling,
-                        ["hasUpcomingCutPoint"] = plan.HasUpcomingCutPoint,
-                        ["upcomingCutPointProgress"] = plan.UpcomingCutPointProgress,
-                        ["upcomingCutPointDistance"] = plan.UpcomingCutPointDistance
-                    });
-                }
-                index++;
-            }
-
-            return Page(values.Count, offset, limit, items);
-        }
-
-        private static JObject EligibilityPage(
-            Dictionary<Entity, TraversalSliceLineEligibilityCache> values,
-            int offset,
-            int limit)
-        {
-            JArray items = new JArray();
-            int index = 0;
-            foreach (KeyValuePair<Entity, TraversalSliceLineEligibilityCache> pair in values)
-            {
-                if (index >= offset && items.Count < limit)
-                {
-                    TraversalSliceLineEligibilityCache value = pair.Value;
-                    items.Add(new JObject
-                    {
-                        ["line"] = EntityNode(pair.Key),
-                        ["cachedLine"] = EntityNode(value.Line),
-                        ["chainSignature"] = value.ChainSignature.ToString(),
-                        ["eligible"] = value.Eligible,
-                        ["nextRefreshFrame"] = value.NextRefreshFrame
-                    });
-                }
-                index++;
-            }
-
-            return Page(values.Count, offset, limit, items);
-        }
-
-        private static JObject LapDebugPage(
-            Dictionary<ulong, TraversalSliceLapDebugAggregate> values,
-            int offset,
-            int limit)
-        {
-            JArray items = new JArray();
-            int index = 0;
-            foreach (KeyValuePair<ulong, TraversalSliceLapDebugAggregate> pair in values)
-            {
-                if (index >= offset && items.Count < limit)
-                {
-                    TraversalSliceLapDebugAggregate value = pair.Value;
-                    items.Add(new JObject
-                    {
-                        ["key"] = pair.Key.ToString(),
-                        ["vehicleIndex"] = unchecked((int)(uint)(pair.Key >> 32)),
-                        ["sliceIndex"] = unchecked((int)(uint)pair.Key),
-                        ["startCount"] = value.StartCount,
-                        ["finalizeCount"] = value.FinalizeCount,
-                        ["midSliceStartCount"] = value.MidSliceStartCount,
-                        ["droppedWithoutFinalizeCount"] = value.DroppedWithoutFinalizeCount,
-                        ["enterOffsetSumAtoms"] = value.EnterOffsetSumAtoms,
-                        ["maxEnterOffsetAtoms"] = value.MaxEnterOffsetAtoms,
-                        ["observedFramesSum"] = value.ObservedFramesSum,
-                        ["minObservedFrames"] = value.MinObservedFrames,
-                        ["maxObservedFrames"] = value.MaxObservedFrames
-                    });
-                }
-                index++;
-            }
-
-            return Page(values.Count, offset, limit, items);
-        }
-
-        private static JObject SessionPage(
-            Dictionary<Entity, VehicleTraversalSliceSession> values,
-            int offset,
-            int limit)
-        {
-            JArray items = new JArray();
-            int index = 0;
-            foreach (KeyValuePair<Entity, VehicleTraversalSliceSession> pair in values)
-            {
-                if (index >= offset && items.Count < limit)
-                {
-                    VehicleTraversalSliceSession value = pair.Value;
-                    items.Add(new JObject
-                    {
-                        ["vehicle"] = EntityNode(pair.Key),
-                        ["line"] = EntityNode(value.Line),
-                        ["sliceIndex"] = value.SliceIndex,
-                        ["enterFrame"] = value.EnterFrame,
-                        ["enterAtomIndex"] = value.EnterAtomIndex,
-                        ["enterAtomPosition01"] = value.EnterAtomPosition01
-                    });
-                }
-                index++;
-            }
-
-            return Page(values.Count, offset, limit, items);
-        }
-
-        private static JObject ListPage<T>(
-            IReadOnlyList<T> values,
-            int offset,
-            int limit,
-            Func<T, JObject> node)
-        {
-            int start = Math.Min(offset, values.Count);
-            int end = Math.Min(start + limit, values.Count);
-            JArray items = new JArray();
-            for (int i = start; i < end; i++)
-                items.Add(node(values[i]));
-
-            return Page(values.Count, start, limit, items);
-        }
-
-        private static JObject ActualNode(TraversalSliceActualSample value)
-        {
-            return new JObject
-            {
-                ["line"] = EntityNode(value.Line),
-                ["vehicle"] = EntityNode(value.Vehicle),
-                ["sliceIndex"] = value.SliceIndex,
-                ["enterFrame"] = value.EnterFrame,
-                ["exitFrame"] = value.ExitFrame,
-                ["enterAtomIndex"] = value.EnterAtomIndex,
-                ["enterAtomPosition01"] = value.EnterAtomPosition01,
-                ["exitAtomIndex"] = value.ExitAtomIndex,
-                ["exitAtomPosition01"] = value.ExitAtomPosition01
-            };
-        }
-
-        private static JObject PositionNode(TraversalPositionSample value)
-        {
-            return new JObject
-            {
-                ["line"] = EntityNode(value.Line),
-                ["vehicle"] = EntityNode(value.Vehicle),
-                ["frame"] = value.Frame,
-                ["sliceIndex"] = value.SliceIndex,
-                ["segmentIndex"] = value.SegmentIndex,
-                ["segmentPosition"] = value.SegmentPosition,
-                ["atomIndex"] = value.AtomIndex,
-                ["atomPosition01"] = value.AtomPosition01,
-                ["physicalLane"] = EntityNode(value.PhysicalLane),
-                ["speedMetersPerSecond"] = value.SpeedMetersPerSecond,
-                ["odometerMeters"] = value.OdometerMeters
             };
         }
 
@@ -713,14 +464,25 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 return value;
             }
 
-            string[] parts = path.Split('.');
+            string[] parts = SplitPath(path);
             for (int i = 0; i < parts.Length; i++)
             {
-                if (string.IsNullOrWhiteSpace(parts[i]))
+                string name = parts[i];
+                string index = null;
+                int open = name.IndexOf('[');
+                if (open >= 0)
+                {
+                    if (name[name.Length - 1] != ']')
+                        throw new ProbeError("下标缺少右方括号: " + parts[i]);
+                    index = name.Substring(open + 1, name.Length - open - 2);
+                    name = name.Substring(0, open);
+                }
+
+                if (string.IsNullOrWhiteSpace(name))
                     throw new ProbeError("path 包含空字段。");
 
                 bool useStatic = firstStatic && i == 0;
-                FieldInfo field = FindField(resultType, parts[i], useStatic);
+                FieldInfo field = FindField(resultType, name, useStatic);
                 if (field != null)
                 {
                     value = field.GetValue(useStatic ? null : value);
@@ -728,11 +490,22 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 }
                 else
                 {
-                    PropertyInfo property = FindProperty(resultType, parts[i], useStatic);
+                    PropertyInfo property = FindProperty(resultType, name, useStatic);
                     if (property == null || property.GetIndexParameters().Length != 0)
-                        throw new ProbeError("找不到字段或属性: " + parts[i]);
+                        throw new ProbeError("找不到字段或属性: " + name);
                     value = property.GetValue(useStatic ? null : value, null);
                     resultType = property.PropertyType;
+                }
+
+                if (index != null)
+                {
+                    if (value == null)
+                        throw new ProbeError("字段为空，无法按下标读取: " + parts[i]);
+                    value = ReadElement(value, index, parts[i]);
+                    resultType = value?.GetType() ?? typeof(object);
+                    if (value == null && i + 1 < parts.Length)
+                        throw new ProbeError("下标处的值为空，无法继续读取: " + parts[i]);
+                    continue;
                 }
 
                 if (value == null && i + 1 < parts.Length)
@@ -740,6 +513,61 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             }
 
             return value;
+        }
+
+        private static string[] SplitPath(string path)
+        {
+            List<string> parts = new List<string>();
+            int depth = 0;
+            int start = 0;
+            for (int i = 0; i < path.Length; i++)
+            {
+                char c = path[i];
+                if (c == '[')
+                {
+                    depth++;
+                }
+                else if (c == ']')
+                {
+                    depth--;
+                    if (depth < 0)
+                        throw new ProbeError("path 的方括号不匹配。");
+                }
+                else if (c == '.' && depth == 0)
+                {
+                    parts.Add(path.Substring(start, i - start));
+                    start = i + 1;
+                }
+            }
+
+            if (depth != 0)
+                throw new ProbeError("path 的方括号不匹配。");
+            parts.Add(path.Substring(start));
+            return parts.ToArray();
+        }
+
+        private static object ReadElement(object collection, string index, string part)
+        {
+            if (collection is IDictionary dictionary)
+            {
+                foreach (DictionaryEntry entry in dictionary)
+                {
+                    if (string.Equals(entry.Key?.ToString(), index, StringComparison.Ordinal))
+                        return entry.Value;
+                }
+                throw new ProbeError("字典中找不到键: " + index);
+            }
+
+            if (collection is IList list)
+            {
+                if (!int.TryParse(index, out int position) || position < 0)
+                    throw new ProbeError("列表下标必须是非负整数: " + index);
+                if (position >= list.Count)
+                    throw new ProbeError("下标越界: " + index + "，元素数 " + list.Count);
+                return list[position];
+            }
+
+            throw new ProbeError("字段不是字典或列表，不能使用下标: " + part);
         }
 
         private static FieldInfo FindField(Type type, string name, bool isStatic)
@@ -879,10 +707,11 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             }
 
             JObject node = new JObject();
+            ReadView inner = view.Inner();
             for (int i = 0; i < fields.Count; i++)
             {
                 FieldInfo field = fields[i];
-                node[field.Name] = ValueNode(field.GetValue(value), field.FieldType, depth + 1, view, full);
+                node[field.Name] = ValueNode(field.GetValue(value), field.FieldType, depth + 1, inner, full);
             }
             return node;
         }
@@ -890,6 +719,7 @@ namespace RapidTransitMod.Dispatch.Diagnostics
         private static JObject DictionaryNode(IDictionary values, int depth, ReadView view)
         {
             JArray items = new JArray();
+            ReadView inner = view.Inner();
             int matched = 0;
             foreach (DictionaryEntry entry in values)
             {
@@ -909,8 +739,8 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 {
                     items.Add(new JObject
                     {
-                        ["key"] = ValueNode(entry.Key, entry.Key?.GetType(), depth + 1, view),
-                        ["value"] = ValueNode(entry.Value, entry.Value?.GetType(), depth + 1, view)
+                        ["key"] = ValueNode(entry.Key, entry.Key?.GetType(), depth + 1, inner),
+                        ["value"] = ValueNode(entry.Value, entry.Value?.GetType(), depth + 1, inner)
                     });
                 }
                 matched++;
@@ -922,11 +752,12 @@ namespace RapidTransitMod.Dispatch.Diagnostics
         private static JObject EnumerableNode(IEnumerable values, int depth, ReadView view)
         {
             JArray items = new JArray();
+            ReadView inner = view.Inner();
             int count = 0;
             foreach (object item in values)
             {
                 if (count >= view.Offset && items.Count < view.Limit)
-                    items.Add(ValueNode(item, item?.GetType(), depth + 1, view));
+                    items.Add(ValueNode(item, item?.GetType(), depth + 1, inner));
                 count++;
             }
 
@@ -1043,6 +874,11 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 MaxDepth = maxDepth;
                 Key = key;
                 Prefix = prefix;
+            }
+
+            internal ReadView Inner()
+            {
+                return new ReadView(0, Limit, MaxDepth, null, null);
             }
         }
     }

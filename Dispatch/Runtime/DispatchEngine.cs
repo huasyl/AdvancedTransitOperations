@@ -31,36 +31,12 @@ namespace RapidTransitMod
         public readonly Entity Vehicle;
         public readonly Entity Line;
         public readonly int Waypoint;
-        public readonly bool ArmExpressRescue;
-        public readonly bool ClearRescue;
-        public readonly bool RefreshLine;
 
         public LaunchCommit(Entity vehicle, Entity line, int waypointIndex)
         {
             Vehicle = vehicle;
             Line = line;
             Waypoint = waypointIndex;
-            ArmExpressRescue = true;
-            ClearRescue = false;
-            RefreshLine = true;
-        }
-    }
-
-    internal readonly struct RunningCommit
-    {
-        public readonly Entity Vehicle;
-        public readonly Entity Line;
-        public readonly bool ArmExpressRescue;
-        public readonly bool ClearRescue;
-        public readonly bool RefreshLine;
-
-        public RunningCommit(Entity vehicle, Entity line)
-        {
-            Vehicle = vehicle;
-            Line = line;
-            ArmExpressRescue = true;
-            ClearRescue = false;
-            RefreshLine = true;
         }
     }
 
@@ -81,7 +57,6 @@ namespace RapidTransitMod
         private readonly VehicleRegistry m_Vehicles;
         private readonly ModRuntimeHostSystem m_Runtime;
         private readonly List<LaunchCommit> m_LaunchCommits = new List<LaunchCommit>();
-        private readonly List<RunningCommit> m_RunningCommits = new List<RunningCommit>();
         private readonly List<WaypointCommit> m_WaypointCommits = new List<WaypointCommit>();
         private readonly List<OriginPlanChange> m_OriginPlanChanges = new List<OriginPlanChange>();
         private readonly List<OriginPlanChange> m_IdlePlans = new List<OriginPlanChange>();
@@ -97,7 +72,6 @@ namespace RapidTransitMod
         private const int IDLE_TIMEOUT_MINUTES = ModRuntimeHostSystem.IDLE_TIMEOUT_MINUTES;
 
         internal IReadOnlyList<LaunchCommit> LaunchCommits => m_LaunchCommits;
-        internal IReadOnlyList<RunningCommit> RunningCommits => m_RunningCommits;
         internal IReadOnlyList<WaypointCommit> WaypointCommits => m_WaypointCommits;
         internal IReadOnlyList<OriginPlanChange> OriginPlanChanges => m_OriginPlanChanges;
 
@@ -181,7 +155,6 @@ namespace RapidTransitMod
             m_Vehicles.SetState(vehicle, VehicleState.Running);
             m_Vehicles.ClearPreparingData(vehicle);
             m_Vehicles.ClearIdle(vehicle);
-            QueueRunningCommit(vehicle, m_Runtime.m_VehicleView.TryGetLine(vehicle, out Entity line) ? line : Entity.Null);
         }
 
         public void RestoreHold(Entity vehicle)
@@ -196,8 +169,6 @@ namespace RapidTransitMod
             m_Vehicles.ClearPreparingData(vehicle);
             m_Vehicles.ClearLaunch(vehicle);
         }
-
-        public void CommitRunning(Entity vehicle, Entity line) => QueueRunningCommit(vehicle, line);
 
         internal IReadOnlyList<OriginPlanChange> CollectIdlePlans(uint nowFrame, ClockSnapshot clock)
         {
@@ -229,14 +200,6 @@ namespace RapidTransitMod
                     inputs[i],
                     events);
             }
-        }
-
-        internal void ClearRunningCommits() => m_RunningCommits.Clear();
-
-        private void QueueRunningCommit(Entity vehicle, Entity line)
-        {
-            if (vehicle != Entity.Null && line != Entity.Null)
-                m_RunningCommits.Add(new RunningCommit(vehicle, line));
         }
 
         private void QueueWaypointCommit(Entity vehicle, int waypoint)

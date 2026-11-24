@@ -8,7 +8,7 @@ using RapidTransitMod.TrackModel;
 using RapidTransitMod.TrackProjection;
 using Unity.Entities;
 using UnityEngine;
-using LineWaypointIndexLookup = RapidTransitMod.TrackModel.LineWaypointIndexLookup;
+using LineWaypointIndexLookup = RapidTransitMod.Dispatch.Lines.LineWaypointIndexLookup;
 
 namespace RapidTransitMod.Broadcasting
 {

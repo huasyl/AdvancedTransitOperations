@@ -12,7 +12,7 @@ export default function ScheduleSidebar({ controller, activeTransportMode, onTra
   const modes = ["Bus", "Train", "Tram", "Subway"].map((mode) => ({ mode, label: t(`nativeWorkbench.overview.mode.${mode.toLowerCase()}`) }));
   const selectedMode = modes.find((mode) => mode.mode.toLowerCase() === activeTransportMode)?.mode || "Train";
   const settings = line.featureSettings;
-  const systems = useMemo(() => settings ? ["dispatch", ...(topbar.supportsExpress ? ["bypass"] : []), "broadcast", "depotLock"].map((name) => ({ key: `${name}Enabled`, title: t(`nativeWorkbench.overview.system.${name}`), enabled: settings[`${name}Enabled`] !== false })) : [], [settings, topbar.supportsExpress, t]);
+  const systems = useMemo(() => settings ? ["dispatch", "broadcast", "depotLock"].map((name) => ({ key: `${name}Enabled`, title: t(`nativeWorkbench.overview.system.${name}`), enabled: settings[`${name}Enabled`] !== false })) : [], [settings, t]);
   const features = useOverviewFeatureSettings({ systems, featureSettings: settings, canEdit: Boolean(settings), onSaved: actions.acceptFeatureSettings });
   return <aside className={compact ? "dw-departure-sidebar is-compact" : "dw-departure-sidebar"}>
   <div className="dw-departure-sidebar-clip"><div className="dw-departure-sidebar-body">

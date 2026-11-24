@@ -7,7 +7,6 @@ using Game.Net;
 using Game.Pathfind;
 using Game.Routes;
 using Game.Vehicles;
-using RapidTransitMod.Bypass;
 using RapidTransitMod.Dispatch.Lines;
 using Unity.Collections;
 using Unity.Entities;
@@ -48,7 +47,6 @@ namespace RapidTransitMod.TrackModel
             public readonly int StartAtomIndex;
             public readonly int EndAtomIndexExclusive;
             public readonly int WaypointIndex;
-            public readonly float StopFrames;
             public readonly int PassIndex;
             public readonly string StationId;
             public readonly bool IsBreak;
@@ -58,7 +56,6 @@ namespace RapidTransitMod.TrackModel
                 int startAtomIndex,
                 int endAtomIndexExclusive,
                 int waypointIndex,
-                float stopFrames,
                 int passIndex,
                 string stationId = "",
                 bool isBreak = false)
@@ -67,7 +64,6 @@ namespace RapidTransitMod.TrackModel
                 StartAtomIndex = startAtomIndex;
                 EndAtomIndexExclusive = endAtomIndexExclusive;
                 WaypointIndex = waypointIndex;
-                StopFrames = stopFrames;
                 PassIndex = passIndex;
                 StationId = stationId ?? string.Empty;
                 IsBreak = isBreak;
@@ -82,12 +78,9 @@ namespace RapidTransitMod.TrackModel
             chain.TraversalProfile.Events.Clear();
             chain.TraversalProfile.RunSlices.Clear();
             chain.TraversalProfile.AtomToRunSliceIndex = Array.Empty<int>();
-            chain.TraversalProfile.SegmentSliceCutPointProgresses = Array.Empty<float[]>();
             if (chain.TrackAtoms.Count == 0)
                 return;
 
-            bool hasTimeProfile = m_Support.TryGetLineTimeProfile(line, waypoints, out LineTimeProfileHeader timeProfile);
-            float lineFrames = m_Support.GetLineLoopFramesEstimate(line, waypoints);
             List<StationPassRange> stationPasses = CollectStationPassRanges(chain, line, waypoints, true);
             if (stationPasses.Count == 0)
                 return;
@@ -113,8 +106,7 @@ namespace RapidTransitMod.TrackModel
                         -1,
                         -1,
                         pass.StartAtomIndex,
-                        pass.StartAtomIndex,
-                        0f));
+                        pass.StartAtomIndex));
                     boundaryEventIndexByAtom[pass.StartAtomIndex] = breakIndex;
                     continue;
                 }
@@ -133,8 +125,7 @@ namespace RapidTransitMod.TrackModel
                     boundaryWaypointIndex,
                     pass.PassIndex,
                     pass.StartAtomIndex,
-                    pass.StartAtomIndex,
-                    0f));
+                    pass.StartAtomIndex));
                 boundaryEventIndexByAtom[pass.StartAtomIndex] = approachIndex;
 
                 int stationEventIndex = chain.TraversalProfile.Events.Count;
@@ -148,7 +139,6 @@ namespace RapidTransitMod.TrackModel
                     pass.PassIndex,
                     pass.StartAtomIndex,
                     pass.EndAtomIndexExclusive,
-                    terminal ? 0f : pass.StopFrames,
                     pass.StationId));
 
                 int departureIndex = chain.TraversalProfile.Events.Count;
@@ -159,8 +149,7 @@ namespace RapidTransitMod.TrackModel
                     boundaryWaypointIndex,
                     pass.PassIndex,
                     pass.EndAtomIndexExclusive,
-                    pass.EndAtomIndexExclusive,
-                    0f));
+                    pass.EndAtomIndexExclusive));
                 boundaryEventIndexByAtom[pass.EndAtomIndexExclusive] = departureIndex;
             }
 
@@ -188,8 +177,7 @@ namespace RapidTransitMod.TrackModel
                     endpoint.WaypointIndex,
                     -1,
                     endpoint.AtomIndex,
-                    endpoint.AtomIndex,
-                    0f));
+                    endpoint.AtomIndex));
                 boundaryEventIndexByAtom[endpoint.AtomIndex] = endpointEventIndex;
             }
 
@@ -210,14 +198,7 @@ namespace RapidTransitMod.TrackModel
                     endAtomIndexExclusive,
                     startEventIndex,
                     endEventIndex,
-                    CollectTraversalSlicePhysicalLaneKeys(chain, startAtomIndex, endAtomIndexExclusive),
-                    EstimateTraversalRunSliceFrames(
-                        chain,
-                        startAtomIndex,
-                        endAtomIndexExclusive,
-                        hasTimeProfile,
-                        timeProfile,
-                        lineFrames)));
+                    CollectTraversalSlicePhysicalLaneKeys(chain, startAtomIndex, endAtomIndexExclusive)));
             }
 
             int[] atomToRunSliceIndex = new int[chain.TrackAtoms.Count];
@@ -233,67 +214,6 @@ namespace RapidTransitMod.TrackModel
             }
 
             chain.TraversalProfile.AtomToRunSliceIndex = atomToRunSliceIndex;
-
-            List<float>[] segmentCutPoints = new List<float>[chain.SegmentRanges.Count];
-            void AddSegmentCutPoint(int boundaryAtomIndex)
-            {
-                if (boundaryAtomIndex < 0 || boundaryAtomIndex > chain.TrackAtoms.Count)
-                    return;
-
-                for (int segmentIndex = 0; segmentIndex < chain.SegmentRanges.Count; segmentIndex++)
-                {
-                    TrackSegmentRange segmentRange = chain.SegmentRanges[segmentIndex];
-                    int segmentStartAtomIndex = segmentRange.StartAtomIndex;
-                    int segmentEndAtomExclusive = segmentRange.EndAtomIndexExclusive;
-                    if (segmentEndAtomExclusive <= segmentStartAtomIndex)
-                        continue;
-
-                    bool insideSegment = boundaryAtomIndex > segmentStartAtomIndex && boundaryAtomIndex < segmentEndAtomExclusive;
-                    bool atSegmentStart = boundaryAtomIndex == segmentStartAtomIndex;
-                    bool atSegmentEnd = boundaryAtomIndex == segmentEndAtomExclusive;
-                    if (!insideSegment && !atSegmentStart && !atSegmentEnd)
-                        continue;
-
-                    float segmentLength = math.max(1f, segmentEndAtomExclusive - segmentStartAtomIndex);
-                    float progress = math.saturate((boundaryAtomIndex - segmentStartAtomIndex) / (float)segmentLength);
-                    segmentCutPoints[segmentIndex] ??= new List<float>();
-
-                    bool duplicate = false;
-                    for (int progressIndex = 0; progressIndex < segmentCutPoints[segmentIndex].Count; progressIndex++)
-                    {
-                        if (math.abs(segmentCutPoints[segmentIndex][progressIndex] - progress) <= 0.01f)
-                        {
-                            duplicate = true;
-                            break;
-                        }
-                    }
-
-                    if (!duplicate)
-                        segmentCutPoints[segmentIndex].Add(progress);
-                }
-            }
-
-            for (int sliceIndex = 0; sliceIndex < chain.TraversalProfile.RunSlices.Count; sliceIndex++)
-            {
-                TraversalRunSlice slice = chain.TraversalProfile.RunSlices[sliceIndex];
-                AddSegmentCutPoint(slice.StartAtomIndex);
-                AddSegmentCutPoint(slice.EndAtomIndexExclusive);
-            }
-
-            float[][] segmentSliceCutPointProgresses = new float[chain.SegmentRanges.Count][];
-            for (int segmentIndex = 0; segmentIndex < segmentCutPoints.Length; segmentIndex++)
-            {
-                if (segmentCutPoints[segmentIndex] == null || segmentCutPoints[segmentIndex].Count == 0)
-                {
-                    segmentSliceCutPointProgresses[segmentIndex] = Array.Empty<float>();
-                    continue;
-                }
-
-                segmentCutPoints[segmentIndex].Sort();
-                segmentSliceCutPointProgresses[segmentIndex] = segmentCutPoints[segmentIndex].ToArray();
-            }
-
-            chain.TraversalProfile.SegmentSliceCutPointProgresses = segmentSliceCutPointProgresses;
         }
 
         private static bool HasOppositeTraversalDirection(TrackAtom previousAtom, TrackAtom currentAtom)
@@ -333,61 +253,6 @@ namespace RapidTransitMod.TrackModel
             strongContextMatch = HasMirroredTraversalContext(previousAtom, currentAtom);
             oppositeDirectionMatch = HasOppositeTraversalDirection(previousAtom, currentAtom);
             return strongContextMatch || oppositeDirectionMatch;
-        }
-
-        private bool TryMeasureReverseRepeatedPrimaryRun(
-            LineTrackChain chain,
-            List<int> primaryAtomIndices,
-            int previousPrimaryPosition,
-            int currentPrimaryPosition,
-            out int matchedAtomCount,
-            out int matchedUniqueLaneCount)
-        {
-            matchedAtomCount = 0;
-            matchedUniqueLaneCount = 0;
-            if (chain == null
-                || primaryAtomIndices == null
-                || previousPrimaryPosition < 0
-                || currentPrimaryPosition < 0
-                || previousPrimaryPosition >= primaryAtomIndices.Count
-                || currentPrimaryPosition >= primaryAtomIndices.Count)
-            {
-                return false;
-            }
-
-            int strongContextMatchCount = 0;
-            int oppositeDirectionMatchCount = 0;
-            HashSet<Entity> uniqueLaneKeys = new HashSet<Entity>();
-            int leftPosition = previousPrimaryPosition;
-            int rightPosition = currentPrimaryPosition;
-            while (leftPosition >= 0 && rightPosition < primaryAtomIndices.Count)
-            {
-                TrackAtom previousAtom = chain.TrackAtoms[primaryAtomIndices[leftPosition]];
-                TrackAtom currentAtom = chain.TrackAtoms[primaryAtomIndices[rightPosition]];
-                if (!TryMatchReverseRepeatedPrimaryAtom(
-                        previousAtom,
-                        currentAtom,
-                        out bool strongContextMatch,
-                        out bool oppositeDirectionMatch))
-                {
-                    break;
-                }
-
-                matchedAtomCount++;
-                if (uniqueLaneKeys.Add(currentAtom.Key.PhysicalLaneKey))
-                    matchedUniqueLaneCount++;
-                if (strongContextMatch)
-                    strongContextMatchCount++;
-                if (oppositeDirectionMatch)
-                    oppositeDirectionMatchCount++;
-
-                leftPosition--;
-                rightPosition++;
-            }
-
-            return matchedAtomCount >= TURNBACK_REPEAT_MIN_PRIMARY_ATOMS
-                && matchedUniqueLaneCount >= TURNBACK_REPEAT_MIN_UNIQUE_LANES
-                && (strongContextMatchCount > 0 || oppositeDirectionMatchCount >= 2);
         }
 
         private static List<int> CollectPrimaryAtomIndices(LineTrackChain chain)
@@ -592,30 +457,6 @@ namespace RapidTransitMod.TrackModel
             segmentPairIndex = bestSegmentPairIndex;
             note = "segment-pair=" + bestSegmentPairIndex + " match=" + bestMatchedAtomCount + " unique=" + bestMatchedUniqueLaneCount;
             return true;
-        }
-
-        private static List<int> CollectPrimaryAtomIndicesForWindow(
-            LineTrackChain chain,
-            int startAtomIndex,
-            int endAtomIndexExclusive)
-        {
-            var primaryAtomIndices = new List<int>();
-            if (chain == null
-                || chain.TrackAtoms.Count == 0
-                || endAtomIndexExclusive <= startAtomIndex)
-            {
-                return primaryAtomIndices;
-            }
-
-            int start = math.clamp(startAtomIndex, 0, chain.TrackAtoms.Count);
-            int end = math.clamp(endAtomIndexExclusive, start, chain.TrackAtoms.Count);
-            for (int atomIndex = start; atomIndex < end; atomIndex++)
-            {
-                if (chain.TrackAtoms[atomIndex].AtomClass == TrackAtomClass.PrimaryLane)
-                    primaryAtomIndices.Add(atomIndex);
-            }
-
-            return primaryAtomIndices;
         }
 
         private static int NormalizeCircularBoundary(int atomIndex, int atomCount)
@@ -1154,18 +995,6 @@ namespace RapidTransitMod.TrackModel
             }
 
             return -1;
-        }
-
-        private int ResolveVehicleTargetWaypointIndex(Entity vehicle)
-        {
-            if (vehicle == Entity.Null || !EntityManager.HasComponent<Target>(vehicle))
-                return -1;
-
-            Entity target = EntityManager.GetComponentData<Target>(vehicle).m_Target;
-            if (target == Entity.Null || !EntityManager.HasComponent<Waypoint>(target))
-                return -1;
-
-            return EntityManager.GetComponentData<Waypoint>(target).m_Index;
         }
 
         internal void BuildRunChartTurnbacks(LineTrackChain chain, Entity line)
@@ -1930,51 +1759,6 @@ namespace RapidTransitMod.TrackModel
             log.Info(summary);
         }
 
-        private void LogTraversalSliceCutPointsBuild(LineTrackChain chain)
-        {
-            if (!IsTurnbackBuildLoggingEnabled()
-                || chain == null
-                || chain.TraversalProfile == null
-                || chain.SegmentRanges.Count == 0
-                || chain.TraversalProfile.SegmentSliceCutPointProgresses == null)
-            {
-                return;
-            }
-
-            StringBuilder sb = new StringBuilder(256);
-            sb.Append("[TraversalSliceCutPoints] line=").Append(chain.LineEntity.Index);
-            for (int segmentIndex = 0; segmentIndex < chain.SegmentRanges.Count; segmentIndex++)
-            {
-                if (segmentIndex >= chain.TraversalProfile.SegmentSliceCutPointProgresses.Length)
-                    break;
-
-                float[] cutPoints = chain.TraversalProfile.SegmentSliceCutPointProgresses[segmentIndex];
-                if (cutPoints == null || cutPoints.Length == 0)
-                    continue;
-
-                TrackSegmentRange segmentRange = chain.SegmentRanges[segmentIndex];
-                int segmentStartAtomIndex = segmentRange.StartAtomIndex;
-                int segmentLengthAtoms = math.max(1, segmentRange.EndAtomIndexExclusive - segmentStartAtomIndex);
-                sb.Append(" | seg").Append(segmentIndex).Append('=');
-                for (int cutPointIndex = 0; cutPointIndex < cutPoints.Length; cutPointIndex++)
-                {
-                    if (cutPointIndex > 0)
-                        sb.Append(',');
-
-                    float progress = cutPoints[cutPointIndex];
-                    int atomIndex = math.clamp(
-                        segmentStartAtomIndex + (int)math.round(progress * segmentLengthAtoms),
-                        segmentStartAtomIndex,
-                        math.max(segmentStartAtomIndex, segmentRange.EndAtomIndexExclusive - 1));
-                    sb.Append(progress.ToString("0.00"))
-                        .Append("@a")
-                        .Append(atomIndex);
-                }
-            }
-
-            log.Info(sb.ToString());
-        }
-
         private List<StationPassRange> CollectStationPassRanges(
             LineTrackChain chain,
             Entity line,
@@ -1985,7 +1769,6 @@ namespace RapidTransitMod.TrackModel
             if (chain == null || chain.TrackAtoms.Count == 0)
                 return stationPasses;
 
-            bool hasLinePrefabData = TryGetTraversalProfileLineData(line, out Game.Prefabs.TransportLineData prefabLineData);
             Dictionary<Entity, int> passCountByBuilding = new Dictionary<Entity, int>();
             for (int atomIndex = 0; atomIndex < chain.TrackAtoms.Count;)
             {
@@ -2006,20 +1789,10 @@ namespace RapidTransitMod.TrackModel
 
                 int endAtomIndexExclusive = atomIndex;
                 int waypointIndex = -1;
-                float stopFrames = 0f;
                 string stationId = string.Empty;
                 if (TryFindTraversalStopWaypointIndex(chain, building, startAtomIndex, endAtomIndexExclusive, out int matchedWaypointIndex))
                 {
                     waypointIndex = matchedWaypointIndex;
-                    if (hasLinePrefabData
-                        && !IsTerminalRange(
-                            chain,
-                            startAtomIndex,
-                            endAtomIndexExclusive,
-                            matchedWaypointIndex))
-                    {
-                        stopFrames = m_Support.GetProfileWaypointStopFrames(line, waypoints, matchedWaypointIndex, prefabLineData);
-                    }
                     if (TransportModeResolver.Resolve(EntityManager, line) == TransitMode.Tram)
                         m_TramStops.TryGetStationId(line, matchedWaypointIndex, out stationId);
                 }
@@ -2034,7 +1807,6 @@ namespace RapidTransitMod.TrackModel
                     startAtomIndex,
                     endAtomIndexExclusive,
                     waypointIndex,
-                    stopFrames,
                     passIndex,
                     stationId));
             }
@@ -2048,9 +1820,7 @@ namespace RapidTransitMod.TrackModel
                     line,
                     waypoints,
                     stationPasses,
-                    originalRangeCount,
-                    hasLinePrefabData,
-                    prefabLineData);
+                    originalRangeCount);
                 if (includeTramPasses)
                 {
                     AppendTramPasses(chain, line, stationPasses, originalRangeCount);
@@ -2083,7 +1853,6 @@ namespace RapidTransitMod.TrackModel
                     left.StartAtomIndex,
                     right.EndAtomIndexExclusive,
                     stop.WaypointIndex,
-                    stop.StopFrames,
                     left.PassIndex,
                     stop.StationId);
                 stationPasses.RemoveAt(index + 1);
@@ -2147,9 +1916,7 @@ namespace RapidTransitMod.TrackModel
             Entity currentLine,
             DynamicBuffer<RouteWaypoint> waypoints,
             List<StationPassRange> stationPasses,
-            int originalRangeCount,
-            bool hasLinePrefabData,
-            Game.Prefabs.TransportLineData prefabLineData)
+            int originalRangeCount)
         {
             for (int waypointIndex = 0; waypointIndex < waypoints.Length; waypointIndex++)
             {
@@ -2169,16 +1936,12 @@ namespace RapidTransitMod.TrackModel
                     continue;
                 }
 
-                float stopFrames = hasLinePrefabData
-                    ? m_Support.GetProfileWaypointStopFrames(currentLine, waypoints, waypointIndex, prefabLineData)
-                    : 0f;
                 m_TramStops.TryGetStationId(currentLine, waypointIndex, out string stationId);
                 stationPasses.Add(new StationPassRange(
                     stop,
                     atomIndex,
                     endAtomIndexExclusive,
                     waypointIndex,
-                    stopFrames,
                     0,
                     stationId));
             }
@@ -2218,7 +1981,6 @@ namespace RapidTransitMod.TrackModel
                             candidate.AtomIndex,
                             candidate.AtomIndex,
                             -1,
-                            0f,
                             0,
                             string.Empty,
                             true));
@@ -2232,7 +1994,6 @@ namespace RapidTransitMod.TrackModel
                     candidate.AtomIndex,
                     candidate.AtomIndex + 1,
                     -1,
-                    0f,
                     0,
                     candidate.StationId));
             }
@@ -2287,7 +2048,6 @@ namespace RapidTransitMod.TrackModel
                     range.StartAtomIndex,
                     range.EndAtomIndexExclusive,
                     range.WaypointIndex,
-                    range.StopFrames,
                     passIndex,
                     range.StationId,
                     range.IsBreak);
@@ -2415,23 +2175,6 @@ namespace RapidTransitMod.TrackModel
             return compare != 0 ? compare : left.PassIndex.CompareTo(right.PassIndex);
         }
 
-        private bool TryGetTraversalProfileLineData(Entity line, out Game.Prefabs.TransportLineData prefabLineData)
-        {
-            prefabLineData = default;
-            if (line == Entity.Null
-                || !EntityManager.HasComponent<Game.Prefabs.PrefabRef>(line))
-            {
-                return false;
-            }
-
-            Entity prefab = EntityManager.GetComponentData<Game.Prefabs.PrefabRef>(line).m_Prefab;
-            if (prefab == Entity.Null || !EntityManager.HasComponent<Game.Prefabs.TransportLineData>(prefab))
-                return false;
-
-            prefabLineData = EntityManager.GetComponentData<Game.Prefabs.TransportLineData>(prefab);
-            return true;
-        }
-
         private bool TryFindTraversalStopWaypointIndex(
             LineTrackChain chain,
             Entity building,
@@ -2446,7 +2189,7 @@ namespace RapidTransitMod.TrackModel
             for (int controlPointIndex = 0; controlPointIndex < chain.ControlPoints.Count; controlPointIndex++)
             {
                 ControlPointMarker marker = chain.ControlPoints[controlPointIndex];
-                if ((marker.Kind != ControlPointKind.Stop && marker.Kind != ControlPointKind.Bypass)
+                if (marker.Kind != ControlPointKind.Stop
                     || marker.Building != building
                     || marker.AtomIndex < startAtomIndex
                     || marker.AtomIndex >= endAtomIndexExclusive)
@@ -2471,7 +2214,7 @@ namespace RapidTransitMod.TrackModel
                 if (marker.AtomIndex != 0
                     || marker.WaypointIndex != 0
                     || marker.Building != building
-                    || (marker.Kind != ControlPointKind.Stop && marker.Kind != ControlPointKind.Bypass))
+                    || marker.Kind != ControlPointKind.Stop)
                 {
                     continue;
                 }
@@ -2605,30 +2348,6 @@ namespace RapidTransitMod.TrackModel
                 return Array.Empty<Entity>();
 
             return orderedKeys.ToArray();
-        }
-
-        private float EstimateTraversalRunSliceFrames(
-            LineTrackChain chain,
-            int startAtomIndex,
-            int endAtomIndexExclusive,
-            bool hasTimeProfile,
-            LineTimeProfileHeader timeProfile,
-            float lineFrames)
-        {
-            if (chain == null
-                || chain.TrackAtoms.Count == 0
-                || endAtomIndexExclusive <= startAtomIndex)
-            {
-                return 0f;
-            }
-
-            startAtomIndex = math.clamp(startAtomIndex, 0, chain.TrackAtoms.Count - 1);
-            endAtomIndexExclusive = math.clamp(endAtomIndexExclusive, startAtomIndex + 1, chain.TrackAtoms.Count);
-
-            float atomCount = math.max(1f, chain.TrackAtoms.Count);
-            return lineFrames > 0f
-                ? lineFrames * ((endAtomIndexExclusive - startAtomIndex) / atomCount)
-                : 0f;
         }
 
         private static bool IsTurnbackBuildLoggingEnabled() => RtLog.VerboseEnabled;

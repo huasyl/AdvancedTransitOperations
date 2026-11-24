@@ -68,7 +68,6 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly Action<Entity> m_ClearDwell;
         private readonly Action<Entity> m_ClearDwellDeadlineCache;
         private readonly Action<Entity> m_CancelBusSeg;
-        private readonly Action<Entity, string> m_ClearBypassVehicle;
         private readonly NativeHashMap<Entity, uint> m_PreparingFixCooldownUntil;
         private readonly RuntimeFramePlan m_FramePlan;
         private readonly FrameEvents m_Events;
@@ -94,7 +93,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_ClearDwell = runtime.m_ObsPersist.ClearDwell;
             m_ClearDwellDeadlineCache = runtime.m_Observation.ClearDwellDeadlineCache;
             m_CancelBusSeg = runtime.m_Observation.CancelBusSeg;
-            m_ClearBypassVehicle = (vehicle, reason) => runtime.Bypass.ClearVehicle(vehicle, reason);
             m_PreparingFixCooldownUntil = runtime.m_PreparingFixCooldownUntil;
             m_FramePlan = runtime.m_RuntimeFramePlan;
             m_Events = runtime.m_FrameEvents;
@@ -201,7 +199,6 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public void ClearRetireRequestState(Entity vehicle)
         {
-            m_ClearBypassVehicle(vehicle, "retire-request");
             m_CancelBusSeg(vehicle);
             ClearStopSessionState(vehicle);
             m_PreparingFixCooldownUntil.Remove(vehicle);

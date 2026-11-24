@@ -27,6 +27,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         {
             m_Runtime.EntityManager.CompleteAllTrackedJobs();
             ResetForLoad();
+            RemoveLegacySliceBuffers();
             MigrationReport report = RestoreSavedConfig();
             RestoreLineBaseline();
             PublishLoaded(report);
@@ -63,6 +64,21 @@ namespace RapidTransitMod.Dispatch.Runtime
             RailEtaHost.RailEtaHotDebugApi.RequestReloadLatest();
 #endif
             PassengerFlow.SamplingSystem.ClearState();
+        }
+
+        private void RemoveLegacySliceBuffers()
+        {
+            Entity city = m_Runtime.m_CitySystem.City;
+            if (city == Entity.Null)
+                return;
+
+            EntityManager entityManager = m_Runtime.EntityManager;
+            if (entityManager.HasBuffer<TraversalSliceObservationElement>(city))
+                entityManager.RemoveComponent<TraversalSliceObservationElement>(city);
+            if (entityManager.HasBuffer<TraversalSliceQuotaElement>(city))
+                entityManager.RemoveComponent<TraversalSliceQuotaElement>(city);
+            if (entityManager.HasBuffer<TraversalSliceColdStartElement>(city))
+                entityManager.RemoveComponent<TraversalSliceColdStartElement>(city);
         }
 
         private MigrationReport RestoreSavedConfig()
@@ -199,7 +215,6 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         private void RestoreLineBaseline()
         {
-            m_Runtime.m_Bypass.WarmStaticSceneIndex();
             m_Runtime.m_LineStructureInvalidator.AcceptLoadedChains();
             m_Runtime.m_LineProfile.BaselineLoadedLines();
         }
@@ -221,9 +236,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                     + " vehicleStateCache=" + CountBuffer<VehicleStateCacheElement>()
                     + " lineLapCache=" + CountBuffer<LineLapCacheElement>()
                     + " lineDispatchCache=" + CountBuffer<LineDispatchCacheElement>()
-                    + " bypassStationSettings=" + CountBuffer<BypassStationSettingElement>()
-                    + " stationDwellBuffer=" + CountBuffer<StationDwellObservationElement>()
-                    + " sliceObservationBuffer=" + CountBuffer<TraversalSliceObservationElement>());
+                    + " stationDwellBuffer=" + CountBuffer<StationDwellObservationElement>());
             }
             try
             {
@@ -283,18 +296,13 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_StationDwellObservationBufferReady = false;
             m_Runtime.m_StationDwellObservationCacheLoaded = false;
             m_Runtime.m_Observation.ClearStationAnchorObservationDiagnosticsState();
-            m_Runtime.m_ObsPersist.ClearSlices();
-            m_Runtime.m_SliceAdmission.Clear();
             m_Runtime.m_Obs.Clear();
-            m_Runtime.m_TraversalSliceObservationBufferReady = false;
-            m_Runtime.m_TraversalSliceObservationCacheLoaded = false;
             m_Runtime.m_BusSegObservationBufferReady = false;
             m_Runtime.m_BusSegObservationCacheLoaded = false;
-            m_Runtime.m_RuntimeEngine.ClearRunningCommits();
-            m_Runtime.m_Bypass.ClearAll();
             m_Runtime.m_TrackModel.InvalidateAll();
             m_Runtime.m_TrackProjection.Clear();
             m_Runtime.m_WaypointIndex.Clear();
+            m_Runtime.m_WaypointIndex.ClearLookups();
             m_Runtime.m_RouteProgress.Clear();
             m_Runtime.m_LastVehicleIntervalMinute = -1;
             m_Runtime.m_LastSchedulerTickMinute = -1;
@@ -302,7 +310,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_StationContextQuery.Clear();
             m_Runtime.m_RuntimeLog.Clear();
             m_Runtime.m_RuntimeHotPathProbe.Clear();
-            m_Runtime.ClearFrameBuffers();
             m_Runtime.log.Info("[Startup] Cleared runtime state from the previous save");
         }
 
@@ -348,7 +355,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_LapCacheBufferReady = false;
             m_Runtime.m_VehicleCacheBufferReady = false;
             m_Runtime.m_DispatchCacheBufferReady = false;
-            m_Runtime.m_BypassStationBufferReady = false;
             m_Runtime.m_LineMileageBufferReady = false;
         }
 

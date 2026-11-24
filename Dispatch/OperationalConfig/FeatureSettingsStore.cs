@@ -5,7 +5,6 @@ namespace RapidTransitMod
         private FeatureSettingsState m_State = FeatureSettingsState.Default();
 
         public bool DispatchEnabled => m_State.DispatchEnabled;
-        public bool BypassEnabled => m_State.BypassEnabled;
         public bool BroadcastEnabled => m_State.BroadcastEnabled;
         public bool DepotLockEnabled => m_State.DepotLockEnabled;
 
@@ -32,7 +31,6 @@ namespace RapidTransitMod
             return new FeatureSettingsState
             {
                 DispatchEnabled = state.DispatchEnabled,
-                BypassEnabled = state.BypassEnabled,
                 BroadcastEnabled = state.BroadcastEnabled,
                 DepotLockEnabled = state.DepotLockEnabled
             };
@@ -42,7 +40,6 @@ namespace RapidTransitMod
     public sealed class FeatureSettingsState
     {
         public bool DispatchEnabled { get; set; } = true;
-        public bool BypassEnabled { get; set; } = true;
         public bool BroadcastEnabled { get; set; } = true;
         public bool DepotLockEnabled { get; set; } = true;
 
@@ -51,7 +48,6 @@ namespace RapidTransitMod
             return new FeatureSettingsState
             {
                 DispatchEnabled = DispatchEnabled,
-                BypassEnabled = BypassEnabled,
                 BroadcastEnabled = BroadcastEnabled,
                 DepotLockEnabled = DepotLockEnabled
             };

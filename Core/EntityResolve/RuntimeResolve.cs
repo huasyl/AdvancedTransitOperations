@@ -36,6 +36,19 @@ namespace RapidTransitMod
             return Entity.Null;
         }
 
+        internal Entity GetStationBuildingForWaypoint(DynamicBuffer<RouteWaypoint> waypoints, int waypointIndex)
+        {
+            if (waypointIndex < 0 || waypointIndex >= waypoints.Length)
+                return Entity.Null;
+
+            Entity stopEntity = Stop(waypoints[waypointIndex].m_Waypoint);
+            if (stopEntity == Entity.Null)
+                return Entity.Null;
+
+            Entity building = StationOf(stopEntity);
+            return building != Entity.Null ? building : PassingStation(stopEntity);
+        }
+
         public Entity PassingStation(Entity entity)
         {
             if (entity == Entity.Null || !m_Runtime.EntityManager.Exists(entity))

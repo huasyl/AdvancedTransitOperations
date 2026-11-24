@@ -17,6 +17,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly LineProfile m_LineProfile;
         private readonly LineStructureInvalidator m_LineStructureInvalidator;
         private readonly Action<Entity> m_InvalidateWaitingDirectory;
+        private readonly Action<Entity> m_InvalidateWaypointLookup;
         private readonly List<LineChangeCandidate> m_Candidates =
             new List<LineChangeCandidate>(128);
 
@@ -26,7 +27,8 @@ namespace RapidTransitMod.Dispatch.Runtime
             TrackModelService trackModel,
             LineProfile lineProfile,
             LineStructureInvalidator lineStructureInvalidator,
-            Action<Entity> invalidateWaitingDirectory)
+            Action<Entity> invalidateWaitingDirectory,
+            Action<Entity> invalidateWaypointLookup)
         {
             m_EntityManager = entityManager;
             m_SourceSystem = sourceSystem;
@@ -34,6 +36,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_LineProfile = lineProfile;
             m_LineStructureInvalidator = lineStructureInvalidator;
             m_InvalidateWaitingDirectory = invalidateWaitingDirectory;
+            m_InvalidateWaypointLookup = invalidateWaypointLookup;
         }
 
         internal void ConfirmChanges()
@@ -62,9 +65,8 @@ namespace RapidTransitMod.Dispatch.Runtime
             {
                 LineChangeCandidate candidate = m_Candidates[i];
                 if (candidate.LayoutChanged)
-                    m_TrackModel.MarkLayoutDirty(candidate.Line);
-                else
-                    m_TrackModel.MarkLineDirty(candidate.Line);
+                    m_InvalidateWaypointLookup(candidate.Line);
+                m_TrackModel.MarkLineDirty(candidate.Line);
             }
 
             for (int i = 0; i < submittedCount; i++)

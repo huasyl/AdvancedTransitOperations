@@ -76,8 +76,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 lineIds => m_Applied().RemoveDeletedLines(lineIds, saveChanges: false),
                 reasons => m_Applied().CleanupRequestedLines(reasons, saveChanges: false),
                 reasons => m_Applied().CleanupRequestedLines(reasons, saveChanges: true),
-                () => m_Applied().ConsumeCleanupInfo(),
-                () => m_LineView.Dirty());
+                () => m_Applied().ConsumeCleanupInfo());
         }
 
         private IReadOnlyDictionary<string, string> CollectRuntimeMissingLineReasons(

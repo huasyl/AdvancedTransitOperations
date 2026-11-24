@@ -6,7 +6,6 @@ using Game.Net;
 using Game.Pathfind;
 using Game.Routes;
 using Game.Vehicles;
-using RapidTransitMod.Bypass;
 using RapidTransitMod.Dispatch.Lines;
 using Unity.Entities;
 using Unity.Mathematics;
@@ -18,7 +17,6 @@ namespace RapidTransitMod.TrackModel
         private readonly TrackSupport m_Support;
         private readonly TrackProfile m_Profile;
         private readonly TrackDiag m_Diag;
-        private readonly Action m_MarkSharedDirty;
         private readonly Action<Entity, LineTrackChain> m_NotifyLineTrackChainCandidate;
         private readonly Action<Entity, LineTrackChain> m_NotifyLineTrackChainEstablished;
         private readonly Action<Entity, LineTrackChain> m_PublishTraversal;
@@ -105,7 +103,6 @@ namespace RapidTransitMod.TrackModel
             TrackSupport support,
             TrackProfile profile,
             TrackDiag diag,
-            Action markSharedDirty,
             Action<Entity, LineTrackChain> notifyLineTrackChainCandidate,
             Action<Entity, LineTrackChain> notifyLineTrackChainEstablished,
             Action<Entity, LineTrackChain> publishTraversal,
@@ -116,7 +113,6 @@ namespace RapidTransitMod.TrackModel
             m_Support = support;
             m_Profile = profile;
             m_Diag = diag;
-            m_MarkSharedDirty = markSharedDirty;
             m_NotifyLineTrackChainCandidate = notifyLineTrackChainCandidate;
             m_NotifyLineTrackChainEstablished = notifyLineTrackChainEstablished;
             m_PublishTraversal = publishTraversal;
@@ -538,29 +534,8 @@ namespace RapidTransitMod.TrackModel
                 previousChain.SegmentInputs = refreshedSegmentInputs;
                 previousChain.TrackExtensionRanges = refreshedExtensionRanges;
                 previousChain.HasStationTrackExtensions = hasStationTrackExtensions;
-                TrackIntervals.ResetBypassPipeline(previousChain);
-                previousChain.LocalBypassWaypointScenes = Array.Empty<LocalBypassWaypointSceneBinding>();
-                previousChain.LocalBypassWaypointScenesVersion = 0;
-                previousChain.ControlPoints.Clear();
-                previousChain.EndpointMarkers.Clear();
-                previousChain.ControlEdges.Clear();
-                for (int waypointIndex = 0; waypointIndex < segments.Length; waypointIndex++)
-                {
-                    int startAtomIndex = previousChain.SegmentRanges[waypointIndex].StartAtomIndex;
-                    TryAppendControlPoint(previousChain.ControlPoints, line, waypoints, waypointIndex, startAtomIndex);
-                    TryAppendEndpointMarker(previousChain.EndpointMarkers, waypoints, waypointIndex, startAtomIndex);
-                }
-                BuildAtomStationBuildings(previousChain);
-                BuildControlEdges(previousChain, line, waypoints);
-                BuildAtomIndicesByLane(previousChain);
-                BuildJunctionMarkers(previousChain);
-                EquivalentTrackRefresh.RefreshTraversalLaneKeys(previousChain);
                 m_ClearStaticCachesForLine?.Invoke(line);
-                m_Profile.RegisterTramLine(line, previousChain, waypoints);
-                m_Profile.BuildTraversalProfile(previousChain, line, waypoints);
-                m_Profile.BuildRunChartTurnbacks(previousChain, line);
-                m_Profile.BuildTurnbackBoundaries(previousChain, line, waypoints);
-                m_Profile.LogTrackModelTurnbackBuild(previousChain);
+                BuildChainDerivedData(previousChain, line, waypoints);
                 m_State.PutChain(line, previousChain);
                 m_State.PutFrameSnapshot(line, new LineTrackChainFrameSnapshot(
                     nowFrame,
@@ -570,7 +545,6 @@ namespace RapidTransitMod.TrackModel
                 m_NotifyLineTrackChainCandidate?.Invoke(line, previousChain);
                 m_PublishTraversal?.Invoke(line, previousChain);
                 m_Diag.AddDevSightChain(previousChain);
-                m_MarkSharedDirty?.Invoke();
                 return true;
             }
             if (previousChain != null && !scanComplete)
@@ -586,7 +560,7 @@ namespace RapidTransitMod.TrackModel
                 refreshedExtensionRanges,
                 scanComplete,
                 hasStationTrackExtensions);
-            chain = BuildLineTrackChain(line, waypoints, segments, signature, scan);
+            chain = BuildLineTrackChain(line, waypoints, signature, scan);
             if (chain == null || chain.TrackAtoms.Count == 0)
             {
                 InvalidateUnavailableChain(line, nowFrame, waypoints.Length);
@@ -618,7 +592,6 @@ namespace RapidTransitMod.TrackModel
                 m_NotifyLineTrackChainEstablished?.Invoke(line, chain);
             m_PublishTraversal?.Invoke(line, chain);
             m_Diag.AddDevSightChain(chain);
-            m_MarkSharedDirty?.Invoke();
             if (!chainAvailable)
                 chain = null;
             return chainAvailable;
@@ -645,7 +618,6 @@ namespace RapidTransitMod.TrackModel
         private LineTrackChain BuildLineTrackChain(
             Entity line,
             DynamicBuffer<RouteWaypoint> waypoints,
-            DynamicBuffer<RouteSegment> segments,
             ulong signature,
             TrackChainScan scan)
         {
@@ -664,14 +636,25 @@ namespace RapidTransitMod.TrackModel
                 TrackExtensionRanges = scan.ExtensionRanges
             };
             chain.HasStationTrackExtensions = scan.HasStationTrackExtensions;
-            for (int waypointIndex = 0; waypointIndex < segments.Length; waypointIndex++)
+            BuildChainDerivedData(chain, line, waypoints);
+            return chain;
+        }
+        private void BuildChainDerivedData(
+            LineTrackChain chain,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints)
+        {
+            chain.ControlPoints.Clear();
+            chain.EndpointMarkers.Clear();
+            chain.ControlEdges.Clear();
+            for (int waypointIndex = 0; waypointIndex < chain.SegmentRanges.Count; waypointIndex++)
             {
                 int startAtomIndex = chain.SegmentRanges[waypointIndex].StartAtomIndex;
                 TryAppendControlPoint(chain.ControlPoints, line, waypoints, waypointIndex, startAtomIndex);
                 TryAppendEndpointMarker(chain.EndpointMarkers, waypoints, waypointIndex, startAtomIndex);
             }
             BuildAtomStationBuildings(chain);
-            BuildControlEdges(chain, line, waypoints);
+            BuildControlEdges(chain);
             BuildAtomIndicesByLane(chain);
             BuildJunctionMarkers(chain);
             m_Profile.RegisterTramLine(line, chain, waypoints);
@@ -679,7 +662,6 @@ namespace RapidTransitMod.TrackModel
             m_Profile.BuildRunChartTurnbacks(chain, line);
             m_Profile.BuildTurnbackBoundaries(chain, line, waypoints);
             m_Profile.LogTrackModelTurnbackBuild(chain);
-            return chain;
         }
         private bool TryGetSegmentPathElements(
             Entity segment,
@@ -1796,10 +1778,7 @@ namespace RapidTransitMod.TrackModel
             Entity building = m_Support.GetStationBuildingForWaypoint(waypoints, waypointIndex);
             if (building != Entity.Null)
             {
-                ControlPointKind kind = m_Support.IsBypassStation(building)
-                    ? ControlPointKind.Bypass
-                    : ControlPointKind.Stop;
-                controlPoints.Add(new ControlPointMarker(atomIndex, waypointIndex, building, kind));
+                controlPoints.Add(new ControlPointMarker(atomIndex, waypointIndex, building, ControlPointKind.Stop));
                 return;
             }
             if (TransportModeResolver.Resolve(EntityManager, line) != TransitMode.Tram)
@@ -1844,37 +1823,22 @@ namespace RapidTransitMod.TrackModel
             }
             chain.AtomStationBuildings = atomStationBuildings;
         }
-        private void BuildControlEdges(LineTrackChain chain, Entity line, DynamicBuffer<RouteWaypoint> waypoints)
+        private void BuildControlEdges(LineTrackChain chain)
         {
             if (chain.ControlPoints.Count < 2)
                 return;
-            float lineFrames = m_Support.GetLineLoopFramesEstimate(line, waypoints);
             int atomCount = math.max(1, chain.TrackAtoms.Count);
-            bool hasProfile = m_Support.TryGetLineTimeProfile(line, waypoints, out LineTimeProfileHeader profile);
             for (int controlPointIndex = 0; controlPointIndex < chain.ControlPoints.Count - 1; controlPointIndex++)
             {
                 ControlPointMarker start = chain.ControlPoints[controlPointIndex];
                 ControlPointMarker end = chain.ControlPoints[controlPointIndex + 1];
                 int startAtomIndex = math.clamp(start.AtomIndex, 0, atomCount - 1);
                 int endAtomIndexExclusive = math.clamp(math.max(startAtomIndex + 1, end.AtomIndex), 1, atomCount);
-                float baseFrames = 0f;
-                if (hasProfile)
-                {
-                    int startWaypointIndex = math.clamp(start.WaypointIndex, 0, waypoints.Length - 1);
-                    int endWaypointIndex = math.clamp(end.WaypointIndex, 0, waypoints.Length - 1);
-                    baseFrames = m_Support.ComputeDepartureToWaypointFramesFromProfile(profile, startWaypointIndex, endWaypointIndex);
-                }
-                if (!(baseFrames > 0f))
-                {
-                    float ratio = (endAtomIndexExclusive - startAtomIndex) / (float)atomCount;
-                    baseFrames = lineFrames > 0f ? lineFrames * ratio : 0f;
-                }
                 chain.ControlEdges.Add(new ControlEdge(
                     controlPointIndex,
                     controlPointIndex + 1,
                     startAtomIndex,
-                    endAtomIndexExclusive,
-                    baseFrames));
+                    endAtomIndexExclusive));
             }
         }
         private void BuildAtomIndicesByLane(LineTrackChain chain)

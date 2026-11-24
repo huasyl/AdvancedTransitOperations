@@ -675,9 +675,6 @@ namespace RapidTransitMod.Broadcasting
                 case "mid_route":
                     triggerLabel = SelectPanel.IsChineseLocale() ? "区间运行中" : "mid_route";
                     break;
-                case "bypass_waiting":
-                    triggerLabel = SelectPanel.IsChineseLocale() ? "待避中" : "bypass_waiting";
-                    break;
                 default:
                     triggerLabel = triggerId ?? string.Empty;
                     break;

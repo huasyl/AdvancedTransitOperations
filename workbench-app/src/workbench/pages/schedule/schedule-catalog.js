@@ -4,7 +4,6 @@ export { MIN_LINE_SETTING_MINUTES };
 
 export const DEFAULT_RUNTIME_FEATURE_SETTINGS = {
   dispatchEnabled: true,
-  bypassEnabled: true,
   broadcastEnabled: true,
   depotLockEnabled: true
 };
@@ -220,7 +219,6 @@ export function normalizeRuntimeFeatureSettings(featureSettings) {
 
   return {
     dispatchEnabled: featureSettings.dispatchEnabled !== false,
-    bypassEnabled: featureSettings.bypassEnabled !== false,
     broadcastEnabled: featureSettings.broadcastEnabled !== false,
     depotLockEnabled: featureSettings.depotLockEnabled !== false
   };

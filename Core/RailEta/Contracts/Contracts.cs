@@ -22,7 +22,7 @@ namespace RapidTransitMod.RailEta.Contracts
     public enum RailExternalBlockerKind { None, RailVehicle, RoadVehicle, Creature, LevelCrossing, Unknown }
     public enum RailBlockerType { None, Continuing, Crossing, Signal, Temporary, Limit, Caution, Spawn, Oncoming }
     public enum RailLaneSignalType { None, Stop, SafeStop, Yield, Go }
-    public enum RailControlledHoldKind { None, OriginScheduled, BypassYield, UnknownControlledHold }
+    public enum RailControlledHoldKind { None = 0, OriginScheduled = 1, UnknownControlledHold = 3 }
 
     public sealed class RailEntityIdentity
     {
@@ -111,11 +111,6 @@ namespace RapidTransitMod.RailEta.Contracts
     {
         public RailControlledHoldKind Kind { get; set; }
         public uint EarliestReleaseFrame { get; set; }
-        public RailVehicleId ReleaseVehicleId { get; set; }
-        public RailLaneId ReleaseLaneId { get; set; }
-        public double ReleaseLaneFraction { get; set; }
-        public int ReleaseDirection { get; set; }
-        public ulong TrackModelSignature { get; set; }
         public string ReasonCode { get; set; } = string.Empty;
     }
 

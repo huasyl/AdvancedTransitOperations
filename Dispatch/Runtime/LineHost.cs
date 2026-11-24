@@ -59,8 +59,6 @@ namespace RapidTransitMod.Dispatch.Runtime
         public Func<Entity, string> Name = null!;
         public ComputeLineWaypointSignature WaypointSignature = null!;
         public ResolveLineWaypointBuilding StationBuildingForWaypoint = null!;
-        public ResolveLineWaypointBuilding BypassBuildingForWaypoint = null!;
-        public Func<Entity, bool> IsBypassStation = null!;
         public Func<IReadOnlyDictionary<string, AppliedLine>> AppliedLines = null!;
         public Func<Entity, bool> IsLocalLine = null!;
         public TryLineRouteProgress TryRouteProgress = null!;

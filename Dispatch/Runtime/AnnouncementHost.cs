@@ -17,8 +17,7 @@ using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
 using UnityEngine;
-using LineRunningVehicleSnapshot = RapidTransitMod.TrackProjection.LineRunningVehicleSnapshot;
-using LineWaypointIndexLookup = RapidTransitMod.TrackModel.LineWaypointIndexLookup;
+using LineWaypointIndexLookup = RapidTransitMod.Dispatch.Lines.LineWaypointIndexLookup;
 
 namespace RapidTransitMod
 {
@@ -175,28 +174,14 @@ namespace RapidTransitMod
                 Entity line,
                 DynamicBuffer<RouteWaypoint> waypoints,
                 LineTrackChain chain,
-                out VehicleTrackCursor cursor,
-                out int currentControlEdgeIndex,
-                out float ownLineAtomCoordinate,
-                out int phaseEndAtomExclusive,
-                out int traversalPhaseIndex,
-                out int traversalPhaseStartAtomIndex,
-                out int traversalPhaseEndAtomExclusive,
-                out int nextTurnbackBoundaryAtomIndex)
+                out VehicleTrackCursor cursor)
             {
-                return m_Host.TrackProjection.TryBuildLineRunningVehicleOwnLineRuntimeSnapshot(
+                return m_Host.TrackProjection.TryReadCursor(
                     vehicle,
                     line,
                     waypoints,
                     chain,
                     out cursor,
-                    out currentControlEdgeIndex,
-                    out ownLineAtomCoordinate,
-                    out phaseEndAtomExclusive,
-                    out traversalPhaseIndex,
-                    out traversalPhaseStartAtomIndex,
-                    out traversalPhaseEndAtomExclusive,
-                    out nextTurnbackBoundaryAtomIndex,
                     ProjectionRequestSource.Announcement);
             }
 

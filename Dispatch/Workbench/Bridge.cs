@@ -391,7 +391,6 @@ namespace RapidTransitMod.Dispatch.Workbench
                     () =>
                     {
                         m_Runtime.m_LineView.Clear();
-                        m_Runtime.m_LineView.Dirty();
                     },
                     message => Mod.log.Info(message),
                     Fault,
@@ -508,7 +507,7 @@ namespace RapidTransitMod.Dispatch.Workbench
         {
             m_RunTime?.InvalidateSources(
                 null,
-                new[] { "sliceHistoricalEstimate", "monitorAverage" },
+                new[] { "monitorAverage" },
                 "run-time-clock-changed");
             m_RunTime?.RefreshTheoryMinutes();
         }

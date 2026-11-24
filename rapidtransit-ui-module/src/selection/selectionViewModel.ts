@@ -96,11 +96,7 @@ export interface PanelData {
   showSchedule?: boolean;
   currentSlotText?: string;
   targetSlotText?: string;
-  showWaitingForFastTrain?: boolean;
-  waitingForFastTrainVehicleId?: number;
   showAlerts?: boolean;
-  showBypassStationToggle?: boolean;
-  bypassStationChecked?: boolean;
   showActions?: boolean;
   showRetireAction?: boolean;
   showForceDepartAction?: boolean;
@@ -137,8 +133,7 @@ const ALERT_CODES: Record<string, string> = {
   "no-dispatch-cache": "alertNoDispatchCache",
   "nearing-terminus": "alertNearingTerminus",
   "launch-cooldown": "alertLaunchCooldown",
-  "target-expired": "alertTargetExpired",
-  "yield-protected": "alertYieldProtected"
+  "target-expired": "alertTargetExpired"
 };
 
 export function buildDetailRows(panelData: PanelData | null, mode: string) {
@@ -238,7 +233,6 @@ export function formatValue(value: string | number | undefined, valueKind: strin
     const stateMap: Record<string, string> = {
       Running: "enRoute",
       Holding: "assigned",
-      Yielding: "yielding",
       Preparing: "headingToOrigin",
       Idle: "waitingDispatch",
       Retiring: "returning",
@@ -282,9 +276,6 @@ export function formatAlertText(text: string | undefined, t: (key: string) => st
   }
 
   return text.split(", ").map((part) => {
-    if (part.startsWith("yielding-for:")) {
-      return t("alertYieldingFor") + ": #" + part.split(":")[1];
-    }
     if (part.startsWith("spawn-pending:")) {
       return t("alertSpawnPending") + ": " + part.split(":")[1];
     }

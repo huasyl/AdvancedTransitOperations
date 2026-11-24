@@ -50,8 +50,6 @@ namespace RapidTransitMod
         public string AlertText;
         public string CardAlertText;
         public bool HasWaypointData;
-        public bool ShowBypassStationToggle;
-        public bool BypassStationChecked;
     }
 
     internal struct VehicleSelectData
@@ -83,8 +81,6 @@ namespace RapidTransitMod
         public string AlertText;
         public bool HasStopSession;
         public string NextPassStationName;
-        public bool WaitingForFastTrain;
-        public int WaitingForFastTrainVehicleId;
         public SignalDisplay SignalDisplay;
         public string SignalStreetName;
     }
@@ -94,7 +90,6 @@ namespace RapidTransitMod
         private readonly EntityManager m_EntityManager;
         private readonly Game.Simulation.SimulationSystem m_SimulationSystem;
         private readonly VehicleView m_VehicleView;
-        private readonly SelectPort.Blocker m_TryBlocker;
         private readonly SelectPort.SessionArrival m_TrySessionArrival;
         private readonly SelectPort.StopSession m_TryStopSession;
         private readonly SelectPort.VehicleTimes m_TryVehicleTimes;
@@ -114,8 +109,6 @@ namespace RapidTransitMod
         private readonly Func<Entity, float> m_ReadLineDuration;
         private readonly Func<Entity, float> m_ReadLineLapCache;
         private readonly Func<Entity, float> m_ReadDispatchCache;
-        private readonly Func<Entity, bool> m_CanConfigureBypass;
-        private readonly Func<Entity, bool> m_IsBypassStation;
         private readonly Func<Entity, VehicleState, string> m_GetManagedVehicleStateText;
         private readonly Func<Entity, string> m_BuildTraversalProgress;
         private readonly Func<Entity, Entity, VehicleState, string> m_BuildEta;
@@ -137,7 +130,6 @@ namespace RapidTransitMod
             SimulationSystem simulationSystem,
             Func<ClockSnapshot> clockSnapshot,
             VehicleView vehicleView,
-            SelectPort.Blocker tryBlocker,
             SelectPort.SessionArrival trySessionArrival,
             SelectPort.StopSession tryStopSession,
             SelectPort.VehicleTimes tryVehicleTimes,
@@ -157,8 +149,6 @@ namespace RapidTransitMod
             Func<Entity, float> readLineDuration,
             Func<Entity, float> readLineLapCache,
             Func<Entity, float> readDispatchCache,
-            Func<Entity, bool> canConfigureBypass,
-            Func<Entity, bool> isBypassStation,
             Func<Entity, VehicleState, string> getManagedVehicleStateText,
             Func<Entity, string> buildTraversalProgress,
             Func<Entity, Entity, VehicleState, string> buildEta,
@@ -178,7 +168,6 @@ namespace RapidTransitMod
             m_SimulationSystem = simulationSystem;
             m_ClockSnapshot = clockSnapshot;
             m_VehicleView = vehicleView;
-            m_TryBlocker = tryBlocker;
             m_TrySessionArrival = trySessionArrival;
             m_TryStopSession = tryStopSession;
             m_TryVehicleTimes = tryVehicleTimes;
@@ -198,8 +187,6 @@ namespace RapidTransitMod
             m_ReadLineDuration = readLineDuration;
             m_ReadLineLapCache = readLineLapCache;
             m_ReadDispatchCache = readDispatchCache;
-            m_CanConfigureBypass = canConfigureBypass;
-            m_IsBypassStation = isBypassStation;
             m_GetManagedVehicleStateText = getManagedVehicleStateText;
             m_BuildTraversalProgress = buildTraversalProgress;
             m_BuildEta = buildEta;
@@ -265,8 +252,6 @@ namespace RapidTransitMod
                 DispatchCacheText = FormatMinutes(dispatchCacheFrames),
                 ManagedText = m_BoolText(isManagedLine),
                 HasWaypointData = m_EntityManager.HasBuffer<RouteWaypoint>(line),
-                ShowBypassStationToggle = m_CanConfigureBypass(selectedEntity),
-                BypassStationChecked = m_CanConfigureBypass(selectedEntity) && m_IsBypassStation(selectedEntity)
             };
 
             if (m_EntityManager.HasBuffer<RouteVehicle>(line))
@@ -431,7 +416,6 @@ namespace RapidTransitMod
                 ? TransportModeProfile.GetProfile(TransportModeResolver.Resolve(m_EntityManager, line))
                 : default;
             bool includePhysical = modeProfile.Lifecycle == LifecycleKind.Rail;
-            bool canBypass = modeProfile.CanBypass;
             VehicleStationContext stationContext = default;
             bool hasStationContext = m_TryPanelStations != null
                 && m_TryPanelStations(
@@ -485,7 +469,7 @@ namespace RapidTransitMod
             int targetMinute = m_VehicleView.TryGetTarget(vehicle, out int targetSlotMinute)
                 ? targetSlotMinute
                 : -1;
-            string stateText = GetPanelStateCode(vehicle, vehicleState, canBypass, out Entity blockerVehicle);
+            string stateText = GetPanelStateCode(vehicle, vehicleState);
 
             data = new VehicleSelectData
             {
@@ -508,8 +492,6 @@ namespace RapidTransitMod
                 PlannedArrivalMinute = hasCurrentTimes ? plannedArrivalMinute : -1,
                 ActualArrivalMinute = hasCurrentTimes ? actualArrivalMinute : -1,
                 PlannedDepartureMinute = hasCurrentTimes ? plannedDepartureMinute : -1,
-                WaitingForFastTrain = stateText == "Yielding",
-                WaitingForFastTrainVehicleId = blockerVehicle != Entity.Null ? blockerVehicle.Index : -1
             };
             return true;
         }
@@ -521,20 +503,8 @@ namespace RapidTransitMod
 
         private string GetPanelStateCode(
             Entity vehicle,
-            VehicleState vehicleState,
-            bool canBypass,
-            out Entity blockerVehicle)
+            VehicleState vehicleState)
         {
-            blockerVehicle = Entity.Null;
-            if (canBypass
-                && m_TryBlocker != null
-                && m_TryBlocker(vehicle, out blockerVehicle)
-                && blockerVehicle != Entity.Null
-                && (vehicleState == VehicleState.Holding || vehicleState == VehicleState.Running))
-            {
-                return "Yielding";
-            }
-
             if (vehicleState == VehicleState.Holding
                 && (!m_VehicleView.TryGetTarget(vehicle, out int holdingTarget) || holdingTarget < 0))
             {

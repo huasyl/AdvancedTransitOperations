@@ -67,7 +67,6 @@ namespace RapidTransitMod.Dispatch.Workbench
         private readonly Func<IReadOnlyDictionary<string, string>, bool> m_CleanupRequestedLines;
         private readonly Func<IReadOnlyDictionary<string, string>, bool> m_CleanupConfirmedInvalidatedLines;
         private readonly Func<DispatchWorkbenchCleanupInfoDto> m_ConsumeCleanupInfo;
-        private readonly Action m_Invalidate;
 
         internal RunPort(
             Action<RuntimeFeatureSettingsDto> features,
@@ -90,8 +89,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             Func<IEnumerable<string>, bool> removeDeletedLines,
             Func<IReadOnlyDictionary<string, string>, bool> cleanupRequestedLines,
             Func<IReadOnlyDictionary<string, string>, bool> cleanupConfirmedInvalidatedLines,
-            Func<DispatchWorkbenchCleanupInfoDto> consumeCleanupInfo,
-            Action invalidate)
+            Func<DispatchWorkbenchCleanupInfoDto> consumeCleanupInfo)
         {
             m_Features = features ?? throw new ArgumentNullException(nameof(features));
             m_SameFeatures = sameFeatures ?? throw new ArgumentNullException(nameof(sameFeatures));
@@ -114,7 +112,6 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_CleanupRequestedLines = cleanupRequestedLines ?? throw new ArgumentNullException(nameof(cleanupRequestedLines));
             m_CleanupConfirmedInvalidatedLines = cleanupConfirmedInvalidatedLines ?? throw new ArgumentNullException(nameof(cleanupConfirmedInvalidatedLines));
             m_ConsumeCleanupInfo = consumeCleanupInfo ?? throw new ArgumentNullException(nameof(consumeCleanupInfo));
-            m_Invalidate = invalidate ?? throw new ArgumentNullException(nameof(invalidate));
         }
 
         internal void Features(RuntimeFeatureSettingsDto settings)
@@ -223,11 +220,6 @@ namespace RapidTransitMod.Dispatch.Workbench
         internal DispatchWorkbenchCleanupInfoDto ConsumeCleanupInfo()
         {
             return m_ConsumeCleanupInfo();
-        }
-
-        internal void Invalidate()
-        {
-            m_Invalidate();
         }
     }
 

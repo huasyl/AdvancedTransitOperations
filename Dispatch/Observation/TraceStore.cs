@@ -14,9 +14,6 @@ namespace RapidTransitMod.Dispatch.Observation
         internal Dictionary<Entity, List<Trip>> ByVehicle { get; } =
             new Dictionary<Entity, List<Trip>>();
 
-        internal Dictionary<Entity, BypassEvent> ActiveBypass { get; } =
-            new Dictionary<Entity, BypassEvent>();
-
         internal Dictionary<Entity, VehicleTrace> Vehicles { get; } =
             new Dictionary<Entity, VehicleTrace>();
 
@@ -43,7 +40,6 @@ namespace RapidTransitMod.Dispatch.Observation
         {
             BySlot.Clear();
             ByVehicle.Clear();
-            ActiveBypass.Clear();
             ActiveTrips.Clear();
             DateSlots.Clear();
             MonitorCurrentDateKey = 0;

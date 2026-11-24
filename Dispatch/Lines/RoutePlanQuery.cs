@@ -10,7 +10,7 @@ namespace RapidTransitMod.Dispatch.Lines
     internal sealed class RoutePlanQuery
     {
         private readonly EntityManager m_EntityManager;
-        private readonly TrackModelService m_TrackModel;
+        private readonly WaypointIndex m_WaypointIndex;
         private readonly LineProfile m_LineProfile;
         private readonly Func<Entity, Entity> m_Stop;
         private readonly Func<Entity, Entity> m_Anchor;
@@ -18,14 +18,14 @@ namespace RapidTransitMod.Dispatch.Lines
 
         internal RoutePlanQuery(
             EntityManager entityManager,
-            TrackModelService trackModel,
+            WaypointIndex waypointIndex,
             LineProfile lineProfile,
             Func<Entity, Entity> stop,
             Func<Entity, Entity> anchor,
             Func<Entity, string> stopKey)
         {
             m_EntityManager = entityManager;
-            m_TrackModel = trackModel ?? throw new ArgumentNullException(nameof(trackModel));
+            m_WaypointIndex = waypointIndex ?? throw new ArgumentNullException(nameof(waypointIndex));
             m_LineProfile = lineProfile ?? throw new ArgumentNullException(nameof(lineProfile));
             m_Stop = stop ?? throw new ArgumentNullException(nameof(stop));
             m_Anchor = anchor ?? throw new ArgumentNullException(nameof(anchor));
@@ -62,7 +62,7 @@ namespace RapidTransitMod.Dispatch.Lines
             LineProfile.RoadRouteSnapshot roadSnapshot = null;
             if (lifecycle == LifecycleKind.Rail)
             {
-                if (!m_TrackModel.TryGetWaypointIndexLookup(line, waypoints, out LineWaypointIndexLookup lookup)
+                if (!m_WaypointIndex.TryLookup(line, waypoints, out LineWaypointIndexLookup lookup)
                     || lookup == null
                     || lookup.Signature != WaypointSignature(waypoints))
                 {

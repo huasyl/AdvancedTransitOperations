@@ -56,7 +56,6 @@ export function serializeRuntimeFeatureSettings(featureSettings) {
   const normalized = normalizeRuntimeFeatureSettings(featureSettings);
   return {
     dispatchEnabled: normalized.dispatchEnabled,
-    bypassEnabled: normalized.bypassEnabled,
     broadcastEnabled: normalized.broadcastEnabled,
     depotLockEnabled: normalized.depotLockEnabled
   };

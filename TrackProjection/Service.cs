@@ -5,7 +5,6 @@ using Game.Net;
 using Game.Pathfind;
 using Game.Routes;
 using Game.Vehicles;
-using RapidTransitMod.Bypass;
 using RapidTransitMod.TrackModel;
 using RapidTransitMod.TrackProjection;
 using Unity.Entities;
@@ -38,123 +37,11 @@ namespace RapidTransitMod.TrackProjection
         private readonly List<Entity> m_CurrentLaneOverlapCandidates = new List<Entity>();
         private readonly List<TrainNavigationLane> m_NavigationScratch = new List<TrainNavigationLane>();
         private readonly List<PathElement> m_PathTailScratch = new List<PathElement>();
-        internal readonly Dictionary<Entity, LineRunningVehicleFrameSnapshot> LineRunningVehicleFrameSnapshots = new Dictionary<Entity, LineRunningVehicleFrameSnapshot>();
-
         internal void Clear()
         {
             m_Cursors.Clear();
             m_Facts.Clear();
             m_ProgressCheck.Clear();
-            ClearLineRunningVehicleSnapshots();
-        }
-
-        internal void ClearLineRunningVehicleSnapshots()
-        {
-            LineRunningVehicleFrameSnapshots.Clear();
-        }
-
-        internal void InvalidateLineRunningVehicleSnapshots()
-        {
-            foreach (LineRunningVehicleFrameSnapshot snapshot in LineRunningVehicleFrameSnapshots.Values)
-                snapshot.Line = Entity.Null;
-        }
-
-        internal bool ClearLineRunningVehicleSnapshots(Entity line)
-        {
-            return line != Entity.Null && LineRunningVehicleFrameSnapshots.Remove(line);
-        }
-
-        internal bool TryGetLineRunningVehicleFrameSnapshot(
-            Entity line,
-            DynamicBuffer<RouteWaypoint> waypoints,
-            uint nowFrame,
-            out LineRunningVehicleFrameSnapshot snapshot,
-            ProjectionRequestSource requestSource = ProjectionRequestSource.Unknown)
-        {
-            snapshot = null;
-            if (line == Entity.Null || waypoints.Length == 0)
-                return false;
-            if (m_Runtime.IsLinePending(line))
-                return false;
-
-            if (LineRunningVehicleFrameSnapshots.TryGetValue(line, out snapshot)
-                && snapshot != null
-                && snapshot.Frame == nowFrame
-                && snapshot.Line == line)
-            {
-                m_Runtime.RecordProjectionLineSnapshotAccess(requestSource, true);
-                return true;
-            }
-
-            BufferLookup<RouteVehicle> routeVehicleBuffers = m_Runtime.GetBufferLookup<RouteVehicle>(true);
-            if (!routeVehicleBuffers.TryGetBuffer(line, out DynamicBuffer<RouteVehicle> routeVehicles))
-                return false;
-
-            if (snapshot == null)
-            {
-                snapshot = new LineRunningVehicleFrameSnapshot();
-                LineRunningVehicleFrameSnapshots[line] = snapshot;
-            }
-
-            snapshot.Frame = nowFrame;
-            snapshot.Line = line;
-            snapshot.Vehicles.Clear();
-
-            bool hasTrackChain = m_Runtime.TrackModel.TryGetChainForLine(line, waypoints, out LineTrackChain trackChain)
-                && !m_Runtime.IsLinePending(line);
-
-            for (int i = 0; i < routeVehicles.Length; i++)
-            {
-                Entity vehicle = routeVehicles[i].m_Vehicle;
-                if (vehicle == Entity.Null || !m_Runtime.EntityManager.Exists(vehicle))
-                    continue;
-                if (!m_Runtime.TryGetVehicleRuntimeState(vehicle, out VehicleState vehicleState) || vehicleState != VehicleState.Running)
-                    continue;
-
-                bool hasTrackCursor = false;
-                VehicleTrackCursor trackCursor = default;
-                int currentControlEdgeIndex = -1;
-                float ownLineAtomCoordinate = 0f;
-                int phaseEndAtomExclusive = -1;
-                int traversalPhaseIndex = -1;
-                int traversalPhaseStartAtomIndex = -1;
-                int traversalPhaseEndAtomExclusive = -1;
-                int nextTurnbackBoundaryAtomIndex = -1;
-                if (hasTrackChain)
-                {
-                    hasTrackCursor = TryBuildLineRunningVehicleOwnLineRuntimeSnapshot(
-                        vehicle,
-                        line,
-                        waypoints,
-                        trackChain,
-                        out trackCursor,
-                        out currentControlEdgeIndex,
-                        out ownLineAtomCoordinate,
-                        out phaseEndAtomExclusive,
-                        out traversalPhaseIndex,
-                        out traversalPhaseStartAtomIndex,
-                        out traversalPhaseEndAtomExclusive,
-                        out nextTurnbackBoundaryAtomIndex,
-                        requestSource);
-                }
-
-                snapshot.Vehicles.Add(new LineRunningVehicleSnapshot(
-                    vehicle,
-                    m_Runtime.IsVehicleBoarding(vehicle),
-                    false,
-                    0f,
-                    hasTrackCursor,
-                    trackCursor,
-                    currentControlEdgeIndex,
-                    ownLineAtomCoordinate,
-                    phaseEndAtomExclusive,
-                    traversalPhaseIndex,
-                    traversalPhaseStartAtomIndex,
-                    traversalPhaseEndAtomExclusive,
-                    nextTurnbackBoundaryAtomIndex));
-            }
-
-            return true;
         }
 
         internal bool TrySnapshot(Entity vehicle, Entity line, ulong chainSignature, uint frame, out VehicleTrackCursor cursor)
@@ -207,38 +94,6 @@ namespace RapidTransitMod.TrackProjection
         internal bool IsVehicleProgressProjectionInvalid(Entity vehicle, LineTrackChain chain, int segmentIndex, int projectedAtomIndex) => m_ProgressCheck.IsVehicleProgressProjectionInvalid(vehicle, chain, segmentIndex, projectedAtomIndex);
 
         private bool TryRouteProgress(Entity vehicle, out int nextWaypointIndex, out float segmentPosition) => m_Runtime.TryRouteProgress(vehicle, out nextWaypointIndex, out segmentPosition);
-        private static bool TryResolveTraversalOrderingPhase(LineTrackChain chain, int atomIndex, out int traversalPhaseIndex, out int phaseStartAtomIndex, out int phaseEndAtomExclusive, out int nextTurnbackBoundaryAtomIndex)
-        {
-            traversalPhaseIndex = -1;
-            phaseStartAtomIndex = -1;
-            phaseEndAtomExclusive = -1;
-            nextTurnbackBoundaryAtomIndex = -1;
-            if (chain == null || chain.TrackAtoms.Count == 0)
-                return false;
-
-            int cursor = math.clamp(atomIndex, 0, chain.TrackAtoms.Count - 1);
-            int phaseStart = 0;
-            for (int boundaryIndex = 0; boundaryIndex < chain.TurnbackBoundaries.Count; boundaryIndex++)
-            {
-                int boundaryAtomIndex = math.clamp(chain.TurnbackBoundaries[boundaryIndex].AtomIndex, 0, chain.TrackAtoms.Count);
-                if (cursor < boundaryAtomIndex)
-                {
-                    traversalPhaseIndex = boundaryIndex;
-                    phaseStartAtomIndex = phaseStart;
-                    phaseEndAtomExclusive = boundaryAtomIndex;
-                    nextTurnbackBoundaryAtomIndex = boundaryAtomIndex;
-                    return true;
-                }
-
-                phaseStart = boundaryAtomIndex;
-            }
-
-            traversalPhaseIndex = chain.TurnbackBoundaries.Count;
-            phaseStartAtomIndex = phaseStart;
-            phaseEndAtomExclusive = chain.TrackAtoms.Count;
-            return true;
-        }
-
         private static int ResolveSegmentIndexForAtom(LineTrackChain chain, int atomIndex)
         {
             if (chain == null || chain.SegmentRanges.Count == 0 || atomIndex < 0)
@@ -1169,7 +1024,7 @@ namespace RapidTransitMod.TrackProjection
             return available;
         }
 
-        internal bool TryFacts(
+        private bool TryFacts(
             Entity vehicle,
             Entity line,
             DynamicBuffer<RouteWaypoint> waypoints,
@@ -1196,72 +1051,27 @@ namespace RapidTransitMod.TrackProjection
             if (!TryGetVehicleTrackCursorCurrentFrame(vehicle, line, waypoints, chain, out VehicleTrackCursor cursor, requestSource))
                 return false;
 
-            int currentControlEdgeIndex = ResolveControlEdgeIndexForAtom(chain, cursor.AtomCursorIndex);
-            float ownLineAtomCoordinate = math.max(0f, cursor.AtomCursorIndex + math.saturate(cursor.AtomPosition01));
-            if (!TryResolveTraversalOrderingPhase(
-                    chain,
-                    cursor.AtomCursorIndex,
-                    out int traversalPhaseIndex,
-                    out int traversalPhaseStartAtomIndex,
-                    out int traversalPhaseEndAtomExclusive,
-                    out int nextTurnbackBoundaryAtomIndex))
-            {
-                return false;
-            }
-
             facts = new VehicleTrackFacts(
                 nowFrame,
                 vehicle,
                 line,
                 chain.Signature,
-                cursor,
-                currentControlEdgeIndex,
-                ownLineAtomCoordinate,
-                traversalPhaseEndAtomExclusive,
-                traversalPhaseIndex,
-                traversalPhaseStartAtomIndex,
-                traversalPhaseEndAtomExclusive,
-                nextTurnbackBoundaryAtomIndex);
+                cursor);
             m_Facts[vehicle] = facts;
             return true;
         }
 
-        internal bool TryBuildLineRunningVehicleOwnLineRuntimeSnapshot(
+        internal bool TryReadCursor(
             Entity vehicle,
             Entity line,
             DynamicBuffer<RouteWaypoint> waypoints,
             LineTrackChain chain,
             out VehicleTrackCursor cursor,
-            out int currentControlEdgeIndex,
-            out float ownLineAtomCoordinate,
-            out int phaseEndAtomExclusive,
-            out int traversalPhaseIndex,
-            out int traversalPhaseStartAtomIndex,
-            out int traversalPhaseEndAtomExclusive,
-            out int nextTurnbackBoundaryAtomIndex,
-            ProjectionRequestSource requestSource = ProjectionRequestSource.Unknown)
+            ProjectionRequestSource requestSource)
         {
-            cursor = default;
-            currentControlEdgeIndex = -1;
-            ownLineAtomCoordinate = 0f;
-            phaseEndAtomExclusive = -1;
-            traversalPhaseIndex = -1;
-            traversalPhaseStartAtomIndex = -1;
-            traversalPhaseEndAtomExclusive = -1;
-            nextTurnbackBoundaryAtomIndex = -1;
-
-            if (!TryFacts(vehicle, line, waypoints, chain, out VehicleTrackFacts facts, requestSource))
-                return false;
-
-            cursor = facts.Cursor;
-            currentControlEdgeIndex = facts.CurrentControlEdgeIndex;
-            ownLineAtomCoordinate = facts.OwnLineAtomCoordinate;
-            phaseEndAtomExclusive = facts.PhaseEndAtomExclusive;
-            traversalPhaseIndex = facts.TraversalPhaseIndex;
-            traversalPhaseStartAtomIndex = facts.TraversalPhaseStartAtomIndex;
-            traversalPhaseEndAtomExclusive = facts.TraversalPhaseEndAtomExclusive;
-            nextTurnbackBoundaryAtomIndex = facts.NextTurnbackBoundaryAtomIndex;
-            return true;
+            bool available = TryFacts(vehicle, line, waypoints, chain, out VehicleTrackFacts facts, requestSource);
+            cursor = available ? facts.Cursor : default;
+            return available;
         }
 
         private bool TryResolveStationAnchoredProgressFallback(
@@ -1313,235 +1123,6 @@ namespace RapidTransitMod.TrackProjection
             }
 
             return false;
-        }
-
-        internal bool TryProjectTrackModelRuntimePosition(
-            Entity vehicle,
-            Entity line,
-            DynamicBuffer<RouteWaypoint> waypoints,
-            BypassProtectedInterval protectedInterval,
-            out TrackModelRuntimePosition runtimePosition,
-            ProjectionRequestSource requestSource = ProjectionRequestSource.Unknown)
-        {
-            runtimePosition = default;
-            if (m_Runtime.IsLinePending(line)
-                || !m_Runtime.TrackModel.TryGetChainForLine(line, waypoints, out LineTrackChain chain)
-                || m_Runtime.IsLinePending(line)
-                || !TryFacts(vehicle, line, waypoints, chain, out VehicleTrackFacts facts, requestSource))
-            {
-                return false;
-            }
-
-            VehicleTrackCursor cursor = facts.Cursor;
-            TrackModelRelativeToProtectedInterval relative = ResolveRelativeToProtectedInterval(
-                facts.CurrentControlEdgeIndex,
-                cursor.AtomCursorIndex,
-                protectedInterval);
-
-            runtimePosition = new TrackModelRuntimePosition(
-                facts.CurrentControlEdgeIndex,
-                cursor.AtomCursorIndex,
-                cursor.AtomPosition01,
-                relative,
-                cursor.Confidence,
-                facts.TraversalPhaseIndex,
-                facts.TraversalPhaseStartAtomIndex,
-                facts.TraversalPhaseEndAtomExclusive,
-                facts.NextTurnbackBoundaryAtomIndex);
-            return true;
-        }
-
-        internal static bool TryBuildTrackModelRuntimePositionFromLineRunningSnapshot(
-            LineRunningVehicleSnapshot runningVehicle,
-            BypassProtectedInterval protectedInterval,
-            out TrackModelRuntimePosition runtimePosition)
-        {
-            runtimePosition = default;
-            if (!runningVehicle.HasTrackCursor)
-                return false;
-
-            runtimePosition = new TrackModelRuntimePosition(
-                runningVehicle.CurrentControlEdgeIndex,
-                runningVehicle.TrackCursor.AtomCursorIndex,
-                runningVehicle.TrackCursor.AtomPosition01,
-                ResolveRelativeToProtectedInterval(
-                    runningVehicle.CurrentControlEdgeIndex,
-                    runningVehicle.TrackCursor.AtomCursorIndex,
-                    protectedInterval),
-                runningVehicle.TrackCursor.Confidence,
-                runningVehicle.TraversalPhaseIndex,
-                runningVehicle.TraversalPhaseStartAtomIndex,
-                runningVehicle.TraversalPhaseEndAtomExclusive,
-                runningVehicle.NextTurnbackBoundaryAtomIndex);
-            return true;
-        }
-
-        internal static float GetProtectedIntervalDisplayLength(BypassProtectedInterval interval)
-        {
-            return math.max(1f, interval.EndAtomIndexExclusive - interval.StartAtomIndex);
-        }
-
-        internal static float MapRuntimePositionToOwnProtectedIntervalCoordinate(
-            TrackModelRuntimePosition runtimePosition,
-            BypassProtectedInterval interval,
-            bool includeApproachers,
-            out bool include)
-        {
-            include = true;
-            float intervalLength = GetProtectedIntervalDisplayLength(interval);
-            switch (runtimePosition.RelativeToProtectedInterval)
-            {
-                case TrackModelRelativeToProtectedInterval.Before:
-                    include = includeApproachers;
-                    return -0.5f;
-                case TrackModelRelativeToProtectedInterval.After:
-                    include = includeApproachers;
-                    return intervalLength + 0.5f;
-                case TrackModelRelativeToProtectedInterval.Inside:
-                {
-                    float atomOffset = math.clamp(runtimePosition.CurrentAtomIndex - interval.StartAtomIndex, 0, math.max(0, interval.EndAtomIndexExclusive - interval.StartAtomIndex - 1));
-                    return math.clamp(atomOffset + math.saturate(runtimePosition.AtomPosition01), 0f, intervalLength);
-                }
-                default:
-                    include = false;
-                    return 0f;
-            }
-        }
-
-        internal static float MapRuntimePositionToOwnProtectedIntervalCoordinateExact(
-            TrackModelRuntimePosition runtimePosition,
-            BypassProtectedInterval interval,
-            bool includeApproachers,
-            out bool include)
-        {
-            include = true;
-            float intervalLength = GetProtectedIntervalDisplayLength(interval);
-            float rawCoordinate = (runtimePosition.CurrentAtomIndex - interval.StartAtomIndex) + math.saturate(runtimePosition.AtomPosition01);
-            switch (runtimePosition.RelativeToProtectedInterval)
-            {
-                case TrackModelRelativeToProtectedInterval.Before:
-                    include = includeApproachers;
-                    return math.min(-0.5f, rawCoordinate);
-                case TrackModelRelativeToProtectedInterval.After:
-                    include = includeApproachers;
-                    return math.max(intervalLength + 0.5f, rawCoordinate);
-                case TrackModelRelativeToProtectedInterval.Inside:
-                    return math.clamp(rawCoordinate, 0f, intervalLength);
-                default:
-                    include = false;
-                    return 0f;
-            }
-        }
-
-        internal static float MapAtomIndexToProtectedIntervalCoordinateExact(
-            BypassProtectedInterval interval,
-            int atomIndex)
-        {
-            return atomIndex - interval.StartAtomIndex;
-        }
-
-        internal static float MapRuntimePositionToReferenceProtectedIntervalCoordinate(
-            TrackModelRuntimePosition runtimePosition,
-            BypassProtectedInterval sourceInterval,
-            float referenceLength,
-            bool includeApproachers,
-            out bool include)
-        {
-            include = true;
-            switch (runtimePosition.RelativeToProtectedInterval)
-            {
-                case TrackModelRelativeToProtectedInterval.Before:
-                    include = includeApproachers;
-                    return -0.5f;
-                case TrackModelRelativeToProtectedInterval.After:
-                    include = includeApproachers;
-                    return referenceLength + 0.5f;
-                case TrackModelRelativeToProtectedInterval.Inside:
-                {
-                    float sourceLength = GetProtectedIntervalDisplayLength(sourceInterval);
-                    float atomOffset = math.clamp(runtimePosition.CurrentAtomIndex - sourceInterval.StartAtomIndex, 0, math.max(0, sourceInterval.EndAtomIndexExclusive - sourceInterval.StartAtomIndex - 1));
-                    float sourceCoordinate = math.clamp(atomOffset + math.saturate(runtimePosition.AtomPosition01), 0f, sourceLength);
-                    float progress01 = math.saturate(sourceCoordinate / sourceLength);
-                    return progress01 * referenceLength;
-                }
-                default:
-                    include = false;
-                    return 0f;
-            }
-        }
-
-        internal static float MapRuntimePositionToReferenceProtectedIntervalCoordinateExact(
-            TrackModelRuntimePosition runtimePosition,
-            BypassProtectedInterval sourceInterval,
-            float referenceLength,
-            bool includeApproachers,
-            out bool include)
-        {
-            float sourceLength = GetProtectedIntervalDisplayLength(sourceInterval);
-            float sourceCoordinate = MapRuntimePositionToOwnProtectedIntervalCoordinateExact(
-                runtimePosition,
-                sourceInterval,
-                includeApproachers,
-                out include);
-            if (!include)
-                return 0f;
-
-            return sourceCoordinate / sourceLength * referenceLength;
-        }
-
-        internal static int ResolveControlEdgeIndexForAtom(LineTrackChain chain, int atomIndex)
-        {
-            for (int i = 0; i < chain.ControlEdges.Count; i++)
-            {
-                ControlEdge edge = chain.ControlEdges[i];
-                if (atomIndex >= edge.StartAtomIndex && atomIndex < edge.EndAtomIndexExclusive)
-                    return i;
-            }
-
-            return -1;
-        }
-
-        internal static TrackModelRelativeToProtectedInterval ResolveRelativeToProtectedInterval(int currentControlEdgeIndex, int currentAtomIndex, BypassProtectedInterval protectedInterval)
-        {
-            // Atom bounds are the true physical window. Control-edge bounds are
-            // only a coarse fallback for lines whose control graph is sparse.
-            // If we prioritize control-edge first, any single-edge line will mark
-            // the entire edge as Inside even when the atom lies outside the
-            // actual shared/protected atom range.
-            if (currentAtomIndex >= 0)
-            {
-                if (currentAtomIndex < protectedInterval.StartAtomIndex)
-                    return TrackModelRelativeToProtectedInterval.Before;
-                if (currentAtomIndex >= protectedInterval.EndAtomIndexExclusive)
-                    return TrackModelRelativeToProtectedInterval.After;
-                return TrackModelRelativeToProtectedInterval.Inside;
-            }
-
-            if (currentControlEdgeIndex >= 0)
-            {
-                if (currentControlEdgeIndex < protectedInterval.StartControlEdgeIndex)
-                    return TrackModelRelativeToProtectedInterval.Before;
-                if (currentControlEdgeIndex > protectedInterval.EndControlEdgeIndexInclusive)
-                    return TrackModelRelativeToProtectedInterval.After;
-                return TrackModelRelativeToProtectedInterval.Inside;
-            }
-
-            return TrackModelRelativeToProtectedInterval.Unknown;
-        }
-
-        internal static string FormatRuntimePosition(TrackModelRuntimePosition runtimePosition)
-        {
-            return "pos[edge="
-                + runtimePosition.CurrentControlEdgeIndex
-                + " atom="
-                + runtimePosition.CurrentAtomIndex
-                + " p="
-                + runtimePosition.AtomPosition01.ToString("0.00")
-                + " rel="
-                + runtimePosition.RelativeToProtectedInterval
-                + " conf="
-                + runtimePosition.Confidence.ToString("0.00")
-                + "]";
         }
 
     }

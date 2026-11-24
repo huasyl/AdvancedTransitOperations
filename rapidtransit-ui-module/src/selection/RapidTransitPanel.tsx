@@ -6,7 +6,7 @@ import { useT } from "./selectionI18n";
 import { COLORS } from "./selectionStyles";
 import { SignalPriority } from "./SignalPriority";
 import { buildDetailRows, DevSightData, EtaHotStatusData, EtaSnapshotStatusData, formatAlertText, PanelData } from "./selectionViewModel";
-import { ActionButton, BypassToggleRow, DetailRow, DevSightBlock, PanelHeader, SectionCard, TimeRow, VehicleInfoRow } from "./components";
+import { ActionButton, DetailRow, DevSightBlock, PanelHeader, SectionCard, TimeRow, VehicleInfoRow } from "./components";
 
 export function RapidTransitPanel() {
   const t = useT();
@@ -227,16 +227,6 @@ export function RapidTransitPanel() {
                             </div>
                           </SectionCard>
                         ) : null}
-                        {panelData.showWaitingForFastTrain ? (
-                          <SectionCard compact={true}>
-                            <div style={{ fontSize: "15rem", lineHeight: "22rem", fontWeight: 500, color: COLORS.title }}>
-                              {t("waitingForFastTrain")}
-                              {typeof panelData.waitingForFastTrainVehicleId === "number" && panelData.waitingForFastTrainVehicleId >= 0
-                                ? `：#${panelData.waitingForFastTrainVehicleId}`
-                                : ""}
-                            </div>
-                          </SectionCard>
-                        ) : null}
                       </>
                     )}
                   </>
@@ -266,14 +256,6 @@ export function RapidTransitPanel() {
                     >
                       {formatAlertText(panelData.alertText, t)}
                     </div>
-                  </SectionCard>
-                ) : null}
-                {panelData.showBypassStationToggle ? (
-                  <SectionCard compact={true}>
-                    <BypassToggleRow
-                      label={t("bypassStation")}
-                      checked={panelData.bypassStationChecked}
-                    />
                   </SectionCard>
                 ) : null}
                 {isVehicle && panelData.showSignalPriority ? (

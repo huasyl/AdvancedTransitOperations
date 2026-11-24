@@ -63,24 +63,11 @@ namespace RapidTransitMod.RailEtaHost
         public Func<ClockSnapshot> ClockSnapshot { get; set; }
         public Func<Entity, int> LineDwellMinutes { get; set; }
         public TryReadRailEtaOriginScheduledHold TryReadOriginScheduledHold { get; set; }
-        public TryReadRailEtaHold TryReadHold { get; set; }
         public TryReadRailEtaTrackChain TryReadTrackChain { get; set; }
     }
 
     public delegate bool TryReadRailEtaOriginScheduledHold(Entity vehicle, uint frame, out uint earliestReleaseFrame);
-    public delegate bool TryReadRailEtaHold(Entity vehicle, uint frame, out RailEtaRuntimeHoldFact fact);
     public delegate bool TryReadRailEtaTrackChain(Entity line, out RailEtaRuntimeTrackChainFact fact);
-
-    public struct RailEtaRuntimeHoldFact
-    {
-        public Entity ReleaseVehicle;
-        public Entity ReleaseLine;
-        public float ReleaseCoordinate;
-        public int IntervalStartAtomIndex;
-        public int IntervalEndAtomIndexExclusive;
-        public ulong ExpectedChainSignature;
-    }
-
     public sealed class RailEtaRuntimeTrackChainFact
     {
         public Entity Line { get; set; }

@@ -6,7 +6,6 @@ using Game.Common;
 using Game.Net;
 using Game.Objects;
 using Game.Routes;
-using RapidTransitMod.Bypass;
 using RapidTransitMod.Dispatch.Lines;
 using RapidTransitMod.Dispatch.Observation;
 using RapidTransitMod.Dispatch.Workbench;
@@ -29,10 +28,8 @@ namespace RapidTransitMod.Planner
         private ModRuntimeHostSystem R => m_Port.Runtime;
         private Unity.Entities.EntityManager EntityManager => R.EntityManager;
         private TrackModelService m_TrackModel => R.TrackModel;
-        private RuntimeFacade m_Bypass => R.Bypass;
         private Game.Simulation.SimulationSystem m_SimulationSystem => R.m_SimulationSystem;
         private RapidTransitMod.Dispatch.Workbench.Bridge m_WorkbenchBridge => R.m_WorkbenchBridge;
-        private const float LOCAL_BYPASS_EXIT_RELEASE_ATOMS = ModRuntimeHostSystem.LOCAL_BYPASS_EXIT_RELEASE_ATOMS;
 
         private List<WorkbenchLineRuntime> Lines() => R.Lines();
         private RapidTransitMod.Dispatch.Workbench.Trips Trips() => R.Trips();
@@ -49,7 +46,6 @@ namespace RapidTransitMod.Planner
         private Entity ResolvePassingStationBuilding(Entity entity) => R.m_Resolve.PassingStation(entity);
         private string StationName(Entity stopEntity) => R.m_Resolve.StationName(stopEntity);
         private string StationId(int order) => Catalog.StationId(order);
-        private bool IsBypassStationSetting(Entity entity) => R.IsBypassStationSetting(entity);
         private bool TryResolveStationStopDwellAnchor(Entity line, int waypointIndex, out StationDwellAnchor anchor) => R.m_Observation.DwellAnchor(line, waypointIndex, out anchor);
         private string MakeStationDwellObservationKey(Entity line, string stationAnchorId) => R.m_Observation.DwellKey(line, stationAnchorId);
         private string LineId(Entity line) => R.LineStableId(line);
@@ -138,7 +134,6 @@ namespace RapidTransitMod.Planner
 
             List<DispatchPlannerTraversalSliceDto> traversalSlices;
             DispatchPlannerTrackScenarioDto currentTrackScenario = BuildPlannerTrackScenario(
-                scope,
                 runtimeLines,
                 stationRecordsByLine,
                 out traversalSlices);
@@ -147,15 +142,6 @@ namespace RapidTransitMod.Planner
                 scope,
                 allStationRecords,
                 traversalSlices);
-            DispatchPlannerBypassStationDto[] configuredBypassStations = BuildPlannerBypassStations(
-                allStationRecords,
-                configuredOnly: true);
-            DispatchPlannerBypassStationDto[] candidateBypassStations = BuildPlannerBypassStations(
-                allStationRecords,
-                configuredOnly: false);
-            currentTrackScenario.configuredBypassStationCount = configuredBypassStations.Length;
-            currentTrackScenario.candidateBypassStationCount = candidateBypassStations.Length;
-
             return new DispatchPlannerExportSnapshot
             {
                 mode = scope.Token,
@@ -164,8 +150,8 @@ namespace RapidTransitMod.Planner
                 lines = lines.ToArray(),
                 stations = stations.ToArray(),
                 segments = segments.ToArray(),
-                configuredBypassStations = configuredBypassStations,
-                candidateBypassStations = candidateBypassStations,
+                configuredBypassStations = Array.Empty<DispatchPlannerBypassStationDto>(),
+                candidateBypassStations = Array.Empty<DispatchPlannerBypassStationDto>(),
                 currentTrackScenario = currentTrackScenario,
                 observations = observations,
                 runtimeParams = BuildPlannerRuntimeParams(),
@@ -244,8 +230,8 @@ namespace RapidTransitMod.Planner
                     positionX = (float)Math.Round(position.x, 1),
                     positionY = (float)Math.Round(position.y, 1),
                     positionZ = (float)Math.Round(position.z, 1),
-                    canConfigureBypass = building != Entity.Null && ResolvePassingStationBuilding(building) != Entity.Null,
-                    isConfiguredBypass = building != Entity.Null && IsBypassStationSetting(building),
+                    canConfigureBypass = false,
+                    isConfiguredBypass = false,
                     profileDwellMinutes = profileDwellMinutes,
                     observedDwellMinutes = hasObservedDwell ? RoundPlannerMinutes(observedDwellFrames) : 0f,
                     observedDwellSampleCount = hasObservedDwell ? observedDwellSampleCount : 0,
@@ -339,15 +325,12 @@ namespace RapidTransitMod.Planner
         }
 
         private DispatchPlannerTrackScenarioDto BuildPlannerTrackScenario(
-            ModeScope scope,
             List<WorkbenchLineRuntime> runtimeLines,
             Dictionary<string, List<PlannerStationRecord>> stationRecordsByLine,
             out List<DispatchPlannerTraversalSliceDto> traversalSlices)
         {
             List<DispatchPlannerLineTrackDto> lineTracks = new List<DispatchPlannerLineTrackDto>();
-            List<DispatchPlannerSharedCorridorDto> sharedCorridors = new List<DispatchPlannerSharedCorridorDto>();
             traversalSlices = new List<DispatchPlannerTraversalSliceDto>();
-            Dictionary<string, LineTrackChain> chainByLineId = new Dictionary<string, LineTrackChain>(StringComparer.Ordinal);
 
             for (int i = 0; i < runtimeLines.Count; i++)
             {
@@ -363,24 +346,12 @@ namespace RapidTransitMod.Planner
                 List<PlannerStationRecord> stationRecords = stationRecordsByLine.TryGetValue(runtime.Id, out List<PlannerStationRecord> records)
                     ? records
                     : new List<PlannerStationRecord>();
-                DispatchPlannerLineTrackDto lineTrack = BuildPlannerLineTrack(scope, runtime, waypoints, stationRecords);
+                DispatchPlannerLineTrackDto lineTrack = BuildPlannerLineTrack(runtime, waypoints, stationRecords);
                 lineTracks.Add(lineTrack);
-                if (lineTrack.available
-                    && m_TrackModel.TryChain(runtime.Entity, out LineTrackChain chain)
-                    && chain != null)
-                {
-                    chainByLineId[runtime.Id] = chain;
-                }
                 if (lineTrack.traversalSlices != null)
                 {
                     traversalSlices.AddRange(lineTrack.traversalSlices);
                 }
-            }
-
-            sharedCorridors.AddRange(BuildPlannerSharedCorridors(chainByLineId, stationRecordsByLine));
-            foreach (LineTrackChain chain in chainByLineId.Values)
-            {
-                m_TrackModel.ResetBypassPipeline(chain);
             }
 
             return new DispatchPlannerTrackScenarioDto
@@ -388,14 +359,13 @@ namespace RapidTransitMod.Planner
                 scenarioId = "current-configured",
                 scenarioType = "configured",
                 lines = lineTracks.ToArray(),
-                sharedCorridors = sharedCorridors.ToArray(),
-                sharedCorridorCount = sharedCorridors.Count,
+                sharedCorridors = Array.Empty<DispatchPlannerSharedCorridorDto>(),
+                sharedCorridorCount = 0,
                 confidence = lineTracks.Count > 0 ? 0.65f : 0f
             };
         }
 
         private DispatchPlannerLineTrackDto BuildPlannerLineTrack(
-            ModeScope scope,
             WorkbenchLineRuntime runtime,
             DynamicBuffer<RouteWaypoint> waypoints,
             List<PlannerStationRecord> stationRecords)
@@ -414,7 +384,6 @@ namespace RapidTransitMod.Planner
                 };
             }
 
-            m_TrackModel.EnsureBypassPipelineReady(chain, scope);
             PopulatePlannerStationTrackAtomIndices(chain, stationRecords);
 
             return new DispatchPlannerLineTrackDto
@@ -425,11 +394,11 @@ namespace RapidTransitMod.Planner
                 chainSignature = chain.Signature.ToString(),
                 trackAtomCount = chain.TrackAtoms.Count,
                 controlPointCount = chain.ControlPoints.Count,
-                sharedRunCount = chain.SharedRuns.Count,
-                protectedIntervalCount = chain.BypassProtectedIntervals.Count,
-                protectedSharedIntervalCount = chain.ProtectedSharedIntervals.Count,
+                sharedRunCount = 0,
+                protectedIntervalCount = 0,
+                protectedSharedIntervalCount = 0,
                 executionMode = "static-track-model",
-                protectedIntervals = BuildPlannerProtectedIntervals(runtime.Id, chain, stationRecords),
+                protectedIntervals = Array.Empty<DispatchPlannerProtectedIntervalDto>(),
                 traversalSlices = BuildPlannerTraversalSlices(runtime.Id, runtime.Entity, chain),
                 trackAtoms = BuildPlannerTrackAtoms(chain)
             };
@@ -575,49 +544,6 @@ namespace RapidTransitMod.Planner
             }
         }
 
-        private DispatchPlannerProtectedIntervalDto[] BuildPlannerProtectedIntervals(
-            string lineId,
-            LineTrackChain chain,
-            List<PlannerStationRecord> stationRecords)
-        {
-            List<DispatchPlannerProtectedIntervalDto> intervals = new List<DispatchPlannerProtectedIntervalDto>();
-            for (int i = 0; i < chain.BypassProtectedIntervals.Count; i++)
-            {
-                BypassProtectedInterval interval = chain.BypassProtectedIntervals[i];
-                ProtectedIntervalSummary summary = i < chain.ProtectedIntervalSummaries.Count
-                    ? chain.ProtectedIntervalSummaries[i]
-                    : default;
-                ControlPointMarker startPoint = interval.StartControlPointIndex >= 0 && interval.StartControlPointIndex < chain.ControlPoints.Count
-                    ? chain.ControlPoints[interval.StartControlPointIndex]
-                    : default;
-                ControlPointMarker endPoint = interval.EndControlPointIndex >= 0 && interval.EndControlPointIndex < chain.ControlPoints.Count
-                    ? chain.ControlPoints[interval.EndControlPointIndex]
-                    : default;
-
-                intervals.Add(new DispatchPlannerProtectedIntervalDto
-                {
-                    intervalIndex = i,
-                    fromStationId = ResolvePlannerStationIdForBuilding(stationRecords, startPoint.Building),
-                    toStationId = ResolvePlannerStationIdForBuilding(stationRecords, endPoint.Building),
-                    fromBuildingEntityIndex = startPoint.Building == Entity.Null ? -1 : startPoint.Building.Index,
-                    toBuildingEntityIndex = endPoint.Building == Entity.Null ? -1 : endPoint.Building.Index,
-                    startControlPointIndex = interval.StartControlPointIndex,
-                    endControlPointIndex = interval.EndControlPointIndex,
-                    startAtomIndex = interval.StartAtomIndex,
-                    endAtomIndexExclusive = interval.EndAtomIndexExclusive,
-                    baseMinutes = RoundPlannerMinutes(interval.BaseFrames),
-                    sharedSegmentCount = summary.SharedSegmentCount,
-                    maxSharedLineCount = summary.MaxSharedLineCount,
-                    hasMirroredContext = summary.HasMirroredContext,
-                    minEntryOffsetMinutes = RoundPlannerMinutes(summary.MinEntryOffsetFrames),
-                    maxClearOffsetMinutes = RoundPlannerMinutes(summary.MaxClearOffsetFrames),
-                    confidence = summary.SharedSegmentCount > 0 ? 0.7f : 0.45f
-                });
-            }
-
-            return intervals.ToArray();
-        }
-
         private DispatchPlannerTraversalSliceDto[] BuildPlannerTraversalSlices(
             string lineId,
             Entity line,
@@ -632,11 +558,6 @@ namespace RapidTransitMod.Planner
             for (int i = 0; i < chain.TraversalProfile.RunSlices.Count; i++)
             {
                 TraversalRunSlice slice = chain.TraversalProfile.RunSlices[i];
-                bool hasObservation = R.m_Observation.TrySlice(
-                    Keys.Slice(line, slice.SliceIndex),
-                    out TraversalSliceObservation observation)
-                    && observation.SampleCount > 0
-                    && observation.AverageFrames > 0f;
                 bool hasStartEvent = TryGetPlannerTraversalEvent(chain, slice.StartEventIndex, out TraversalEvent startEvent);
                 bool hasEndEvent = TryGetPlannerTraversalEvent(chain, slice.EndEventIndex, out TraversalEvent endEvent);
                 string startEventKind = hasStartEvent
@@ -647,14 +568,11 @@ namespace RapidTransitMod.Planner
                     : "unknown";
                 string stationTraversalKind = "none";
                 int stationWaypointIndex = -1;
-                float stationStopMinutes = 0f;
                 bool observedIncludesStationStop = false;
                 if (TryGetPlannerTraversalStationEventForSlice(chain, slice, out TraversalEvent stationEvent))
                 {
                     stationTraversalKind = FormatPlannerTraversalStationKind(stationEvent.Kind);
                     stationWaypointIndex = stationEvent.WaypointIndex;
-                    stationStopMinutes = RoundPlannerMinutes(stationEvent.StopFrames);
-                    observedIncludesStationStop = hasObservation && stationEvent.Kind == TraversalEventKind.Stop;
                 }
 
                 slices.Add(new DispatchPlannerTraversalSliceDto
@@ -671,15 +589,15 @@ namespace RapidTransitMod.Planner
                     endWaypointIndex = hasEndEvent ? endEvent.WaypointIndex : -1,
                     stationTraversalKind = stationTraversalKind,
                     stationWaypointIndex = stationWaypointIndex,
-                    stationStopMinutes = stationStopMinutes,
+                    stationStopMinutes = 0f,
                     observedIncludesStationStop = observedIncludesStationStop,
-                    modelRunMinutes = RoundPlannerMinutes(slice.RunFrames),
-                    observedAverageMinutes = hasObservation ? RoundPlannerMinutes(observation.AverageFrames) : 0f,
-                    observedFastMinutes = hasObservation ? RoundPlannerMinutes(observation.FastBaselineFrames) : 0f,
-                    observedSampleCount = hasObservation ? observation.SampleCount : 0,
-                    lastObservedFrame = hasObservation ? observation.LastObservedFrame : 0u,
-                    source = hasObservation ? "observed" : "model",
-                    confidence = hasObservation ? ComputePlannerSampleConfidence(observation.SampleCount) : 0.45f
+                    modelRunMinutes = 0f,
+                    observedAverageMinutes = 0f,
+                    observedFastMinutes = 0f,
+                    observedSampleCount = 0,
+                    lastObservedFrame = 0u,
+                    source = "model",
+                    confidence = 0.45f
                 });
             }
 
@@ -754,69 +672,6 @@ namespace RapidTransitMod.Planner
             return "none";
         }
 
-        private DispatchPlannerSharedCorridorDto[] BuildPlannerSharedCorridors(
-            Dictionary<string, LineTrackChain> chainByLineId,
-            Dictionary<string, List<PlannerStationRecord>> stationRecordsByLine)
-        {
-            List<DispatchPlannerSharedCorridorDto> corridors = new List<DispatchPlannerSharedCorridorDto>();
-            if (chainByLineId == null || chainByLineId.Count <= 1)
-                return corridors.ToArray();
-
-            foreach (KeyValuePair<string, LineTrackChain> leftEntry in chainByLineId)
-            {
-                foreach (KeyValuePair<string, LineTrackChain> rightEntry in chainByLineId)
-                {
-                    if (leftEntry.Key == rightEntry.Key)
-                        continue;
-
-                    GlobalSharedTrunkSnapshot snapshot = m_Bypass.GetGlobalSharedTrunkSnapshotCurrent(leftEntry.Value, rightEntry.Value);
-                    if (snapshot == null || snapshot.Segments == null || snapshot.Segments.Count == 0)
-                        continue;
-
-                    List<PlannerStationRecord> leftStations = stationRecordsByLine.TryGetValue(leftEntry.Key, out List<PlannerStationRecord> leftResolved)
-                        ? leftResolved
-                        : null;
-                    List<PlannerStationRecord> rightStations = stationRecordsByLine.TryGetValue(rightEntry.Key, out List<PlannerStationRecord> rightResolved)
-                        ? rightResolved
-                        : null;
-
-                    for (int segmentIndex = 0; segmentIndex < snapshot.Segments.Count; segmentIndex++)
-                    {
-                        GlobalSharedTrunkSegment segment = snapshot.Segments[segmentIndex];
-                        corridors.Add(new DispatchPlannerSharedCorridorDto
-                        {
-                            id = leftEntry.Key + "|" + rightEntry.Key + "|trunk-" + segmentIndex.ToString(),
-                            lineId = leftEntry.Key,
-                            otherLineId = rightEntry.Key,
-                            lineStartAtomIndex = segment.LocalCorridorStartAtomIndex,
-                            lineEndAtomIndexExclusive = segment.LocalCorridorEndAtomIndexExclusive,
-                            otherStartAtomIndex = segment.ExpressCorridorStartAtomIndex,
-                            otherEndAtomIndexExclusive = segment.ExpressCorridorEndAtomIndexExclusive,
-                            lineStartStationId = ResolvePlannerStationIdAtOrBeforeAtom(leftStations, segment.LocalCorridorStartAtomIndex),
-                            lineEndStationId = ResolvePlannerStationIdAtOrAfterAtom(leftStations, segment.LocalCorridorEndAtomIndexExclusive),
-                            otherStartStationId = ResolvePlannerStationIdAtOrBeforeAtom(rightStations, segment.ExpressCorridorStartAtomIndex),
-                            otherEndStationId = ResolvePlannerStationIdAtOrAfterAtom(rightStations, segment.ExpressCorridorEndAtomIndexExclusive),
-                            lineSharedSliceCount = segment.LocalSharedSliceCount,
-                            otherSharedSliceCount = segment.ExpressSharedSliceCount,
-                            lineBridgedGapAtoms = segment.LocalBridgedGapAtoms,
-                            otherBridgedGapAtoms = segment.ExpressBridgedGapAtoms,
-                            physicalOverlap = segment.PhysicalOverlap,
-                            orderedRun = segment.OrderedRun,
-                            hasMirroredContext = segment.HasMirroredContext,
-                            maxSharedLineCount = segment.MaxSharedLineCount,
-                            traversalRelation = segment.TraversalRelation.ToString(),
-                            hasCanonicalDirection = segment.HasCanonicalDirection,
-                            lineAlongCanonical = segment.LocalAlongCanonical,
-                            otherAlongCanonical = segment.ExpressAlongCanonical,
-                            confidence = ComputePlannerSharedCorridorConfidence(segment)
-                        });
-                    }
-                }
-            }
-
-            return corridors.ToArray();
-        }
-
         private DispatchPlannerObservationSummaryDto BuildPlannerObservationSummary(
             ModeScope scope,
             List<PlannerStationRecord> stationRecords,
@@ -869,89 +724,9 @@ namespace RapidTransitMod.Planner
                 traversalSliceSampleCount = traversalSampleCount,
                 stopDwell = stopDwell.ToArray(),
                 traversalSlices = traversalSlices.ToArray(),
-                traversalSliceActualSamples = BuildPlannerTraversalSliceActualSamples(scope),
-                traversalPositionSamples = BuildPlannerTraversalPositionSamples(scope)
+                traversalSliceActualSamples = Array.Empty<DispatchPlannerTraversalSliceActualSampleDto>(),
+                traversalPositionSamples = Array.Empty<DispatchPlannerTraversalPositionSampleDto>()
             };
-        }
-
-        private DispatchPlannerTraversalSliceActualSampleDto[] BuildPlannerTraversalSliceActualSamples(ModeScope scope)
-        {
-            List<DispatchPlannerTraversalSliceActualSampleDto> samples =
-                new List<DispatchPlannerTraversalSliceActualSampleDto>();
-            foreach (TraversalSliceActualSample sample in R.m_Observation.ActualSamples)
-            {
-                string sampleLineId = ResolvePlannerSampleLineId(scope, sample.Line);
-                if (string.IsNullOrEmpty(sampleLineId))
-                    continue;
-
-                float durationFrames = sample.ExitFrame > sample.EnterFrame
-                    ? sample.ExitFrame - sample.EnterFrame
-                    : 0f;
-                samples.Add(new DispatchPlannerTraversalSliceActualSampleDto
-                {
-                    lineId = sampleLineId,
-                    lineEntityIndex = sample.Line == Entity.Null ? -1 : sample.Line.Index,
-                    vehicleEntityIndex = sample.Vehicle == Entity.Null ? -1 : sample.Vehicle.Index,
-                    sliceIndex = sample.SliceIndex,
-                    enterFrame = sample.EnterFrame,
-                    exitFrame = sample.ExitFrame,
-                    durationMinutes = (float)R.m_SimClock.ToMinutes(durationFrames),
-                    enterAtomIndex = sample.EnterAtomIndex,
-                    enterAtomPosition01 = sample.EnterAtomPosition01,
-                    exitAtomIndex = sample.ExitAtomIndex,
-                    exitAtomPosition01 = sample.ExitAtomPosition01
-                });
-            }
-
-            return samples.ToArray();
-        }
-
-        private DispatchPlannerTraversalPositionSampleDto[] BuildPlannerTraversalPositionSamples(ModeScope scope)
-        {
-            List<DispatchPlannerTraversalPositionSampleDto> samples =
-                new List<DispatchPlannerTraversalPositionSampleDto>();
-            foreach (TraversalPositionSample sample in R.m_Observation.PositionSamples)
-            {
-                string sampleLineId = ResolvePlannerSampleLineId(scope, sample.Line);
-                if (string.IsNullOrEmpty(sampleLineId))
-                    continue;
-
-                samples.Add(new DispatchPlannerTraversalPositionSampleDto
-                {
-                    lineId = sampleLineId,
-                    lineEntityIndex = sample.Line == Entity.Null ? -1 : sample.Line.Index,
-                    vehicleEntityIndex = sample.Vehicle == Entity.Null ? -1 : sample.Vehicle.Index,
-                    frame = sample.Frame,
-                    sliceIndex = sample.SliceIndex,
-                    segmentIndex = sample.SegmentIndex,
-                    segmentPosition = sample.SegmentPosition,
-                    atomIndex = sample.AtomIndex,
-                    atomPosition01 = sample.AtomPosition01,
-                    physicalLaneEntityIndex = sample.PhysicalLane == Entity.Null ? -1 : sample.PhysicalLane.Index,
-                    speedMetersPerSecond = sample.SpeedMetersPerSecond,
-                    odometerMeters = sample.OdometerMeters
-                });
-            }
-
-            return samples.ToArray();
-        }
-
-        private string ResolvePlannerSampleLineId(ModeScope scope, Entity line)
-        {
-            if (line == Entity.Null)
-                return string.Empty;
-
-            string lineId = LineId(line);
-            if (LineKey.TryParse(lineId, out LineKey key))
-                return key.Mode == scope.Mode ? lineId : string.Empty;
-
-            TransitMode resolvedMode = TransportModeResolver.Resolve(EntityManager, line);
-            if (resolvedMode != scope.Mode)
-                return string.Empty;
-
-            return string.IsNullOrWhiteSpace(lineId)
-                ? string.Empty
-                : scope.NormalizeLineId(lineId);
         }
 
         private static bool MatchesScope(WorkbenchLineRuntime line, ModeScope scope)
@@ -966,43 +741,6 @@ namespace RapidTransitMod.Planner
             return resolvedMode == scope.Mode;
         }
 
-        private DispatchPlannerBypassStationDto[] BuildPlannerBypassStations(
-            List<PlannerStationRecord> stationRecords,
-            bool configuredOnly)
-        {
-            List<DispatchPlannerBypassStationDto> result = new List<DispatchPlannerBypassStationDto>();
-            HashSet<string> seen = new HashSet<string>(StringComparer.Ordinal);
-            for (int i = 0; i < stationRecords.Count; i++)
-            {
-                PlannerStationRecord station = stationRecords[i];
-                if (!station.Dto.canConfigureBypass)
-                    continue;
-                if (configuredOnly && !station.Dto.isConfiguredBypass)
-                    continue;
-                if (!configuredOnly && station.Dto.isConfiguredBypass)
-                    continue;
-
-                string key = station.Dto.lineId + "|" + station.Dto.buildingEntityIndex.ToString() + "|" + station.Dto.order.ToString();
-                if (!seen.Add(key))
-                    continue;
-
-                result.Add(new DispatchPlannerBypassStationDto
-                {
-                    stationId = station.Dto.id,
-                    workbenchStationId = station.Dto.workbenchStationId,
-                    lineId = station.Dto.lineId,
-                    name = station.Dto.name,
-                    order = station.Dto.order,
-                    buildingEntityIndex = station.Dto.buildingEntityIndex,
-                    isConfigured = station.Dto.isConfiguredBypass,
-                    isVirtualCandidate = !station.Dto.isConfiguredBypass,
-                    reason = station.Dto.isConfiguredBypass ? "configured" : "configurable-station"
-                });
-            }
-
-            return result.ToArray();
-        }
-
         private DispatchPlannerRuntimeParamsDto BuildPlannerRuntimeParams()
         {
             return new DispatchPlannerRuntimeParamsDto
@@ -1011,11 +749,11 @@ namespace RapidTransitMod.Planner
                 clockEpoch = R.m_SimClock.Snapshot.ClockEpoch,
                 defaultOriginHoldLimitMinutes = RuntimeConfigStoreDefaults.DefaultOriginHoldLimitMinutes,
                 defaultMaxStationDwellMinutes = RuntimeConfigStoreDefaults.DefaultMaxStationDwellMinutes,
-                trackModelEntryClearSafetyGapMinutes = AdmissionService.TRACKMODEL_ENTRY_CLEAR_SAFETY_GAP_MINUTES,
-                localBypassExitReleaseAtoms = LOCAL_BYPASS_EXIT_RELEASE_ATOMS,
-                localBypassTrainTailClearAtoms = AdmissionService.LOCAL_BYPASS_TRAIN_TAIL_CLEAR_ATOMS,
-                minStrongProtectedIntervalOverlapAtoms = AdmissionService.MIN_STRONG_PROTECTED_INTERVAL_OVERLAP_ATOMS,
-                minStrongProtectedIntervalOrderedRun = AdmissionService.MIN_STRONG_PROTECTED_INTERVAL_ORDERED_RUN,
+                trackModelEntryClearSafetyGapMinutes = 0,
+                localBypassExitReleaseAtoms = 0,
+                localBypassTrainTailClearAtoms = 0,
+                minStrongProtectedIntervalOverlapAtoms = 0,
+                minStrongProtectedIntervalOrderedRun = 0,
                 compatibilityMode = "read-only-planner-input"
             };
         }
@@ -1334,97 +1072,5 @@ namespace RapidTransitMod.Planner
             return math.min(0.9f, 0.35f + sampleCount * 0.08f);
         }
 
-        private static string ResolvePlannerStationIdForBuilding(
-            List<PlannerStationRecord> stationRecords,
-            Entity building)
-        {
-            if (building == Entity.Null || stationRecords == null)
-                return string.Empty;
-
-            for (int i = 0; i < stationRecords.Count; i++)
-            {
-                if (stationRecords[i].BuildingEntity == building)
-                    return stationRecords[i].Dto.id;
-            }
-
-            return string.Empty;
-        }
-
-        private static string ResolvePlannerStationIdAtOrBeforeAtom(
-            List<PlannerStationRecord> stationRecords,
-            int atomIndex)
-        {
-            if (stationRecords == null || stationRecords.Count == 0)
-                return string.Empty;
-
-            PlannerStationRecord best = null;
-            for (int i = 0; i < stationRecords.Count; i++)
-            {
-                PlannerStationRecord station = stationRecords[i];
-                if (station == null || station.TrackAtomIndex < 0 || station.TrackAtomIndex > atomIndex)
-                    continue;
-
-                if (best == null || station.TrackAtomIndex >= best.TrackAtomIndex)
-                    best = station;
-            }
-
-            if (best != null)
-                return best.Dto.id;
-
-            for (int i = 0; i < stationRecords.Count; i++)
-            {
-                PlannerStationRecord station = stationRecords[i];
-                if (station == null || station.TrackAtomIndex < 0)
-                    continue;
-                return station.Dto.id;
-            }
-
-            return string.Empty;
-        }
-
-        private static string ResolvePlannerStationIdAtOrAfterAtom(
-            List<PlannerStationRecord> stationRecords,
-            int atomIndexExclusive)
-        {
-            if (stationRecords == null || stationRecords.Count == 0)
-                return string.Empty;
-
-            PlannerStationRecord best = null;
-            for (int i = 0; i < stationRecords.Count; i++)
-            {
-                PlannerStationRecord station = stationRecords[i];
-                if (station == null || station.TrackAtomIndex < 0 || station.TrackAtomIndex < atomIndexExclusive)
-                    continue;
-
-                if (best == null || station.TrackAtomIndex < best.TrackAtomIndex)
-                    best = station;
-            }
-
-            if (best != null)
-                return best.Dto.id;
-
-            for (int i = stationRecords.Count - 1; i >= 0; i--)
-            {
-                PlannerStationRecord station = stationRecords[i];
-                if (station == null || station.TrackAtomIndex < 0)
-                    continue;
-                return station.Dto.id;
-            }
-
-            return string.Empty;
-        }
-
-        private static float ComputePlannerSharedCorridorConfidence(GlobalSharedTrunkSegment segment)
-        {
-            float confidence = segment.TraversalRelation == SharedTraversalRelation.SameDirection ? 0.75f : 0.45f;
-            if (segment.HasMirroredContext)
-                confidence -= 0.2f;
-            if (segment.OrderedRun >= AdmissionService.MIN_STRONG_PROTECTED_INTERVAL_ORDERED_RUN)
-                confidence += 0.05f;
-            if (segment.PhysicalOverlap >= AdmissionService.MIN_STRONG_PROTECTED_INTERVAL_OVERLAP_ATOMS)
-                confidence += 0.05f;
-
-            return math.clamp(confidence, 0.2f, 0.9f);
-        }
     }
 }

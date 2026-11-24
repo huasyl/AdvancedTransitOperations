@@ -110,8 +110,6 @@ namespace RapidTransitMod
                 ShowDumpPlannerInputAction = BuildFlavor.DebugTools,
                 ShowDumpObservationAction = BuildFlavor.DebugTools,
                 ShowDumpStationAnchorObservationAction = BuildFlavor.DebugTools,
-                ShowBypassStationToggle = data.ShowBypassStationToggle,
-                BypassStationChecked = data.BypassStationChecked
             };
         }
 
@@ -188,8 +186,6 @@ namespace RapidTransitMod
                 ShowSchedule = showSchedule,
                 CurrentSlotText = data.CurrentMinute >= 0 ? data.CurrentText : string.Empty,
                 TargetSlotText = data.TargetMinute >= 0 ? data.TargetText : string.Empty,
-                ShowWaitingForFastTrain = data.WaitingForFastTrain,
-                WaitingForFastTrainVehicleId = data.WaitingForFastTrainVehicleId,
                 ShowSignalPriority = data.SignalDisplay.Show,
                 SignalPriorityStatus = data.SignalDisplay.Status,
                 NextSignalMovement = data.SignalDisplay.Movement,

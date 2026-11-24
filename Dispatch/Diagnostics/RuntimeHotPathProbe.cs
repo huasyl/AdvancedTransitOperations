@@ -15,12 +15,10 @@ namespace RapidTransitMod.Dispatch.Diagnostics
         Register,
         SourceRoute,
         Stop,
-        Rescue,
-        BypassDecision,
         DwellDeparture,
         Dispatch,
         Scheduler,
-        RetireSlice,
+        Retire,
         Notices,
         Events,
         Announcements,
@@ -42,14 +40,11 @@ namespace RapidTransitMod.Dispatch.Diagnostics
         public long Register;
         public long SourceRoute;
         public long Stop;
-        public long Bypass;
-        public long Rescue;
-        public long BypassDecision;
         public long DwellDeparture;
         public long Dispatch;
         public long Scheduler;
         public long Finalize;
-        public long RetireSlice;
+        public long Retire;
         public long Notices;
         public long Events;
         public long Announcements;
@@ -67,11 +62,8 @@ namespace RapidTransitMod.Dispatch.Diagnostics
         public bool SourceFrame;
         public bool FullMinuteSweep;
         public int Stop;
-        public int Rescue;
-        public int Bypass;
         public int Dispatch;
         public int Retire;
-        public int Slice;
         public int DirtyLines;
     }
 
@@ -101,25 +93,17 @@ namespace RapidTransitMod.Dispatch.Diagnostics
         private ulong m_OfficialBoardingChanged;
         private ulong m_MovingChanged;
         private ulong m_DeparturePendingDemand;
-        private ulong m_BypassWatchDemand;
-        private ulong m_BypassActiveDemand;
         private ulong m_InboundWatchDemand;
         private ulong m_HeavyDetailReads;
         private ulong m_NavigationDetailReads;
         private ulong m_BusinessFacts;
         private ulong m_DueDeadlines;
         private ulong m_StopStagePlans;
-        private ulong m_BypassStagePlans;
         private ulong m_DispatchStagePlans;
         private ulong m_RetireStagePlans;
-        private ulong m_RescueStagePlans;
-        private ulong m_SliceStagePlans;
         private ulong m_StopStageExecuted;
-        private ulong m_BypassStageExecuted;
         private ulong m_DispatchStageExecuted;
         private ulong m_RetireStageExecuted;
-        private ulong m_RescueStageExecuted;
-        private ulong m_SliceStageExecuted;
         private ulong m_SchedulerExternalDirtyLines;
         private ulong m_ProjectionCacheRequests;
         private ulong m_ProjectionCacheSuccessHits;
@@ -132,7 +116,6 @@ namespace RapidTransitMod.Dispatch.Diagnostics
         private readonly ulong[] m_ProjectionFallbackAvailableBySource = new ulong[7];
         private readonly ulong[] m_ProjectionStrictFailedBySource = new ulong[7];
         private readonly ulong[] m_ProjectionOrdinaryFailedBySource = new ulong[7];
-        private readonly ulong[] m_ProjectionLineSnapshotHitsBySource = new ulong[7];
         private ulong m_ProjectionCalculations;
         private ulong m_ProjectionExactInitial;
         private ulong m_ProjectionExactDirection;
@@ -182,14 +165,11 @@ namespace RapidTransitMod.Dispatch.Diagnostics
         private long m_CostRegister;
         private long m_CostSourceRoute;
         private long m_CostStop;
-        private long m_CostBypass;
-        private long m_CostRescue;
-        private long m_CostBypassDecision;
         private long m_CostDwellDeparture;
         private long m_CostDispatch;
         private long m_CostScheduler;
         private long m_CostFinalize;
-        private long m_CostRetireSlice;
+        private long m_CostRetire;
         private long m_CostNotices;
         private long m_CostEvents;
         private long m_CostAnnouncements;
@@ -263,12 +243,10 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 case RuntimeCostPhase.Register: frame.Source += ticks; frame.Register += ticks; break;
                 case RuntimeCostPhase.SourceRoute: frame.Source += ticks; frame.SourceRoute += ticks; break;
                 case RuntimeCostPhase.Stop: frame.Stop += ticks; break;
-                case RuntimeCostPhase.Rescue: frame.Bypass += ticks; frame.Rescue += ticks; break;
-                case RuntimeCostPhase.BypassDecision: frame.Bypass += ticks; frame.BypassDecision += ticks; break;
-                case RuntimeCostPhase.DwellDeparture: frame.Bypass += ticks; frame.DwellDeparture += ticks; break;
+                case RuntimeCostPhase.DwellDeparture: frame.DwellDeparture += ticks; break;
                 case RuntimeCostPhase.Dispatch: frame.Dispatch += ticks; break;
                 case RuntimeCostPhase.Scheduler: frame.Scheduler += ticks; break;
-                case RuntimeCostPhase.RetireSlice: frame.Finalize += ticks; frame.RetireSlice += ticks; break;
+                case RuntimeCostPhase.Retire: frame.Finalize += ticks; frame.Retire += ticks; break;
                 case RuntimeCostPhase.Notices: frame.Finalize += ticks; frame.Notices += ticks; break;
                 case RuntimeCostPhase.Events: frame.Finalize += ticks; frame.Events += ticks; break;
                 case RuntimeCostPhase.Announcements: frame.Finalize += ticks; frame.Announcements += ticks; break;
@@ -299,14 +277,11 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             m_CostRegister += frame.Register;
             m_CostSourceRoute += frame.SourceRoute;
             m_CostStop += frame.Stop;
-            m_CostBypass += frame.Bypass;
-            m_CostRescue += frame.Rescue;
-            m_CostBypassDecision += frame.BypassDecision;
             m_CostDwellDeparture += frame.DwellDeparture;
             m_CostDispatch += frame.Dispatch;
             m_CostScheduler += frame.Scheduler;
             m_CostFinalize += frame.Finalize;
-            m_CostRetireSlice += frame.RetireSlice;
+            m_CostRetire += frame.Retire;
             m_CostNotices += frame.Notices;
             m_CostEvents += frame.Events;
             m_CostAnnouncements += frame.Announcements;
@@ -367,8 +342,6 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 return;
 
             if ((demand & RuntimeDemandMask.DeparturePending) != 0) m_DeparturePendingDemand++;
-            if ((demand & RuntimeDemandMask.BypassWatch) != 0) m_BypassWatchDemand++;
-            if ((demand & RuntimeDemandMask.BypassActive) != 0) m_BypassActiveDemand++;
             if ((demand & RuntimeDemandMask.InboundWatch) != 0) m_InboundWatchDemand++;
         }
 
@@ -401,11 +374,8 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             switch (stage)
             {
                 case RuntimeStageMask.Stop: m_StopStagePlans += (ulong)count; break;
-                case RuntimeStageMask.Bypass: m_BypassStagePlans += (ulong)count; break;
                 case RuntimeStageMask.Dispatch: m_DispatchStagePlans += (ulong)count; break;
                 case RuntimeStageMask.Retire: m_RetireStagePlans += (ulong)count; break;
-                case RuntimeStageMask.Rescue: m_RescueStagePlans += (ulong)count; break;
-                case RuntimeStageMask.Slice: m_SliceStagePlans += (ulong)count; break;
             }
         }
 
@@ -417,11 +387,8 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             switch (stage)
             {
                 case RuntimeStageMask.Stop: m_StopStageExecuted += (ulong)count; break;
-                case RuntimeStageMask.Bypass: m_BypassStageExecuted += (ulong)count; break;
                 case RuntimeStageMask.Dispatch: m_DispatchStageExecuted += (ulong)count; break;
                 case RuntimeStageMask.Retire: m_RetireStageExecuted += (ulong)count; break;
-                case RuntimeStageMask.Rescue: m_RescueStageExecuted += (ulong)count; break;
-                case RuntimeStageMask.Slice: m_SliceStageExecuted += (ulong)count; break;
             }
         }
 
@@ -467,15 +434,6 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 m_ProjectionCacheSuccessHits++;
             else
                 m_ProjectionCacheFailureHits++;
-        }
-
-        internal void RecordProjectionLineSnapshotAccess(ProjectionRequestSource source, bool cacheHit)
-        {
-            if (!Enabled() || !cacheHit)
-                return;
-            int sourceIndex = (int)source;
-            if (sourceIndex >= 0 && sourceIndex < m_ProjectionLineSnapshotHitsBySource.Length)
-                m_ProjectionLineSnapshotHitsBySource[sourceIndex]++;
         }
 
         internal void RecordProjectionRead(ProjectionReadKind kind, long ticks)
@@ -652,15 +610,15 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                     + " frameRows=" + m_FrameRows
                     + " ensureFrameRow=" + m_EnsureFrameRows
                     + " changes=" + m_OfficialBoardingChanged + "/" + m_MovingChanged
-                    + " demands=" + m_DeparturePendingDemand + "/" + m_BypassWatchDemand + "/" + m_BypassActiveDemand
+                    + " demands=" + m_DeparturePendingDemand
                     + "/" + m_InboundWatchDemand
                     + " detail=" + m_HeavyDetailReads + "/" + m_NavigationDetailReads
                     + " facts=" + m_BusinessFacts
                     + " due=" + m_DueDeadlines
-                    + " stagePlan=" + m_StopStagePlans + "/" + m_RescueStagePlans + "/" + m_BypassStagePlans
-                    + "/" + m_DispatchStagePlans + "/" + m_RetireStagePlans + "/" + m_SliceStagePlans
-                    + " stageExec=" + m_StopStageExecuted + "/" + m_RescueStageExecuted + "/" + m_BypassStageExecuted
-                    + "/" + m_DispatchStageExecuted + "/" + m_RetireStageExecuted + "/" + m_SliceStageExecuted
+                    + " stagePlan=" + m_StopStagePlans
+                    + "/" + m_DispatchStagePlans + "/" + m_RetireStagePlans
+                    + " stageExec=" + m_StopStageExecuted
+                    + "/" + m_DispatchStageExecuted + "/" + m_RetireStageExecuted
                     + " schedulerExternalDirty=" + m_SchedulerExternalDirtyLines);
             }
 
@@ -685,25 +643,17 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             m_OfficialBoardingChanged = 0;
             m_MovingChanged = 0;
             m_DeparturePendingDemand = 0;
-            m_BypassWatchDemand = 0;
-            m_BypassActiveDemand = 0;
             m_InboundWatchDemand = 0;
             m_HeavyDetailReads = 0;
             m_NavigationDetailReads = 0;
             m_BusinessFacts = 0;
             m_DueDeadlines = 0;
             m_StopStagePlans = 0;
-            m_BypassStagePlans = 0;
             m_DispatchStagePlans = 0;
             m_RetireStagePlans = 0;
-            m_RescueStagePlans = 0;
-            m_SliceStagePlans = 0;
             m_StopStageExecuted = 0;
-            m_BypassStageExecuted = 0;
             m_DispatchStageExecuted = 0;
             m_RetireStageExecuted = 0;
-            m_RescueStageExecuted = 0;
-            m_SliceStageExecuted = 0;
             m_SchedulerExternalDirtyLines = 0;
             m_ProjectionCacheRequests = 0;
             m_ProjectionCacheSuccessHits = 0;
@@ -716,7 +666,6 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             Array.Clear(m_ProjectionFallbackAvailableBySource, 0, m_ProjectionFallbackAvailableBySource.Length);
             Array.Clear(m_ProjectionStrictFailedBySource, 0, m_ProjectionStrictFailedBySource.Length);
             Array.Clear(m_ProjectionOrdinaryFailedBySource, 0, m_ProjectionOrdinaryFailedBySource.Length);
-            Array.Clear(m_ProjectionLineSnapshotHitsBySource, 0, m_ProjectionLineSnapshotHitsBySource.Length);
             m_ProjectionCalculations = 0;
             m_ProjectionExactInitial = 0;
             m_ProjectionExactDirection = 0;
@@ -791,14 +740,13 @@ namespace RapidTransitMod.Dispatch.Diagnostics
 
             for (int source = 1; source < m_ProjectionRequestsBySource.Length; source++)
             {
-                if (m_ProjectionRequestsBySource[source] == 0 && m_ProjectionLineSnapshotHitsBySource[source] == 0)
+                if (m_ProjectionRequestsBySource[source] == 0)
                     continue;
                 m_Log.Info("[TrackProjectionProbeSource] source=" + ((ProjectionRequestSource)source)
-                    + " request/hit/exact/fallback/strictFail/ordinaryFail/lineSnapshotHit="
+                    + " request/hit/exact/fallback/strictFail/ordinaryFail="
                     + m_ProjectionRequestsBySource[source] + "/" + m_ProjectionCacheHitsBySource[source]
                     + "/" + m_ProjectionExactAvailableBySource[source] + "/" + m_ProjectionFallbackAvailableBySource[source]
-                    + "/" + m_ProjectionStrictFailedBySource[source] + "/" + m_ProjectionOrdinaryFailedBySource[source]
-                    + "/" + m_ProjectionLineSnapshotHitsBySource[source]);
+                    + "/" + m_ProjectionStrictFailedBySource[source] + "/" + m_ProjectionOrdinaryFailedBySource[source]);
             }
 
             if (m_WaypointStationConfirmed > 0 || m_WaypointStationRejected > 0)
@@ -880,12 +828,12 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 + " severe12ms=" + m_CostSevereFrames
                 + " avgMs=" + (m_CostTotal * tickMs / divisor).ToString("F2", CultureInfo.InvariantCulture)
                 + " maxMs=" + (m_CostMax * tickMs).ToString("F2", CultureInfo.InvariantCulture)
-                + " phaseAvg=railEta/setup/source/stop/bypass/dispatch/scheduler/finalize/maintenance:"
+                + " phaseAvg=railEta/setup/source/stop/dwellDeparture/dispatch/scheduler/finalize/maintenance:"
                 + FormatAverage(m_CostRailEta, tickMs, divisor)
                 + "/" + FormatAverage(m_CostSetup, tickMs, divisor)
                 + "/" + FormatAverage(m_CostSource, tickMs, divisor)
                 + "/" + FormatAverage(m_CostStop, tickMs, divisor)
-                + "/" + FormatAverage(m_CostBypass, tickMs, divisor)
+                + "/" + FormatAverage(m_CostDwellDeparture, tickMs, divisor)
                 + "/" + FormatAverage(m_CostDispatch, tickMs, divisor)
                 + "/" + FormatAverage(m_CostScheduler, tickMs, divisor)
                 + "/" + FormatAverage(m_CostFinalize, tickMs, divisor)
@@ -894,12 +842,8 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 + FormatAverage(m_CostSourceCollect, tickMs, divisor)
                 + "/" + FormatAverage(m_CostRegister, tickMs, divisor)
                 + "/" + FormatAverage(m_CostSourceRoute, tickMs, divisor)
-                + "|rescue/bypassDecision/dwellDeparture:"
-                + FormatAverage(m_CostRescue, tickMs, divisor)
-                + "/" + FormatAverage(m_CostBypassDecision, tickMs, divisor)
-                + "/" + FormatAverage(m_CostDwellDeparture, tickMs, divisor)
-                + "|retireSlice/notices/events/announcements:"
-                + FormatAverage(m_CostRetireSlice, tickMs, divisor)
+                + "|retire/notices/events/announcements:"
+                + FormatAverage(m_CostRetire, tickMs, divisor)
                 + "/" + FormatAverage(m_CostNotices, tickMs, divisor)
                 + "/" + FormatAverage(m_CostEvents, tickMs, divisor)
                 + "/" + FormatAverage(m_CostAnnouncements, tickMs, divisor)
@@ -943,20 +887,19 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 + ",total:" + (sample.Total * tickMs).ToString("F2", CultureInfo.InvariantCulture)
                 + ",phase:" + FormatTicks(frame.RailEta, tickMs) + "/" + FormatTicks(frame.Setup, tickMs)
                 + "/" + FormatTicks(frame.Source, tickMs) + "/" + FormatTicks(frame.Stop, tickMs)
-                + "/" + FormatTicks(frame.Bypass, tickMs) + "/" + FormatTicks(frame.Dispatch, tickMs)
+                + "/" + FormatTicks(frame.DwellDeparture, tickMs) + "/" + FormatTicks(frame.Dispatch, tickMs)
                 + "/" + FormatTicks(frame.Scheduler, tickMs) + "/" + FormatTicks(frame.Finalize, tickMs)
                 + "/" + FormatTicks(frame.Maintenance, tickMs)
                 + ",detail:" + FormatTicks(frame.SourceCollect, tickMs) + "/" + FormatTicks(frame.Register, tickMs)
-                + "/" + FormatTicks(frame.SourceRoute, tickMs) + "/" + FormatTicks(frame.Rescue, tickMs)
-                + "/" + FormatTicks(frame.BypassDecision, tickMs) + "/" + FormatTicks(frame.DwellDeparture, tickMs)
-                + "/" + FormatTicks(frame.RetireSlice, tickMs) + "/" + FormatTicks(frame.Notices, tickMs)
+                + "/" + FormatTicks(frame.SourceRoute, tickMs)
+                + "/" + FormatTicks(frame.Retire, tickMs) + "/" + FormatTicks(frame.Notices, tickMs)
                 + "/" + FormatTicks(frame.Events, tickMs) + "/" + FormatTicks(frame.Announcements, tickMs)
                 + "/" + FormatTicks(frame.VehicleCache, tickMs) + "/" + FormatTicks(frame.CatalogCheck, tickMs)
                 + "/" + FormatTicks(frame.CatalogTick, tickMs)
                 + ",source:" + (context.SourceFrame ? 1 : 0)
                 + ",minute:" + (context.FullMinuteSweep ? 1 : 0)
-                + ",stage:" + context.Stop + "/" + context.Rescue + "/" + context.Bypass
-                + "/" + context.Dispatch + "/" + context.Retire + "/" + context.Slice
+                + ",stage:" + context.Stop
+                + "/" + context.Dispatch + "/" + context.Retire
                 + ",dirty:" + context.DirtyLines
                 + ",gc:" + sample.Gc0 + "/" + sample.Gc1 + "/" + sample.Gc2;
         }
@@ -978,7 +921,7 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             SelectMax("setup", frame.Setup, ref name, ref ticks);
             SelectMax("source", frame.Source, ref name, ref ticks);
             SelectMax("stop", frame.Stop, ref name, ref ticks);
-            SelectMax("bypass", frame.Bypass, ref name, ref ticks);
+            SelectMax("dwellDeparture", frame.DwellDeparture, ref name, ref ticks);
             SelectMax("dispatch", frame.Dispatch, ref name, ref ticks);
             SelectMax("scheduler", frame.Scheduler, ref name, ref ticks);
             SelectMax("finalize", frame.Finalize, ref name, ref ticks);
@@ -1009,14 +952,11 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             m_CostRegister = 0;
             m_CostSourceRoute = 0;
             m_CostStop = 0;
-            m_CostBypass = 0;
-            m_CostRescue = 0;
-            m_CostBypassDecision = 0;
             m_CostDwellDeparture = 0;
             m_CostDispatch = 0;
             m_CostScheduler = 0;
             m_CostFinalize = 0;
-            m_CostRetireSlice = 0;
+            m_CostRetire = 0;
             m_CostNotices = 0;
             m_CostEvents = 0;
             m_CostAnnouncements = 0;
@@ -1054,25 +994,17 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 || m_OfficialBoardingChanged > 0
                 || m_MovingChanged > 0
                 || m_DeparturePendingDemand > 0
-                || m_BypassWatchDemand > 0
-                || m_BypassActiveDemand > 0
                 || m_InboundWatchDemand > 0
                 || m_HeavyDetailReads > 0
                 || m_NavigationDetailReads > 0
                 || m_BusinessFacts > 0
                 || m_DueDeadlines > 0
                 || m_StopStagePlans > 0
-                || m_BypassStagePlans > 0
                 || m_DispatchStagePlans > 0
                 || m_RetireStagePlans > 0
-                || m_RescueStagePlans > 0
-                || m_SliceStagePlans > 0
                 || m_StopStageExecuted > 0
-                || m_BypassStageExecuted > 0
                 || m_DispatchStageExecuted > 0
                 || m_RetireStageExecuted > 0
-                || m_RescueStageExecuted > 0
-                || m_SliceStageExecuted > 0
                 || m_SchedulerExternalDirtyLines > 0
                 || HasProjectionCounts();
         }

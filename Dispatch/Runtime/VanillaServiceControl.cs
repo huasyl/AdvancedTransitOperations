@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using RapidTransitMod.Bypass;
 using RapidTransitMod.Core;
 using RapidTransitMod.Dispatch.Scheduling;
 using RapidTransitMod.Runtime;
@@ -51,12 +50,6 @@ namespace RapidTransitMod.Dispatch.Runtime
         {
             m_Runtime.m_ServiceCalendar.Pause(line, clock);
             m_Runtime.m_DispatchScheduler.LineChanged(line);
-            List<Entity> bypassVehicles = m_Runtime.m_Bypass.ReleaseLineForServicePause(line);
-            if (bypassVehicles != null)
-            {
-                for (int i = 0; i < bypassVehicles.Count; i++)
-                    m_Runtime.m_RuntimeFramePlan.AddStage(bypassVehicles[i], RuntimeStageMask.Bypass);
-            }
 
             NativeArray<Entity> vehicles = m_Runtime.m_VehicleView.Keys(Allocator.Temp);
             try

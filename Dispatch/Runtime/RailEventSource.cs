@@ -7,6 +7,7 @@ using Game.Pathfind;
 using Game.Routes;
 using Game.Vehicles;
 using RapidTransitMod.Dispatch.Diagnostics;
+using RapidTransitMod.Dispatch.Lines;
 using RapidTransitMod.TrackModel;
 using RapidTransitMod.TrackProjection;
 using Unity.Collections;
@@ -64,7 +65,6 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly List<int> m_RunningNoticeRows = new List<int>();
         private readonly List<int> m_PreparingNoticeRows = new List<int>();
         private readonly Dictionary<Entity, uint> m_PreparingWaypointLiveFrames = new Dictionary<Entity, uint>();
-        private readonly List<Entity> m_DemandVehicles = new List<Entity>();
         private readonly List<Entity> m_StaleVehicles = new List<Entity>();
         private uint m_LastCollectedFrame = uint.MaxValue;
 
@@ -300,8 +300,6 @@ namespace RapidTransitMod.Dispatch.Runtime
                         framePlan.AddStage(row.Vehicle, i, RuntimeStageMask.Dispatch);
                         break;
                     case VehicleState.Running:
-                        if ((row.Demands & (RuntimeDemandMask.BypassWatch | RuntimeDemandMask.BypassActive)) != 0)
-                            framePlan.AddStage(row.Vehicle, i, RuntimeStageMask.Bypass);
                         if ((row.Demands & RuntimeDemandMask.InboundWatch) != 0)
                             framePlan.AddStage(row.Vehicle, i, RuntimeStageMask.Dispatch);
                         break;
@@ -310,12 +308,6 @@ namespace RapidTransitMod.Dispatch.Runtime
                         if ((row.Changes & RailChangeMask.MovingChanged) != 0 && row.Moving)
                             framePlan.AddStage(row.Vehicle, i, RuntimeStageMask.Dispatch);
                         break;
-                }
-
-                if (state == VehicleState.Running
-                    && m_Runtime.m_Observation.IsSourceSliceDue(row.Vehicle, row.RegisteredLine, frame))
-                {
-                    framePlan.AddStage(row.Vehicle, i, RuntimeStageMask.Slice);
                 }
 
                 if (state == VehicleState.Running)
@@ -406,16 +398,6 @@ namespace RapidTransitMod.Dispatch.Runtime
                 m_Demands.Remove(vehicle);
             else
                 m_Demands[vehicle] = current;
-        }
-
-        public void ClearDemands(RuntimeDemandMask demand)
-        {
-            m_DemandVehicles.Clear();
-            foreach (Entity vehicle in m_Demands.Keys)
-                m_DemandVehicles.Add(vehicle);
-            for (int i = 0; i < m_DemandVehicles.Count; i++)
-                SetDemand(m_DemandVehicles[i], demand, false);
-            m_DemandVehicles.Clear();
         }
 
         public void RebaselineStartup(Entity vehicle, uint frame)
@@ -625,8 +607,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_RouteProgress.Remove(vehicle);
             m_Runtime.m_TrackProjection.Cursors.Remove(vehicle, keepCursor: true);
             m_Runtime.m_TrackProjection.ClearFacts(vehicle);
-            if (m_Runtime.m_VehicleView.TryGetLine(vehicle, out Entity line))
-                m_Runtime.m_TrackProjection.ClearLineRunningVehicleSnapshots(line);
         }
 
         public bool TryReadPublicTransport(Entity vehicle, out PublicTransport value)
@@ -656,36 +636,6 @@ namespace RapidTransitMod.Dispatch.Runtime
                 return false;
 
             value = m_Runtime.EntityManager.GetComponentData<Target>(vehicle);
-            return true;
-        }
-
-        public bool TryGetBypassInput(
-            Entity vehicle,
-            out Entity route,
-            out DynamicBuffer<RouteWaypoint> waypoints,
-            out PublicTransport publicTransport,
-            out bool vehicleUnavailable)
-        {
-            route = Entity.Null;
-            waypoints = default;
-            publicTransport = default;
-            vehicleUnavailable = false;
-            int rowIndex = EnsureFrameRow(vehicle, readMoving: false);
-            if (rowIndex < 0)
-            {
-                vehicleUnavailable = true;
-                return false;
-            }
-            RailFrameRow row = m_FrameRows[rowIndex];
-            if (!row.HasPublicTransport)
-            {
-                vehicleUnavailable = true;
-                return false;
-            }
-            if (!row.IsCompilable
-                || !TryGetWaypointsForRoute(row.CurrentRoute, out route, out waypoints))
-                return false;
-            publicTransport = m_Runtime.EntityManager.GetComponentData<PublicTransport>(vehicle);
             return true;
         }
 
@@ -749,7 +699,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 m_FrameRows[m_FrameRowIndex[row.Vehicle]] = row;
             }
 
-            int lastStopWaypoint = m_Runtime.m_TrackModel.TryGetWaypointIndexLookup(
+            int lastStopWaypoint = m_Runtime.m_WaypointIndex.TryLookup(
                 row.RegisteredLine,
                 out LineWaypointIndexLookup lookup)
                 ? lookup.LastStopWaypointIndex
@@ -912,7 +862,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_FrameRows.Clear();
             m_FrameRowIndex.Clear();
             m_PreparingWaypointLiveFrames.Clear();
-            m_DemandVehicles.Clear();
             m_StaleVehicles.Clear();
             m_LastCollectedFrame = uint.MaxValue;
         }

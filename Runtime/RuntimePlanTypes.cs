@@ -8,11 +8,8 @@ namespace RapidTransitMod.Runtime
     {
         None = 0,
         Stop = 1 << 0,
-        Bypass = 1 << 1,
         Dispatch = 1 << 2,
-        Retire = 1 << 3,
-        Rescue = 1 << 4,
-        Slice = 1 << 5
+        Retire = 1 << 3
     }
 
     [Flags]
@@ -20,8 +17,6 @@ namespace RapidTransitMod.Runtime
     {
         None = 0,
         DeparturePending = 1 << 0,
-        BypassWatch = 1 << 1,
-        BypassActive = 1 << 2,
         InboundWatch = 1 << 4
     }
 

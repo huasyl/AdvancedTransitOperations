@@ -5,18 +5,15 @@ namespace RapidTransitMod.Dispatch.Persistence
         private readonly ModRuntimeHostSystem m_Runtime;
         private readonly RapidTransitMod.Dispatch.Observation.Buffers m_Buffers;
         private readonly MileageStore m_Mileage;
-        private readonly BypassStore m_Bypass;
 
         public RuntimeCache(
             ModRuntimeHostSystem runtime,
             RapidTransitMod.Dispatch.Observation.Buffers buffers,
-            MileageStore mileage,
-            BypassStore bypass)
+            MileageStore mileage)
         {
             m_Runtime = runtime;
             m_Buffers = buffers;
             m_Mileage = mileage;
-            m_Bypass = bypass;
         }
 
         public void Load()
@@ -34,11 +31,6 @@ namespace RapidTransitMod.Dispatch.Persistence
             m_Buffers.LoadStationDwell();
         }
 
-        public void LoadSlice()
-        {
-            m_Buffers.LoadSlice();
-        }
-
         public void LoadBusSeg()
         {
             m_Buffers.LoadBusSeg();
@@ -50,8 +42,6 @@ namespace RapidTransitMod.Dispatch.Persistence
             m_Runtime.m_DwellObservationCacheLoaded = false;
             m_Runtime.m_StationDwellObservationBufferReady = false;
             m_Runtime.m_StationDwellObservationCacheLoaded = false;
-            m_Runtime.m_TraversalSliceObservationBufferReady = false;
-            m_Runtime.m_TraversalSliceObservationCacheLoaded = false;
             m_Runtime.m_BusSegObservationBufferReady = false;
             m_Runtime.m_BusSegObservationCacheLoaded = false;
         }
@@ -62,7 +52,6 @@ namespace RapidTransitMod.Dispatch.Persistence
             m_Runtime.m_VehicleCache.Ensure();
             m_Runtime.m_DispatchCache.Ensure();
             m_Mileage.Ensure();
-            m_Bypass.Ensure();
             m_Buffers.Ensure();
         }
     }

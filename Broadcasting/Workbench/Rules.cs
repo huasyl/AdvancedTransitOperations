@@ -332,7 +332,6 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         case "stop_and_open":
                         case "leave_station":
                         case "mid_route":
-                        case "bypass_waiting":
                             return triggerId.Trim();
                         default:
                             return string.Empty;

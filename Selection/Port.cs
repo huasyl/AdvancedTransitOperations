@@ -18,7 +18,6 @@ namespace RapidTransitMod
     internal sealed class SelectPort
     {
         internal delegate bool Progress(Entity vehicle, out int nextWaypointIndex, out float segmentPosition);
-        internal delegate bool Blocker(Entity vehicle, out Entity blockerVehicle);
         internal delegate bool SessionArrival(Entity vehicle, out uint arrivalFrame);
         internal delegate bool SignalInfo(Entity vehicle, out SignalDisplay display);
         internal delegate bool StopSession(
@@ -49,12 +48,10 @@ namespace RapidTransitMod
             out bool nextPhysicalIsPass);
 
         internal EntityManager EntityManager;
-        internal TimedLogger Log;
         internal TimeSystem Time;
         internal SimulationSystem Sim;
         internal Func<ClockSnapshot> ClockSnapshot;
         internal NameSystem Names;
-        internal CitySystem City;
         internal EndFrameBarrier Barrier;
         internal VehicleView Vehicles;
         internal LineView Lines;
@@ -70,9 +67,6 @@ namespace RapidTransitMod
         internal Func<Entity, Entity> ResolveVehicle;
         internal Func<Entity, Entity> ResolveVehicleLine;
         internal Func<Entity, string> ResolveLineDisplayName;
-        internal Func<Entity, Entity> ResolveBypassBuilding;
-        internal Action EnsureBypassBuffer;
-        internal Action InvalidateBypassModel;
         internal Func<Entity, float> ReadLap;
         internal Func<Entity, float> ReadLineDuration;
         internal Func<Entity, float> ReadDispatch;
@@ -81,11 +75,9 @@ namespace RapidTransitMod
         internal Func<Entity, DynamicBuffer<RouteWaypoint>, int> ComputeWp;
         internal LineTimes Times;
         internal Progress TryProgress;
-        internal Blocker TryBlocker;
         internal SessionArrival TrySessionArrival;
         internal StopSession TryStopSession;
         internal VehicleTimes TryVehicleTimes;
-        internal Action<Entity, string> ClearBypass;
         internal StationText Stations;
         internal PanelStations TryPanelStations;
         internal SignalInfo TrySignalDisplay;

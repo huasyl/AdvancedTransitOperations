@@ -13,7 +13,6 @@ namespace RapidTransitMod.Dispatch.Observation
         [DataMember] public uint lastUpdatedFrame;
         [DataMember] public TripDto[] appliedTrips;
         [DataMember] public StopDto[] stopEvents;
-        [DataMember] public BypassDto[] bypassEvents;
         [DataMember] public CorridorDto[] corridorPassages;
         [DataMember] public BaselineDto[] baselineRows;
         [DataMember] public ContractDto[] plannerContracts;
@@ -276,41 +275,6 @@ namespace RapidTransitMod.Dispatch.Observation
         [DataMember] public uint arrivalFrame;
         [DataMember] public uint departureFrame;
         [DataMember] public float dwellMinutes;
-        [DataMember] public uint lastUpdatedFrame;
-    }
-
-    [DataContract]
-    internal class BypassDto
-    {
-        [DataMember] public string eventId;
-        [DataMember] public string state;
-        [DataMember] public string localTripObservationId;
-        [DataMember] public string localRowId;
-        [DataMember] public string localServiceDate;
-        [DataMember] public int localServiceDayIndex;
-        [DataMember] public int localOccurrenceIndex;
-        [DataMember] public string priorityTripObservationId;
-        [DataMember] public string priorityRowId;
-        [DataMember] public string priorityServiceDate;
-        [DataMember] public int priorityServiceDayIndex;
-        [DataMember] public int priorityOccurrenceIndex;
-        [DataMember] public string localLineId;
-        [DataMember] public string priorityLineId;
-        [DataMember] public int localVehicleIndex;
-        [DataMember] public int priorityVehicleIndex;
-        [DataMember] public int localTargetMinute;
-        [DataMember] public int priorityTargetMinute;
-        [DataMember] public string holdStationId;
-        [DataMember] public string holdPlannerStationId;
-        [DataMember] public string holdStationName;
-        [DataMember] public int waypointIndex;
-        [DataMember] public uint holdStartFrame;
-        [DataMember] public uint holdReleaseFrame;
-        [DataMember] public float actualHoldMinutes;
-        [DataMember] public string decisionReason;
-        [DataMember] public string releaseReason;
-        [DataMember] public string sceneKey;
-        [DataMember] public int protectedIntervalIndex;
         [DataMember] public uint lastUpdatedFrame;
     }
 

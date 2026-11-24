@@ -78,7 +78,6 @@ namespace RapidTransitMod
             AddBinding(new TriggerBinding(kGroup, "requestEtaHotSmoke", RequestEtaHotSmoke));
             AddBinding(new TriggerBinding(kGroup, "requestEtaHotRollback", RequestEtaHotRollback));
             AddBinding(new TriggerBinding(kGroup, "requestEtaSnapshot", RequestEtaSnapshot));
-            AddBinding(new TriggerBinding<bool>(kGroup, "setBypassStation", SetBypassStation));
         }
 
         [Preserve]
@@ -298,8 +297,6 @@ namespace RapidTransitMod
             AppendJsonBool(sb, "showSchedule", snapshot.ShowSchedule);
             AppendJsonString(sb, "currentSlotText", snapshot.CurrentSlotText);
             AppendJsonString(sb, "targetSlotText", snapshot.TargetSlotText);
-            AppendJsonBool(sb, "showWaitingForFastTrain", snapshot.ShowWaitingForFastTrain);
-            AppendJsonInt(sb, "waitingForFastTrainVehicleId", snapshot.WaitingForFastTrainVehicleId);
             AppendJsonBool(sb, "showAlerts", snapshot.Mode != "vehicle" && snapshot.AlertText.Length > 0 && snapshot.AlertText != "None");
             AppendJsonBool(sb, "showRetireAction", snapshot.ShowRetireAction);
             AppendJsonBool(sb, "showForceDepartAction", snapshot.ShowForceDepartAction);
@@ -309,8 +306,6 @@ namespace RapidTransitMod
             AppendJsonBool(sb, "showDumpObservationAction", snapshot.ShowDumpObservationAction);
             AppendJsonBool(sb, "showDumpStationAnchorObservationAction", snapshot.ShowDumpStationAnchorObservationAction);
             AppendJsonBool(sb, "showActions", snapshot.ShowRetireAction || snapshot.ShowForceDepartAction || snapshot.ShowLineSpawnAction || snapshot.ShowDumpTrackModelAction || snapshot.ShowDumpPlannerInputAction || snapshot.ShowDumpObservationAction || snapshot.ShowDumpStationAnchorObservationAction);
-            AppendJsonBool(sb, "showBypassStationToggle", snapshot.ShowBypassStationToggle);
-            AppendJsonBool(sb, "bypassStationChecked", snapshot.BypassStationChecked);
             bool showSignalPriority = snapshot.ShowSignalPriority;
             AppendJsonBool(sb, "showSignalPriority", showSignalPriority);
             AppendJsonString(sb, "signalPriorityStatus", showSignalPriority ? snapshot.SignalPriorityStatus : string.Empty);
@@ -551,7 +546,7 @@ namespace RapidTransitMod
             if (ModRuntimeHostSystem.Instance == null)
                 return;
 
-            ModRuntimeHostSystem.Instance.m_TrackModel.DumpTrackModelSnapshot();
+            ModRuntimeHostSystem.Instance.m_TrackModel.DumpTramTurnbacks();
             m_LastVehicle = Entity.Null;
             m_LastSnapshotVersion = 0;
         }
@@ -635,19 +630,6 @@ namespace RapidTransitMod
             RailEtaHost.RailEtaPublicTicket ticket = RailEtaHost.RailEtaDebugApi.RequestSnapshot(selected.Index, selected.Version);
             if (ticket.IsValid) m_EtaSnapshotTicket = ticket;
 #endif
-        }
-
-        private void SetBypassStation(bool enabled)
-        {
-            if (ModRuntimeHostSystem.Instance == null)
-                return;
-
-            Entity selectedEntity = m_SelectedInfoUISystem.selectedEntity;
-            if (selectedEntity != Entity.Null && ModRuntimeHostSystem.Instance.m_SelectPanel.SetBypass(selectedEntity, enabled))
-            {
-                m_LastVehicle = Entity.Null;
-                m_LastSnapshotVersion = 0;
-            }
         }
     }
 }

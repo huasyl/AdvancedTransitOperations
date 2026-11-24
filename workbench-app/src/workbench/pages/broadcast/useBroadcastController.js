@@ -6,7 +6,6 @@ import {
   DELAY_LIBRARY,
   TRIGGER_OPTIONS,
   PLATFORM_TRIGGER_OPTIONS,
-  RELEASE_HIDDEN_VEHICLE_TRIGGER_IDS,
   LINE_OPTIONS,
   TAB_TRANSITION_MS,
   PAGE_ENTER_ANIMATION_MS,
@@ -43,8 +42,7 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
   const triggerOptions = useMemo(
     () =>
       TRIGGER_OPTIONS.filter(
-        (option) => !RELEASE_HIDDEN_VEHICLE_TRIGGER_IDS.includes(option.id)
-          && (supportsPlatforms || option.id === "stop_and_open" || option.id === "leave_station"),
+        (option) => supportsPlatforms || option.id === "stop_and_open" || option.id === "leave_station",
       ).map((option) => ({ ...option, label: t(option.labelKey) })),
     [supportsPlatforms, t],
   );
@@ -101,11 +99,7 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
   const [lineDropdownOpen, setLineDropdownOpen] = useState(false);
   const [isCreatingRule, setIsCreatingRule] = useState(false);
   const [newRuleTitle, setNewRuleTitle] = useState("");
-  const [newRuleTriggerId, setNewRuleTriggerId] = useState(
-    TRIGGER_OPTIONS.find(
-      (option) => !RELEASE_HIDDEN_VEHICLE_TRIGGER_IDS.includes(option.id),
-    )?.id ?? TRIGGER_OPTIONS[0].id,
-  );
+  const [newRuleTriggerId, setNewRuleTriggerId] = useState(TRIGGER_OPTIONS[0].id);
   const [triggerDropdownOpen, setTriggerDropdownOpen] = useState(false);
   const [removingRuleIds, setRemovingRuleIds] = useState({});
   const [removingNodeIds, setRemovingNodeIds] = useState({});
@@ -1573,13 +1567,7 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
     setRules(nextRules);
     setIsCreatingRule(false);
     setNewRuleTitle("");
-    setNewRuleTriggerId(
-      triggerOptions[0]?.id ??
-        TRIGGER_OPTIONS.find(
-          (option) => !RELEASE_HIDDEN_VEHICLE_TRIGGER_IDS.includes(option.id),
-        )?.id ??
-        TRIGGER_OPTIONS[0].id,
-    );
+    setNewRuleTriggerId(triggerOptions[0]?.id ?? TRIGGER_OPTIONS[0].id);
     setTriggerDropdownOpen(false);
   }
 
@@ -1873,8 +1861,7 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
     },
     rules: {
       vehicleRules: rules.filter(
-        (rule) =>
-          !RELEASE_HIDDEN_VEHICLE_TRIGGER_IDS.includes(rule?.triggerId || ""),
+        (rule) => TRIGGER_OPTIONS.some((option) => option.id === rule?.triggerId),
       ),
       platformRules,
       availableBroadcastTriggerOptions,

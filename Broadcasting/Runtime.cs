@@ -95,15 +95,6 @@ namespace RapidTransitMod.Broadcasting
             m_Vehicles.BusDeparted(vehicle, line, waypoints, waypointIndex);
         }
 
-        internal void BypassWaiting(
-            Entity vehicle,
-            Entity line,
-            DynamicBuffer<RouteWaypoint> waypoints,
-            int currentWaypointIndex)
-        {
-            m_Vehicles.BypassWaiting(vehicle, line, waypoints, currentWaypointIndex);
-        }
-
         internal void Preparing(
             Entity vehicle,
             Entity line,

@@ -110,7 +110,7 @@ namespace RapidTransitMod.Dispatch.Persistence
                     m_NextStopOrder = snapshot.NextStopOrder,
                     m_ActiveStopOrder = snapshot.ActiveStopOrder,
                     m_StopCount = snapshot.Stops.Length,
-                    m_CanBypass = snapshot.CanBypass ? (byte)1 : (byte)0,
+                    m_CanBypass = 0,
                     m_ArrivalWaitMinutes = snapshot.ArrivalWaitMinutes,
                     m_ClockTicksPerDay = snapshot.ClockTicksPerDay,
                     m_MinimumStopMinutes = snapshot.MinimumStopMinutes
@@ -264,7 +264,6 @@ namespace RapidTransitMod.Dispatch.Persistence
                 || header.m_StopCount > 512
                 || header.m_SlotMinute < 0
                 || header.m_SlotMinute >= 1440
-                || header.m_CanBypass > 1
                 || header.m_ClockTicksPerDay <= 0
                 || string.IsNullOrEmpty(header.m_RowId.ToString())
                 || string.IsNullOrEmpty(header.m_StopSig.ToString())
@@ -338,8 +337,7 @@ namespace RapidTransitMod.Dispatch.Persistence
                     WaypointIndices = waypoints,
                     NextStopOrder = header.m_NextStopOrder,
                     ActiveStopOrder = header.m_ActiveStopOrder,
-                    MinimumStopMinutes = header.m_MinimumStopMinutes,
-                    CanBypass = header.m_CanBypass != 0
+                    MinimumStopMinutes = header.m_MinimumStopMinutes
                 };
             TimedPlanSnapshot snapshot = new TimedPlanSnapshot(
                 vehicle,

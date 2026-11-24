@@ -18,33 +18,12 @@ using Unity.Mathematics;
 
 namespace RapidTransitMod.Dispatch.Observation
 {
-    internal readonly struct SliceLineClearResult
-    {
-        internal readonly int EndedSessions;
-        internal readonly int RemovedAdmissions;
-        internal readonly int RemovedMemoryObservations;
-        internal readonly int RemovedPersistedObservations;
-
-        internal SliceLineClearResult(
-            int endedSessions,
-            int removedAdmissions,
-            int removedMemoryObservations,
-            int removedPersistedObservations)
-        {
-            EndedSessions = endedSessions;
-            RemovedAdmissions = removedAdmissions;
-            RemovedMemoryObservations = removedMemoryObservations;
-            RemovedPersistedObservations = removedPersistedObservations;
-        }
-    }
-
     internal sealed class ObservationPort
     {
         private const uint DISPATCH_SAMPLE_MIN_FRAMES = 365u;
 
         private readonly ModRuntimeHostSystem m_Runtime;
         private readonly Capture m_Capture;
-        private readonly SliceAdmission m_Admission;
         private readonly BusSegCapture m_BusSeg;
         private readonly MonitorAverageStore m_Averages;
         private readonly Func<Entity, Entity> m_Anchor;
@@ -62,7 +41,6 @@ namespace RapidTransitMod.Dispatch.Observation
         public ObservationPort(
             ModRuntimeHostSystem runtime,
             Capture capture,
-            SliceAdmission admission,
             BusSegCapture busSeg,
             MonitorAverageStore averages,
             Func<Entity, Entity> anchor,
@@ -70,7 +48,6 @@ namespace RapidTransitMod.Dispatch.Observation
         {
             m_Runtime = runtime;
             m_Capture = capture;
-            m_Admission = admission;
             m_BusSeg = busSeg;
             m_Averages = averages ?? throw new ArgumentNullException(nameof(averages));
             m_Anchor = anchor ?? throw new ArgumentNullException(nameof(anchor));
@@ -87,127 +64,6 @@ namespace RapidTransitMod.Dispatch.Observation
             m_Capture.UpdateLapStats(vehicle);
         }
 
-        public void Finish(Entity vehicle, uint nowFrame, int exitAtomIndex, float exitAtomPosition01)
-        {
-            m_Capture.FinalizeVehicleTraversalSliceObservation(vehicle, nowFrame, exitAtomIndex, exitAtomPosition01);
-            m_Admission.End(vehicle);
-        }
-
-        public bool DropSlice(Entity vehicle, out int sliceIndex)
-        {
-            bool dropped = m_Runtime.m_ObsPersist.DropSlice(vehicle, out sliceIndex);
-            m_Admission.End(vehicle);
-            return dropped;
-        }
-
-        public void ClearVehicleSlices(Entity vehicle)
-        {
-            m_Runtime.m_ObsPersist.ClearVehicleSlices(vehicle);
-            m_Admission.End(vehicle);
-        }
-
-        internal SliceLineClearResult InvalidateSliceLine(Entity line)
-        {
-            int removedMemory = m_Runtime.m_Slices.RemoveLine(line, out int endedSessions);
-            int removedAdmissions = m_Admission.InvalidateLine(line);
-            int removedPersisted = m_Runtime.m_ObsBuffers.RemoveSliceLine(line);
-            return new SliceLineClearResult(
-                endedSessions,
-                removedAdmissions,
-                removedMemory,
-                removedPersisted);
-        }
-
-        public bool LapTiming(
-            Entity line,
-            DynamicBuffer<RouteWaypoint> waypoints,
-            out float runFrames,
-            out float stopFrames,
-            out int stopCount,
-            out int passCount)
-        {
-            return m_Capture.TryGetTraversalProfileLapTiming(line, waypoints, out runFrames, out stopFrames, out stopCount, out passCount);
-        }
-
-        public void UpdateSlice(
-            Entity vehicle,
-            Entity line,
-            DynamicBuffer<RouteWaypoint> waypoints,
-            uint nowFrame)
-        {
-            m_Capture.UpdateVehicleTraversalSliceObservation(vehicle, line, waypoints, nowFrame);
-        }
-
-        public bool IsSourceSliceDue(Entity vehicle, Entity line, uint nowFrame)
-        {
-            return m_Capture.IsSourceSliceDue(vehicle, line, nowFrame);
-        }
-
-        public bool BuildPlan(
-            Entity vehicle,
-            Entity line,
-            DynamicBuffer<RouteWaypoint> waypoints,
-            out TraversalSliceSamplingPlan plan)
-        {
-            return m_Capture.TryBuildTraversalSliceSamplingPlan(vehicle, line, waypoints, out plan);
-        }
-
-        public bool BuildPlanRaw(
-            Entity vehicle,
-            DynamicBuffer<RouteWaypoint> waypoints,
-            LineTrackChain chain,
-            out TraversalSliceSamplingPlan plan)
-        {
-            return m_Capture.TryBuildTraversalSliceSamplingPlanUncached(vehicle, waypoints, chain, out plan);
-        }
-
-        public void RecordSample(
-            Entity vehicle,
-            Entity line,
-            LineTrackChain chain,
-            int sliceIndex,
-            VehicleTrackCursor cursor,
-            uint nowFrame)
-        {
-            m_Capture.MaybeRecordTraversalPositionSample(vehicle, line, chain, sliceIndex, cursor, nowFrame);
-        }
-
-        public bool CurrentSlice(
-            Entity vehicle,
-            Entity line,
-            DynamicBuffer<RouteWaypoint> waypoints,
-            out LineTrackChain chain,
-            out int sliceIndex,
-            out VehicleTrackCursor cursor)
-        {
-            return m_Capture.TryGetCurrentTraversalRunSlice(vehicle, line, waypoints, out chain, out sliceIndex, out cursor);
-        }
-
-        public bool EffectiveFrames(Entity line, TraversalRunSlice slice, out float frames)
-        {
-            return m_Capture.TryGetEffectiveTraversalRunSliceFrames(line, slice, out frames);
-        }
-
-        public void DebugStart(Entity vehicle, TraversalRunSlice slice, int atomIndex, float atomPosition01)
-        {
-            m_Capture.RecordTraversalSliceLapDebugStart(vehicle, slice, atomIndex, atomPosition01);
-        }
-
-        public void DebugDrop(Entity vehicle, int sliceIndex)
-        {
-            m_Capture.RecordTraversalSliceLapDebugDropped(vehicle, sliceIndex);
-        }
-
-        public void DebugFinish(Entity vehicle, int sliceIndex, float observedFrames)
-        {
-            m_Capture.RecordTraversalSliceLapDebugFinalize(vehicle, sliceIndex, observedFrames);
-        }
-
-        public void ClearDebug(Entity vehicle)
-        {
-            m_Capture.ClearVehicleTraversalSliceLapDebug(vehicle);
-        }
-
         public bool DwellAnchor(Entity line, int waypointIndex, out StationDwellAnchor anchor)
         {
             return m_Capture.TryStationDwellAnchor(line, waypointIndex, out anchor);
@@ -216,11 +72,6 @@ namespace RapidTransitMod.Dispatch.Observation
         public bool TryStationDwell(string key, out StationDwellObservation observation)
         {
             return m_Runtime.m_ObsQuery.TryStationDwell(key, out observation);
-        }
-
-        public bool TrySlice(ulong key, out TraversalSliceObservation observation)
-        {
-            return m_Runtime.m_ObsQuery.TrySlice(key, out observation);
         }
 
         public void BeginBusSeg(Entity vehicle, Entity line, int waypointIndex, uint nowFrame)
@@ -263,34 +114,6 @@ namespace RapidTransitMod.Dispatch.Observation
                 && (frames = observation.EstimatedFrames) > 0f;
         }
 
-        public bool TryTraversalFrames(
-            Entity line,
-            int fromWaypointIndex,
-            int toWaypointIndex,
-            out float frames)
-        {
-            return m_Capture.TryGetObservedTraversalFrames(
-                line,
-                fromWaypointIndex,
-                toWaypointIndex,
-                out frames);
-        }
-
-        public bool TryTraversalFrames(
-            Entity line,
-            int fromWaypointIndex,
-            int toWaypointIndex,
-            out float frames,
-            out string detail)
-        {
-            return m_Capture.TryGetObservedTraversalFrames(
-                line,
-                fromWaypointIndex,
-                toWaypointIndex,
-                out frames,
-                out detail);
-        }
-
         public void InvalidateBusRoute(
             Entity line,
             LineProfile.RoadRouteSnapshot oldRoute,
@@ -313,10 +136,6 @@ namespace RapidTransitMod.Dispatch.Observation
         {
             return m_Runtime.m_ObsQuery.TryLapStartFrame(vehicle, out lapStartFrame);
         }
-
-        public IReadOnlyList<TraversalSliceActualSample> ActualSamples => m_Runtime.m_ObsQuery.ActualSamples;
-
-        public IReadOnlyList<TraversalPositionSample> PositionSamples => m_Runtime.m_ObsQuery.PositionSamples;
 
         public string DwellKey(Entity line, string stationAnchorId)
         {
@@ -553,9 +372,6 @@ namespace RapidTransitMod.Dispatch.Observation
             m_Runtime.m_ObsPersist.ClearDwell(vehicle);
             ClearDispatchEta(vehicle);
             RemoveBusSegVehicle(vehicle);
-            ClearDebug(vehicle);
-            if (rail)
-                ClearVehicleSlices(vehicle);
         }
 
         public void ClearDispatchEta()
@@ -750,7 +566,6 @@ namespace RapidTransitMod.Dispatch.Observation
             AppliedMonitorRow row,
             DateTime serviceDate)
         {
-            m_Admission.Begin(line, vehicle, targetMinute);
             if (!string.IsNullOrEmpty(row.RowId))
             {
                 if (m_Runtime.m_ObsRecorder != null)
@@ -872,22 +687,6 @@ namespace RapidTransitMod.Dispatch.Observation
                     TransportModeResolver.Resolve(m_Runtime.EntityManager, line)).Lifecycle == LifecycleKind.Rail;
         }
 
-        public void Hold(
-            Entity vehicle,
-            Entity blocker,
-            Entity holdStation,
-            int waypointIndex,
-            uint nowFrame,
-            string reasonCode)
-        {
-            m_Runtime.m_ObsRecorder?.Hold(vehicle, blocker, holdStation, waypointIndex, nowFrame, reasonCode);
-        }
-
-        public void Release(Entity vehicle, Entity blocker, uint nowFrame, string releaseReason)
-        {
-            m_Runtime.m_ObsRecorder?.Release(vehicle, blocker, nowFrame, releaseReason);
-        }
-
         public void EndMonitor(Entity vehicle, uint frame, MonitorEndReason reason)
         {
             if (m_Runtime.m_ObsRecorder != null)
@@ -920,13 +719,6 @@ namespace RapidTransitMod.Dispatch.Observation
             return m_Runtime.m_ObsRecorder?.InvalidateLineOpenIntervals(line) ?? 0;
         }
 
-        internal int SuspendLine(Entity line, out int endedSlices)
-        {
-            int invalidatedSamples = InvalidateLineOpenIntervals(line);
-            endedSlices = m_Admission.SuspendLine(line);
-            return invalidatedSamples;
-        }
-
         public void MarkMissed(
             IReadOnlyList<MissedSlot> candidates,
             uint frame)
@@ -956,17 +748,6 @@ namespace RapidTransitMod.Dispatch.Observation
 
         internal IEnumerable<MonitorDateSlot> MonitorDateSlots =>
             m_Runtime.m_ObsRecorder?.MonitorDateSlots ?? Array.Empty<MonitorDateSlot>();
-
-        public int TargetMinute(Entity vehicle)
-        {
-            if (vehicle == Entity.Null)
-                return -1;
-            if (m_Runtime.m_VehicleView.TryGetSlot(vehicle, out int currentSlotMinute))
-                return currentSlotMinute;
-            if (m_Runtime.m_VehicleView.TryGetTarget(vehicle, out int targetMinute))
-                return targetMinute;
-            return -1;
-        }
 
         public void ClearForcedMidStop(Entity vehicle)
         {

@@ -195,8 +195,6 @@ namespace RapidTransitMod
                 else
                     m_Runtime.m_VehicleRegistry.SetTheoryWait(vehicle, frame);
             }
-            else if (state == VehicleState.Running)
-                m_Runtime.m_RuntimeEngine.CommitRunning(vehicle, line);
             else if (state == VehicleState.Holding)
                 m_Runtime.m_Observation.Seed(vehicle, line, frame);
         }

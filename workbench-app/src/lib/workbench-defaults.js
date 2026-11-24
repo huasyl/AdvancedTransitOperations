@@ -22,7 +22,6 @@ export const emptyStations = [];
 export const emptyTrips = [];
 export const emptyFeatureSettings = {
   dispatchEnabled: true,
-  bypassEnabled: true,
   broadcastEnabled: true,
   depotLockEnabled: true
 };
